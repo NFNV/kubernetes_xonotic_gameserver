@@ -1,0 +1,55 @@
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!.env.template
+*.local
+.direnv/
+.envrc.local
+
+# Python tooling caches
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+
+# Terraform local state and overrides
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+
+# Local Kubernetes access files
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+
+# Generated logs and archives
+*.log
+*.pid
+*.out
+*.err
+*.tgz
+*.tar
+*.tar.gz
+*.zip
