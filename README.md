@@ -1,89 +1,87 @@
 # Xonotic Platform Engineering Demo
 
-This repository is a production-style platform engineering project built around hosting Xonotic dedicated game servers on Kubernetes with Agones, running on Google Kubernetes Engine Standard. The point of the repo is to demonstrate infrastructure, platform, delivery, and operational thinking in a realistic but scoped way.
+This repository is a practical platform engineering project built around running Xonotic dedicated servers on Kubernetes with Agones on GCP. The goal is to show production-style infrastructure, platform, delivery, and operational thinking in a repo that stays small enough to finish and easy enough to review quickly.
 
 ## Purpose
 
-The project is intended to show how to design and incrementally deliver a game-server platform that looks like something a small platform team could own in production. It emphasizes clear architecture, staged rollout, secure cloud authentication, and practical tradeoffs over novelty.
+Use a real game-server workload to demonstrate:
+
+- infrastructure and platform design on GCP
+- Kubernetes operations with Agones
+- secure CI/CD from GitHub Actions to GCP using OIDC and Workload Identity Federation
+- clear ownership boundaries between infrastructure, platform, and workload layers
 
 ## Scope
 
 In scope:
 
-- provisioning and managing a GKE Standard cluster on GCP
-- using Agones to schedule and scale dedicated game servers
-- packaging and operating the Xonotic server workload
-- using GitHub Actions for CI/CD
-- using GitHub OIDC with GCP Workload Identity Federation for keyless deployment auth
-- documenting decisions, constraints, and delivery phases like a real engineering repository
+- GKE Standard cluster provisioning and baseline cloud setup
+- Agones as the game-server orchestration layer
+- Xonotic dedicated server packaging and deployment
+- GitHub Actions for validation and deployment workflows
+- practical documentation that explains tradeoffs without turning into a documentation-heavy repo
 
 ## Non-Goals
 
-Out of scope for the initial project direction:
+Out of scope for the initial version:
 
-- game modding or custom gameplay development
-- building a general-purpose multiplayer backend
-- supporting multiple clouds from day one
-- supporting many environments before the base platform is stable
-- premature optimization for massive scale before baseline operations are proven
+- game modding or custom gameplay work
+- building a full matchmaking or multiplayer backend
+- multi-cloud support
+- multiple environments before the core path works
+- deep enterprise process before there is a working platform baseline
 
-## High-Level Architecture
+## Architecture Overview
 
-At a high level, the repository is organized around four concerns:
+The planned runtime path is straightforward:
 
-- `infra/`: cloud foundation such as projects, networking, IAM, and cluster provisioning
-- `platform/`: Kubernetes and Agones platform configuration that sits on top of the cluster
-- `server/`: the Xonotic dedicated server packaging and runtime concerns
-- `docs/`: architecture, decisions, and project-level documentation
+1. GitHub Actions validates and deploys changes.
+2. GitHub authenticates to GCP through OIDC and Workload Identity Federation.
+3. GKE Standard runs the cluster and node pools.
+4. Agones manages dedicated game server lifecycle on the cluster.
+5. Xonotic dedicated servers run as the primary workload.
 
-Target runtime architecture:
+Repository layout:
 
-1. GitHub Actions validates changes and deploys through GitHub OIDC to GCP.
-2. GCP accepts federated identity via Workload Identity Federation rather than static keys.
-3. GKE Standard provides the Kubernetes control plane and node pools.
-4. Agones manages game server lifecycle on the cluster.
-5. Xonotic dedicated server instances run as Agones-managed workloads.
+- `infra/`: GCP, IAM, networking, and cluster provisioning
+- `platform/`: cluster-level components such as Agones and shared Kubernetes configuration
+- `server/`: Xonotic workload packaging and runtime concerns
 
-This gives the project a practical split between infrastructure, platform, and workload layers, which is useful both for implementation and for explaining ownership boundaries.
+## Why These Choices
 
-## Phased Roadmap
+- `GKE Standard`: more control over node pools and scheduling than Autopilot, which is useful for game server workloads and better for demonstrating platform ownership
+- `Agones`: purpose-built for dedicated game server lifecycle management, which is a better fit than forcing generic Kubernetes primitives to do all the work
+- `GitHub Actions`: close to the repo, easy to review, and enough for the CI/CD needs of this project
+- `OIDC + Workload Identity Federation`: avoids long-lived service account keys and reflects a more defensible cloud auth pattern
+- `One cluster, one environment`: keeps the project focused and shippable before adding environment sprawl
 
-### Phase 0: Repository Bootstrap
+## Roadmap
 
-- establish repository layout
-- document architecture, scope, and initial decisions
-- define implementation boundaries
+### Phase 0: Bootstrap
+
+- establish repo structure and conventions
+- document the target shape and delivery boundaries
 
 ### Phase 1: Infrastructure Foundation
 
-- introduce Terraform structure for GCP project resources, IAM, networking, and GKE
-- define remote state and environment conventions
-- wire GitHub OIDC to GCP Workload Identity Federation
+- add Terraform structure for GCP, IAM, networking, and GKE
+- configure GitHub to GCP authentication with Workload Identity Federation
 
 ### Phase 2: Platform Baseline
 
-- add cluster bootstrap for namespaces, Agones, and shared platform components
-- define rollout strategy for cluster-level changes
-- document baseline operational procedures
+- add Agones and shared cluster-level components
+- define basic operational conventions for platform changes
 
 ### Phase 3: Workload Delivery
 
-- package the Xonotic dedicated server workload
-- define deployment approach through Agones
-- document configuration boundaries between platform and workload
+- package and deploy the Xonotic dedicated server workload
+- separate workload concerns cleanly from infrastructure and platform concerns
 
-### Phase 4: CI/CD and Operations
+### Phase 4: CI/CD and Hardening
 
-- add validation, plan, and deployment workflows in GitHub Actions
-- add policy, release, and rollback conventions
-- begin structured observability and runbook documentation
+- add validation, plan, and deploy workflows
+- improve observability, reliability, and operational clarity
 
-### Phase 5: Hardening and Expansion
+## Current Status
 
-- improve reliability, scaling, and cost controls
-- add richer metrics, logs, and alerts
-- evaluate promotion to multiple environments if justified
-
-## Repository Status
-
-The repository is currently in a documentation-first bootstrap phase. Full Terraform, Docker, and Kubernetes implementation are intentionally deferred until the structure and decision record are in place.
+This repository is still in the bootstrap stage. Implementation is intentionally deferred until the structure, scope, and delivery model are clear.
