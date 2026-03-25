@@ -1,12 +1,98 @@
-# Infrastructure Layer
+# Infrastructure
 
-This directory is reserved for cloud foundation code and documentation.
+This directory contains the minimal Terraform needed for Phase 1 of the project: a small GCP foundation plus one cost-conscious GKE Standard cluster for the MVP.
 
-Expected future contents:
+## What This Creates
 
-- GCP project and IAM configuration
-- networking and cluster prerequisites
-- GKE cluster provisioning
-- environment and state conventions
+Terraform in this directory creates:
 
-This area is intentionally a placeholder during the repository bootstrap phase.
+- the required GCP APIs for this phase
+- one zonal GKE Standard cluster
+- one small node pool for that cluster
+
+It intentionally does not create:
+
+- Artifact Registry
+- Agones resources
+- workload manifests
+- GitHub Actions resources
+- GitHub OIDC or Workload Identity Federation
+- advanced networking such as a dedicated VPC, subnets, NAT, or firewall customization
+- extra service accounts or broad IAM design
+
+## Required Variables
+
+At minimum, set:
+
+- `project_id`: the existing GCP project ID
+
+The other variables have practical defaults for a low-cost MVP and can be overridden if needed:
+
+- `region`: defaults to `us-central1`
+- `zone`: defaults to `us-central1-a`
+- `environment`: defaults to `mvp`
+- `cluster_name`: defaults to `xonotic-mvp`
+- `network_name`: defaults to `default`
+- `subnetwork_name`: defaults to `default`
+- `node_machine_type`: defaults to `e2-medium`
+- `node_disk_size_gb`: defaults to `30`
+- `node_disk_type`: defaults to `pd-standard`
+- `node_count`: defaults to `1`
+
+Use [`terraform.tfvars.example`](/Users/n/Documents/Cloud/xonotic/infra/terraform.tfvars.example) as the starting point for local values.
+
+## How To Run
+
+From this directory:
+
+```bash
+terraform init
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+If you prefer a tfvars file:
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## How To Destroy
+
+```bash
+terraform destroy
+```
+
+Notes:
+
+- the cluster and node pool are destroyed
+- API enablement is left on intentionally; Terraform does not disable services on destroy in this MVP setup
+
+## Cost-Conscious Notes
+
+- the cluster is zonal, not regional, to avoid multiplying control-plane and node costs
+- the node pool defaults to a single `e2-medium` node
+- node disk defaults to `30 GB` on `pd-standard` to keep storage cost low
+- this is a deliberate MVP baseline, not a capacity target for real gameplay load
+- once Agones and the actual game workload are added, the machine type may need to increase
+
+## Assumptions
+
+- the GCP project already exists and billing is already enabled
+- the default VPC and default subnetwork exist and are acceptable for the first iteration
+- the operator running Terraform already has enough GCP permissions to enable APIs and create GKE resources
+- local Terraform state is acceptable for this phase
+
+## Intentionally Deferred
+
+- dedicated VPC and subnet design
+- remote Terraform state
+- GitHub to GCP federation setup
+- cluster access IAM design
+- dedicated node service accounts
+- Agones installation
+- observability stack and alerting
+- multi-environment or multi-cluster layout

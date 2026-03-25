@@ -1,0 +1,13 @@
+project_id = "your-gcp-project-id"
+
+# Optional overrides for the MVP baseline:
+# region            = "us-central1"
+# zone              = "us-central1-a"
+# environment       = "mvp"
+# cluster_name      = "xonotic-mvp"
+# network_name      = "default"
+# subnetwork_name   = "default"
+# node_machine_type = "e2-medium"
+# node_disk_size_gb = 30
+# node_disk_type    = "pd-standard"
+# node_count        = 1
