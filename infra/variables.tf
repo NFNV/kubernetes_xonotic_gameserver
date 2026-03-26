@@ -6,13 +6,13 @@ variable "project_id" {
 variable "region" {
   description = "Primary GCP region for the project."
   type        = string
-  default     = "us-central1"
+  default     = "southamerica-west1"
 }
 
 variable "zone" {
   description = "Zone for the zonal GKE cluster."
   type        = string
-  default     = "us-central1-a"
+  default     = "southamerica-west1-a"
 }
 
 variable "environment" {

@@ -28,8 +28,8 @@ At minimum, set:
 
 The other variables have practical defaults for a low-cost MVP and can be overridden if needed:
 
-- `region`: defaults to `us-central1`
-- `zone`: defaults to `us-central1-a`
+- `region`: defaults to `southamerica-west1`
+- `zone`: defaults to `southamerica-west1-a`
 - `environment`: defaults to `mvp`
 - `cluster_name`: defaults to `xonotic-mvp`
 - `network_name`: defaults to `default`
@@ -85,6 +85,7 @@ Notes:
 - the default VPC and default subnetwork exist and are acceptable for the first iteration
 - the operator running Terraform already has enough GCP permissions to enable APIs and create GKE resources
 - local Terraform state is acceptable for this phase
+- the initial default deployment target is a South America zone, specifically `southamerica-west1-a`
 
 ## Intentionally Deferred
 

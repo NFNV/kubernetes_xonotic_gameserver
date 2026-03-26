@@ -1,8 +1,8 @@
 project_id = "your-gcp-project-id"
 
 # Optional overrides for the MVP baseline:
-# region            = "us-central1"
-# zone              = "us-central1-a"
+# region            = "southamerica-west1"
+# zone              = "southamerica-west1-a"
 # environment       = "mvp"
 # cluster_name      = "xonotic-mvp"
 # network_name      = "default"

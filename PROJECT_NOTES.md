@@ -41,6 +41,7 @@ This file is the running context log for the repository. Update it over time so 
 - one zonal GKE Standard cluster
 - one small node pool
 - explicit node disk size and disk type
+- default region and zone set for South America deployment (`southamerica-west1` / `southamerica-west1-a`)
 - required GCP API enablement only
 - no Artifact Registry resources because images will come from GHCR
 - no GitHub OIDC or Workload Identity Federation resources yet
