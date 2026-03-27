@@ -13,6 +13,7 @@ Thumbs.db
 !.env.example
 !.env.template
 *.local
+.local/
 .direnv/
 .envrc.local
 
