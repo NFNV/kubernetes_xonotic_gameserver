@@ -18,7 +18,7 @@ This directory contains an initial container setup for the Xonotic dedicated ser
 ## What Is Not In Scope Yet
 
 - Agones integration
-- Kubernetes manifests
+- production Kubernetes packaging; only a minimal pre-Agones connectivity checkpoint exists under `platform/connectivity-checkpoint`
 - GitHub Actions or CI/CD
 - GHCR publishing workflows
 - observability stack
@@ -38,6 +38,8 @@ The container exposes:
 - `26000/udp`: default Xonotic dedicated server port
 
 This setup does not expose a separate TCP management port. RCON, if enabled in config, uses the server protocol path rather than a dedicated admin TCP listener.
+
+For the GKE connectivity checkpoint, this UDP port is the only network contract that matters. The checkpoint intentionally avoids adding sidecars, ingress, or extra management surfaces.
 
 ## Runtime Behavior
 
@@ -121,6 +123,8 @@ docker run --rm -it --platform linux/amd64 -p 26000:26000/udp xonotic-server:loc
 ```
 
 This confirms that the image can at least build and attempt to start as a `linux/amd64` container under emulation on macOS. It is not a substitute for validating the image on a real Linux `amd64` host or in the actual deployment environment.
+
+The cloud validation path for that real environment lives in `platform/connectivity-checkpoint/README.md`.
 
 ## Build And Runtime Notes
 

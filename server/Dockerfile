@@ -11,13 +11,13 @@ RUN apt-get update \
         unzip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL -o /tmp/xonotic.zip "https://dl.xonotic.org/xonotic-${XONOTIC_VERSION}.zip" \
+RUN curl -fsSL -o "/tmp/xonotic-${XONOTIC_VERSION}.zip" "https://dl.xonotic.org/xonotic-${XONOTIC_VERSION}.zip" \
     && curl -fsSL -o /tmp/xonotic.sha512 "https://dl.xonotic.org/xonotic-${XONOTIC_VERSION}.sha512" \
     && grep " xonotic-${XONOTIC_VERSION}.zip\$" /tmp/xonotic.sha512 > /tmp/xonotic.sha512.filtered \
     && cd /tmp \
     && sha512sum -c /tmp/xonotic.sha512.filtered \
     && mkdir -p /opt/xonotic-src \
-    && unzip -q /tmp/xonotic.zip -d /opt/xonotic-src \
+    && unzip -q "/tmp/xonotic-${XONOTIC_VERSION}.zip" -d /opt/xonotic-src \
     && install_root="$(find /opt/xonotic-src -mindepth 1 -maxdepth 1 -type d | head -n 1)" \
     && mv "${install_root}" /opt/xonotic
 
@@ -40,7 +40,8 @@ COPY --from=downloader /opt/xonotic /opt/xonotic
 COPY config/server.cfg /opt/xonotic-config/server.cfg
 COPY entrypoint.sh /entrypoint.sh
 
-RUN test -x /opt/xonotic/xonotic-linux64-dedicated \
+RUN mkdir -p /home/xonotic/.xonotic \
+    && test -x /opt/xonotic/xonotic-linux64-dedicated \
     && chmod 0755 /entrypoint.sh \
     && chown -R xonotic:xonotic /opt/xonotic /opt/xonotic-config /home/xonotic
 
@@ -56,8 +57,6 @@ ENV XONOTIC_MAXPLAYERS=12
 ENV XONOTIC_PUBLIC=0
 ENV XONOTIC_MOTD="Welcome to the Xonotic dedicated server"
 ENV XONOTIC_LOG_FILE=server.log
-
-VOLUME ["/home/xonotic/.xonotic"]
 
 EXPOSE 26000/udp
 

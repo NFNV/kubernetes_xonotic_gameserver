@@ -4,9 +4,9 @@ This file is the running context log for the repository. Update it over time so 
 
 ## Current State
 
-- Stage: Phase 1 infrastructure foundation and initial server container setup
-- Status: minimal Terraform plus an initial Xonotic dedicated server image build context
-- Goal: showcase platform engineering and DevOps practices using Xonotic dedicated servers as the workload
+- Stage: Phase 1.5 cloud connectivity checkpoint before Agones
+- Status: minimal Terraform for the GCP/GKE foundation is implemented in code, the initial Xonotic dedicated server image build context exists, and a pre-Agones single-server GKE deployment path is documented for real client connectivity validation
+- Goal: prove real client UDP connectivity to one Xonotic server in GKE before continuing into broader platform buildout
 
 ## Locked-In Context
 
@@ -18,10 +18,12 @@ This file is the running context log for the repository. Update it over time so 
 - GitHub to GCP auth: OIDC with Workload Identity Federation
 - Container registry: GHCR
 - Primary objective: demonstrate production-style platform engineering skills, not game modding
+- Current proof strategy before Agones: one public registry image, one Kubernetes Deployment replica, one UDP `LoadBalancer` Service, and direct client connect by IP and port
 
 ## Current Constraints
 
-- Do not create Kubernetes manifests yet
+- Allow only the minimum Kubernetes manifests required for the cloud connectivity checkpoint
+- Keep this checkpoint separate from the later Agones design
 - Keep the public repo lean; avoid separate architecture or ADR-heavy docs unless they become necessary again
 - Prefer readable Terraform and Dockerfiles over abstraction or framework-heavy setup
 - Keep IAM minimal until there is a concrete deployment or access requirement
@@ -32,7 +34,8 @@ This file is the running context log for the repository. Update it over time so 
 - `README.md`: public-facing project overview, scope, concise architecture, roadmap, and brief rationale for major choices
 - `PROJECT_NOTES.md`: deeper internal context, planning notes, and evolving constraints
 - `infra/README.md`: explains the Terraform MVP foundation and how to run it
-- `platform/README.md`: placeholder for cluster platform code area
+- `platform/README.md`: explains the platform area and the limited pre-Agones checkpoint exception
+- `platform/connectivity-checkpoint/README.md`: exact deployment and real-client connectivity test steps for the one-server GKE proof
 - `server/README.md`: explains the dedicated server container setup, runtime assumptions, and local test needs
 - `.gitignore`: practical defaults for local development noise, Terraform state, local env files, and generated artifacts
 
@@ -63,15 +66,22 @@ This file is the running context log for the repository. Update it over time so 
 - Public documentation should stay readable in one pass from the root README
 - The strongest portfolio story is the end-to-end platform flow: GitHub -> OIDC/WIF -> GCP -> GKE Standard -> Agones -> Xonotic servers
 - Initial implementation should continue to favor one cluster and one environment until there is a working baseline worth promoting
+- The immediate gating milestone is no longer local container startup; it is a real client successfully joining a GKE-hosted server over UDP
+- For this checkpoint, prefer the least ambiguous networking path even if it is not the long-term production exposure model
+- Distinguish clearly between infrastructure that is implemented in Terraform and infrastructure that has actually been applied in a real GCP project
 - Observability should be added later with a practical minimum: logs, metrics, alerts, and short runbooks
 - If the default VPC assumption becomes a blocker, add dedicated networking in a later infra iteration rather than now
-- The next server milestone should be proving the container starts locally and documenting the exact runtime dependencies and port behavior
+- The next platform milestone after this checkpoint is Agones integration only if cloud connectivity is proven
 
 ## Expected Next Steps
 
 - validate Terraform against a real GCP project
-- build and test the Xonotic server image locally
+- create the GKE cluster and node pool by applying the existing Terraform
+- fetch kubeconfig credentials only after Terraform apply completes
+- build and publish the Xonotic server image as a public `linux/amd64` image for GKE to pull
+- deploy the one-server connectivity checkpoint manifests to GKE
+- test direct real-client join over the GKE load balancer IP and UDP port
 - add remote state once the project moves beyond local-only iteration
 - add minimal cluster access and deployment identity groundwork when GitHub delivery is introduced
-- add initial Agones and platform deployment structure
+- add initial Agones and broader platform deployment structure only after connectivity is confirmed
 - document observability and operations plan in more depth

@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: xonotic-connectivity-checkpoint
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xonotic-connectivity-checkpoint
+  namespace: xonotic-connectivity-checkpoint
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: xonotic-connectivity-checkpoint
+  template:
+    metadata:
+      labels:
+        app: xonotic-connectivity-checkpoint
+    spec:
+      containers:
+        - name: server
+          image: REPLACE_WITH_PUBLIC_IMAGE
+          imagePullPolicy: Always
+          env:
+            - name: XONOTIC_HOSTNAME
+              value: Xonotic GKE Connectivity Checkpoint
+            - name: XONOTIC_PUBLIC
+              value: "0"
+            - name: XONOTIC_MAXPLAYERS
+              value: "8"
+          ports:
+            - name: gameplay
+              containerPort: 26000
+              protocol: UDP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: xonotic-connectivity-checkpoint
+  namespace: xonotic-connectivity-checkpoint
+spec:
+  type: LoadBalancer
+  selector:
+    app: xonotic-connectivity-checkpoint
+  ports:
+    - name: gameplay
+      port: 26000
+      protocol: UDP
+      targetPort: 26000

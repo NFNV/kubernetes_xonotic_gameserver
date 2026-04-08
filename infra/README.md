@@ -2,6 +2,8 @@
 
 This directory contains the minimal Terraform needed for Phase 1 of the project: a small GCP foundation plus one cost-conscious GKE Standard cluster for the MVP.
 
+The Terraform in this directory is implemented, but nothing in `infra/` creates real cloud resources until you run `terraform apply` against a real GCP project.
+
 ## What This Creates
 
 Terraform in this directory creates:
@@ -59,6 +61,16 @@ terraform init
 terraform plan -out=tfplan
 terraform apply tfplan
 ```
+
+## Before Any Kubernetes Deployment
+
+You cannot apply workload manifests until all of the following are true:
+
+- Terraform has successfully created the cluster and node pool
+- you have run the generated `gcloud container clusters get-credentials ...` command
+- `kubectl get nodes` succeeds against the new cluster
+
+The connectivity checkpoint under [`platform/connectivity-checkpoint/README.md`](/Users/n/Documents/Cloud/xonotic/platform/connectivity-checkpoint/README.md) starts only after those prerequisites are satisfied.
 
 ## How To Destroy
 

@@ -2,6 +2,8 @@
 
 This repository is a practical platform engineering project built around running Xonotic dedicated servers on Kubernetes with Agones on GCP. The goal is to show production-style infrastructure, platform, delivery, and operational thinking in a repo that stays small enough to finish and easy enough to review quickly.
 
+Before moving into the full platform path, the project now includes a narrow cloud connectivity checkpoint: deploy one Xonotic dedicated server to GKE and prove that a real client can join over UDP from outside the cluster.
+
 ## Purpose
 
 Use a real game-server workload to demonstrate:
@@ -44,7 +46,7 @@ The planned runtime path is straightforward:
 Repository layout:
 
 - `infra/`: GCP, IAM, networking, and cluster provisioning
-- `platform/`: cluster-level components such as Agones and shared Kubernetes configuration
+- `platform/`: cluster-level components such as the pre-Agones connectivity checkpoint and later shared Kubernetes configuration
 - `server/`: Xonotic workload packaging and runtime concerns
 
 ## Why These Choices
@@ -67,6 +69,13 @@ Repository layout:
 - add Terraform structure for GCP, IAM, networking, and GKE
 - configure GitHub to GCP authentication with Workload Identity Federation
 
+### Phase 1.5: Cloud Connectivity Checkpoint
+
+- publish the Xonotic dedicated server image to a pullable registry
+- run exactly one server on GKE
+- expose it with the simplest practical UDP path
+- verify that a real client can join before adding Agones
+
 ### Phase 2: Platform Baseline
 
 - add Agones and shared cluster-level components
@@ -84,4 +93,4 @@ Repository layout:
 
 ## Current Status
 
-This repository is still in the bootstrap stage. Implementation is intentionally deferred until the structure, scope, and delivery model are clear.
+This repository is past pure bootstrap. It now has Terraform for a minimal GKE foundation, an initial Xonotic dedicated server image, and a pre-Agones cloud connectivity checkpoint designed to answer one question cleanly: can a real client join the server in GKE over UDP. The infrastructure code exists, but the cluster still needs to be created in GCP before any Kubernetes deployment can happen.
