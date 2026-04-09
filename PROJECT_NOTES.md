@@ -5,7 +5,7 @@ This file is the running context log for the repository. Update it over time so 
 ## Current State
 
 - Stage: Phase 1.5 cloud connectivity checkpoint before Agones
-- Status: minimal Terraform for the GCP/GKE foundation is implemented in code, the initial Xonotic dedicated server image build context exists, and a pre-Agones single-server GKE deployment path is documented for real client connectivity validation
+- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, one node is Ready, and the next implementation step is publishing the Xonotic server image to GHCR before deploying the plain Kubernetes connectivity checkpoint
 - Goal: prove real client UDP connectivity to one Xonotic server in GKE before continuing into broader platform buildout
 
 ## Locked-In Context
@@ -28,6 +28,7 @@ This file is the running context log for the repository. Update it over time so 
 - Prefer readable Terraform and Dockerfiles over abstraction or framework-heavy setup
 - Keep IAM minimal until there is a concrete deployment or access requirement
 - Keep the server image focused on the stock dedicated server path before adding orchestration-specific behavior
+- Use a public GHCR image for this checkpoint so Kubernetes deployment stays free of image pull secret work
 
 ## Documentation Structure
 
@@ -35,8 +36,9 @@ This file is the running context log for the repository. Update it over time so 
 - `PROJECT_NOTES.md`: deeper internal context, planning notes, and evolving constraints
 - `infra/README.md`: explains the Terraform MVP foundation and how to run it
 - `platform/README.md`: explains the platform area and the limited pre-Agones checkpoint exception
-- `platform/connectivity-checkpoint/README.md`: exact deployment and real-client connectivity test steps for the one-server GKE proof
+- `platform/connectivity-checkpoint/README.md`: exact GHCR publish, deployment, and real-client connectivity test steps for the one-server GKE proof
 - `server/README.md`: explains the dedicated server container setup, runtime assumptions, and local test needs
+- `.github/workflows/publish-server-image.yml`: manual GHCR publish workflow for the server image
 - `.gitignore`: practical defaults for local development noise, Terraform state, local env files, and generated artifacts
 
 ## Phase 1 Terraform Shape
@@ -75,10 +77,7 @@ This file is the running context log for the repository. Update it over time so 
 
 ## Expected Next Steps
 
-- validate Terraform against a real GCP project
-- create the GKE cluster and node pool by applying the existing Terraform
-- fetch kubeconfig credentials only after Terraform apply completes
-- build and publish the Xonotic server image as a public `linux/amd64` image for GKE to pull
+- run the GitHub Actions workflow to publish the Xonotic server image as a public `linux/amd64` GHCR image
 - deploy the one-server connectivity checkpoint manifests to GKE
 - test direct real-client join over the GKE load balancer IP and UDP port
 - add remote state once the project moves beyond local-only iteration

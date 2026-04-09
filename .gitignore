@@ -25,6 +25,7 @@ venv/
 
 # Terraform local state and overrides
 .terraform/
+tfplan
 *.tfstate
 *.tfstate.*
 *.tfplan

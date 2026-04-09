@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: server
-          image: REPLACE_WITH_PUBLIC_IMAGE
+          image: ghcr.io/nfnv/xonotic-server:connectivity-checkpoint
           imagePullPolicy: Always
           env:
             - name: XONOTIC_HOSTNAME

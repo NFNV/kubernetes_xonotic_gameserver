@@ -24,96 +24,47 @@ Use a temporary public GHCR image for this proof. That removes image pull secret
 
 ## Manifests
 
-- `manifests/xonotic-server.yaml.tmpl`: namespace, single-replica deployment, and UDP load balancer service
+- `manifests/xonotic-server.yaml`: namespace, single-replica deployment, and UDP load balancer service pinned to the expected GHCR checkpoint tag
 
 ## Deploy
 
 Prerequisites:
 
-- `gcloud`, `kubectl`, and Docker are installed locally
-- you can authenticate to both GCP and GHCR
+- `gcloud` and `kubectl` are installed locally
+- the GKE cluster already exists and `kubectl get nodes` works
+- you can run GitHub Actions for this repository
 - you have a real GCP project with billing enabled
 
 ## Sequence
 
 The order matters:
 
-1. apply the minimal GCP and GKE infrastructure from `infra/`
-2. fetch kubeconfig credentials for the new cluster
-3. build and push the server image to GHCR
-4. apply the one-server Kubernetes manifests
-5. test direct client connectivity
+1. publish the server image to GHCR with GitHub Actions
+2. verify the GHCR package is public
+3. apply the one-server Kubernetes manifest
+4. test direct client connectivity
 
-## Step 1: Build And Apply Infrastructure
+## Step 1: Publish The Image To GHCR
 
-From the repository root:
+Run the repository workflow at `.github/workflows/publish-server-image.yml` from the GitHub Actions UI.
 
-```bash
-cd infra
-cp terraform.tfvars.example terraform.tfvars
-```
+Expected published image tags:
 
-Edit `terraform.tfvars` and set at least:
+- `ghcr.io/nfnv/xonotic-server:connectivity-checkpoint`
+- `ghcr.io/nfnv/xonotic-server:sha-<12-char-commit>`
 
-- `project_id`
+The workflow uses the repository `GITHUB_TOKEN` for GHCR login and publishes only the `linux/amd64` image needed for GKE.
 
-Optional but likely choices to review before apply:
+## Step 2: Verify Package Visibility
 
-- `region`
-- `zone`
-- `cluster_name`
+On the first push, verify in GitHub that the `xonotic-server` package is public. Keep the package public for this checkpoint so GKE can pull it without an image pull secret.
 
-Then run:
+## Step 3: Apply The Checkpoint Manifest
+
+The manifest already references the expected checkpoint image tag, so the apply step is direct:
 
 ```bash
-terraform init
-terraform plan -out=tfplan
-terraform apply tfplan
-```
-
-## Step 2: Get Cluster Credentials
-
-After `terraform apply` succeeds, fetch the generated helper command and run it:
-
-```bash
-terraform output -raw get_credentials_command
-```
-
-Run the printed `gcloud container clusters get-credentials ...` command, then verify cluster access:
-
-```bash
-kubectl get nodes
-```
-
-Return to the repository root before the next steps:
-
-```bash
-cd ..
-```
-
-## Step 3: Build And Push The Image
-
-Log in to GHCR.
-
-```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-```
-
-Build and push a `linux/amd64` image that GKE can pull.
-
-```bash
-export XONOTIC_IMAGE="ghcr.io/<github-user>/xonotic-server:connectivity-proof"
-docker buildx build --platform linux/amd64 -t "$XONOTIC_IMAGE" --push ./server
-```
-
-## Step 4: Apply The Checkpoint Manifests
-
-Apply the manifest template with your image substituted in.
-
-```bash
-sed "s|REPLACE_WITH_PUBLIC_IMAGE|$XONOTIC_IMAGE|g" \
-  platform/connectivity-checkpoint/manifests/xonotic-server.yaml.tmpl \
-  | kubectl apply -f -
+kubectl apply -f platform/connectivity-checkpoint/manifests/xonotic-server.yaml
 ```
 
 Wait for the pod to become available.
@@ -135,7 +86,7 @@ export XONOTIC_SERVER_IP="$(kubectl get service xonotic-connectivity-checkpoint 
 echo "$XONOTIC_SERVER_IP"
 ```
 
-## Check Server Logs
+## Step 4: Check Server Logs
 
 Use this before testing from the client so you know the process is actually running:
 

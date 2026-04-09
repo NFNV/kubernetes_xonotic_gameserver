@@ -19,8 +19,7 @@ This directory contains an initial container setup for the Xonotic dedicated ser
 
 - Agones integration
 - production Kubernetes packaging; only a minimal pre-Agones connectivity checkpoint exists under `platform/connectivity-checkpoint`
-- GitHub Actions or CI/CD
-- GHCR publishing workflows
+- broader CI/CD beyond a single manual image publish workflow
 - observability stack
 - custom maps, mods, or gameplay changes
 
@@ -126,6 +125,16 @@ This confirms that the image can at least build and attempt to start as a `linux
 
 The cloud validation path for that real environment lives in `platform/connectivity-checkpoint/README.md`.
 
+## GHCR Publishing Convention
+
+The repository now uses one simple GHCR package for the dedicated server image:
+
+- package: `ghcr.io/nfnv/xonotic-server`
+- stable checkpoint tag: `connectivity-checkpoint`
+- immutable trace tag: `sha-<12-char-commit>`
+
+The GitHub Actions workflow in `.github/workflows/publish-server-image.yml` publishes both tags using the repository `GITHUB_TOKEN`. The connectivity checkpoint manifest is pinned to the stable `connectivity-checkpoint` tag so the first GKE deployment path stays simple.
+
 ## Build And Runtime Notes
 
 - the image uses a non-root user for the server process
@@ -140,7 +149,6 @@ The cloud validation path for that real environment lives in `platform/connectiv
 - custom packaged server configs
 - health checks tailored to orchestration
 - sidecar or metrics integration
-- image publishing pipeline
 - multi-arch image support
 
 ## What Still Needs Local Testing

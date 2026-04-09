@@ -93,4 +93,4 @@ Repository layout:
 
 ## Current Status
 
-This repository is past pure bootstrap. It now has Terraform for a minimal GKE foundation, an initial Xonotic dedicated server image, and a pre-Agones cloud connectivity checkpoint designed to answer one question cleanly: can a real client join the server in GKE over UDP. The infrastructure code exists, but the cluster still needs to be created in GCP before any Kubernetes deployment can happen.
+This repository is past pure bootstrap. Terraform has been applied, the GKE Standard cluster exists, `kubectl` access works, and one node is Ready. The current checkpoint is now narrower: publish the Xonotic dedicated server image to GHCR and use the plain Kubernetes connectivity path to prove that a real client can join over UDP before Agones is introduced.
