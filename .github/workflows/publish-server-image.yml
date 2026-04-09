@@ -2,6 +2,12 @@ name: Publish Server Image
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - 'server/**'
+      - '.github/workflows/publish-server-image.yml'
 
 permissions:
   contents: read
