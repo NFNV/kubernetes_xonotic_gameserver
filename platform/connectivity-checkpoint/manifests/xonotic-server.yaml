@@ -43,6 +43,7 @@ metadata:
   namespace: xonotic-connectivity-checkpoint
 spec:
   type: LoadBalancer
+  externalTrafficPolicy: Local
   selector:
     app: xonotic-connectivity-checkpoint
   ports:

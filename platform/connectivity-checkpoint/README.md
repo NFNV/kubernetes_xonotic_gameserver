@@ -6,7 +6,7 @@ This checkpoint exists to answer one question before Agones or broader platform 
 
 - one public `linux/amd64` container image
 - one Kubernetes `Deployment` with `replicas: 1` and `strategy: Recreate`
-- one Kubernetes `Service` of type `LoadBalancer` on `26000/udp`
+- one Kubernetes `Service` of type `LoadBalancer` on `26000/udp` with `externalTrafficPolicy: Local`
 - direct client connect by external IP and port
 
 It intentionally does not add:
@@ -17,6 +17,7 @@ It intentionally does not add:
 - internal services
 - private registry auth
 - production hardening
+- explicit GKE NEG annotations
 
 ## Why The Image Should Be Public For This Checkpoint
 

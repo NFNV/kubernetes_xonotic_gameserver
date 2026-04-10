@@ -18,7 +18,7 @@ This file is the running context log for the repository. Update it over time so 
 - GitHub to GCP auth: OIDC with Workload Identity Federation
 - Container registry: GHCR
 - Primary objective: demonstrate production-style platform engineering skills, not game modding
-- Current proof strategy before Agones: one public registry image, one Kubernetes Deployment replica, one UDP `LoadBalancer` Service, and direct client connect by IP and port
+- Current proof strategy before Agones: one public registry image, one Kubernetes Deployment replica, one UDP `LoadBalancer` Service with `externalTrafficPolicy: Local`, and direct client connect by IP and port
 
 ## Current Constraints
 
