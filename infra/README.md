@@ -53,6 +53,31 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
+## Local Operator Scripts
+
+For cheap on-demand testing from the repository root, these scripts bring the cluster and plain Kubernetes checkpoint up only when needed and tear them down afterward.
+
+Required environment variables:
+
+- `GCP_PROJECT_ID`
+- `GCP_REGION`
+- `GCP_ZONE`
+- `GKE_CLUSTER_NAME`
+
+You can either export them in your shell or copy `scripts/env.sh.example` to `scripts/env.sh` and edit the values there. The scripts source `scripts/env.sh` automatically if it exists.
+
+Bring the infra and checkpoint up:
+
+```bash
+./scripts/up.sh
+```
+
+Tear the checkpoint and infra down:
+
+```bash
+./scripts/down.sh
+```
+
 If you prefer a tfvars file:
 
 ```bash

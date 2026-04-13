@@ -4,9 +4,9 @@ This file is the running context log for the repository. Update it over time so 
 
 ## Current State
 
-- Stage: Phase 1.5 cloud connectivity checkpoint before Agones
-- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, one node is Ready, and the next implementation step is publishing the Xonotic server image to GHCR before deploying the plain Kubernetes connectivity checkpoint
-- Goal: prove real client UDP connectivity to one Xonotic server in GKE before continuing into broader platform buildout
+- Stage: Phase 2 transition after the plain Kubernetes connectivity checkpoint
+- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, and the plain Kubernetes connectivity checkpoint has passed with a real client joining the GKE-hosted server over UDP
+- Goal: carry the validated single-server path forward into the first Agones-based platform baseline
 
 ## Locked-In Context
 
@@ -38,6 +38,8 @@ This file is the running context log for the repository. Update it over time so 
 - `platform/README.md`: explains the platform area and the limited pre-Agones checkpoint exception
 - `platform/connectivity-checkpoint/README.md`: exact GHCR publish, deployment, and real-client connectivity test steps for the one-server GKE proof
 - `server/README.md`: explains the dedicated server container setup, runtime assumptions, and local test needs
+- `scripts/up.sh` and `scripts/down.sh`: local operator scripts for low-cost bring-up and teardown of the Terraform-backed GKE checkpoint
+- `scripts/env.sh.example`: template for project-local operator environment variables loaded by the local scripts
 - `.github/workflows/publish-server-image.yml`: manual GHCR publish workflow for the server image
 - `.gitignore`: practical defaults for local development noise, Terraform state, local env files, and generated artifacts
 
@@ -68,19 +70,19 @@ This file is the running context log for the repository. Update it over time so 
 - Public documentation should stay readable in one pass from the root README
 - The strongest portfolio story is the end-to-end platform flow: GitHub -> OIDC/WIF -> GCP -> GKE Standard -> Agones -> Xonotic servers
 - Initial implementation should continue to favor one cluster and one environment until there is a working baseline worth promoting
-- The immediate gating milestone is no longer local container startup; it is a real client successfully joining a GKE-hosted server over UDP
-- For this checkpoint, prefer the least ambiguous networking path even if it is not the long-term production exposure model
+- The plain Kubernetes checkpoint is now validated, so future work can treat the image, UDP port, and basic GKE exposure path as a known-good baseline
+- The checkpoint used the least ambiguous networking path rather than the eventual long-term production exposure model
 - Distinguish clearly between infrastructure that is implemented in Terraform and infrastructure that has actually been applied in a real GCP project
 - Observability should be added later with a practical minimum: logs, metrics, alerts, and short runbooks
 - If the default VPC assumption becomes a blocker, add dedicated networking in a later infra iteration rather than now
-- The next platform milestone after this checkpoint is Agones integration only if cloud connectivity is proven
+- The next platform milestone is Agones integration on top of the already-proven connectivity baseline
 
 ## Expected Next Steps
 
-- run the GitHub Actions workflow to publish the Xonotic server image as a public `linux/amd64` GHCR image
-- deploy the one-server connectivity checkpoint manifests to GKE
-- test direct real-client join over the GKE load balancer IP and UDP port
+- use the local operator scripts for cheap repeatable checkpoint bring-up and teardown while iterating
+- introduce the first Agones installation and configuration path for the existing GKE cluster
+- adapt the proven Xonotic image and runtime settings to the first Agones-managed server flow
+- define the smallest practical platform manifests needed beyond the checkpoint
 - add remote state once the project moves beyond local-only iteration
 - add minimal cluster access and deployment identity groundwork when GitHub delivery is introduced
-- add initial Agones and broader platform deployment structure only after connectivity is confirmed
 - document observability and operations plan in more depth
