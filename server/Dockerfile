@@ -26,6 +26,7 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         libcurl4 \
         libjpeg62-turbo \
         libpng16-16 \
@@ -57,6 +58,9 @@ ENV XONOTIC_MAXPLAYERS=12
 ENV XONOTIC_PUBLIC=0
 ENV XONOTIC_MOTD="Welcome to the Xonotic dedicated server"
 ENV XONOTIC_LOG_FILE=server.log
+ENV XONOTIC_AGONES_READY_ENABLE=0
+ENV XONOTIC_AGONES_READY_DELAY_SECONDS=10
+ENV XONOTIC_AGONES_READY_ATTEMPTS=30
 
 EXPOSE 26000/udp
 

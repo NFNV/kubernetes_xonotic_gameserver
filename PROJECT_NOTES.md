@@ -4,9 +4,9 @@ This file is the running context log for the repository. Update it over time so 
 
 ## Current State
 
-- Stage: Phase 2 transition after the plain Kubernetes connectivity checkpoint
-- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, and the plain Kubernetes connectivity checkpoint has passed with a real client joining the GKE-hosted server over UDP
-- Goal: carry the validated single-server path forward into the first Agones-based platform baseline
+- Stage: Phase 2 initial Agones baseline
+- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint has passed, and the repo now includes the first Agones installation and single-GameServer path for validation on the existing cluster
+- Goal: validate one Agones-managed Xonotic `GameServer` before adding Fleets or allocation workflows
 
 ## Locked-In Context
 
@@ -37,6 +37,7 @@ This file is the running context log for the repository. Update it over time so 
 - `infra/README.md`: explains the Terraform MVP foundation and how to run it
 - `platform/README.md`: explains the platform area and the limited pre-Agones checkpoint exception
 - `platform/connectivity-checkpoint/README.md`: exact GHCR publish, deployment, and real-client connectivity test steps for the one-server GKE proof
+- `platform/agones/README.md`: first-phase Agones installation, one-GameServer deployment, and validation flow
 - `server/README.md`: explains the dedicated server container setup, runtime assumptions, and local test needs
 - `scripts/up.sh` and `scripts/down.sh`: local operator scripts for low-cost bring-up and teardown of the Terraform-backed GKE checkpoint
 - `scripts/env.sh.example`: template for project-local operator environment variables loaded by the local scripts
@@ -62,7 +63,7 @@ This file is the running context log for the repository. Update it over time so 
 - runtime-generated `server.autoexec.cfg` for environment-driven overrides
 - intended v1 image/runtime target is `linux/amd64`
 - Apple Silicon local runs are smoke tests only
-- no Agones, Kubernetes, or CI coupling yet
+- no full Agones SDK integration yet; only a minimal phase-1 `Ready` hook is added so one `GameServer` can reach `Ready`
 
 ## Internal Planning Notes
 
@@ -72,17 +73,18 @@ This file is the running context log for the repository. Update it over time so 
 - Initial implementation should continue to favor one cluster and one environment until there is a working baseline worth promoting
 - The plain Kubernetes checkpoint is now validated, so future work can treat the image, UDP port, and basic GKE exposure path as a known-good baseline
 - The checkpoint used the least ambiguous networking path rather than the eventual long-term production exposure model
+- The first Agones phase should stay limited to controller installation plus one `GameServer`; Fleets, allocation, and scaling come later
 - Distinguish clearly between infrastructure that is implemented in Terraform and infrastructure that has actually been applied in a real GCP project
 - Observability should be added later with a practical minimum: logs, metrics, alerts, and short runbooks
 - If the default VPC assumption becomes a blocker, add dedicated networking in a later infra iteration rather than now
-- The next platform milestone is Agones integration on top of the already-proven connectivity baseline
+- The current platform milestone is validating one Agones-managed Xonotic server on top of the already-proven connectivity baseline
 
 ## Expected Next Steps
 
-- use the local operator scripts for cheap repeatable checkpoint bring-up and teardown while iterating
-- introduce the first Agones installation and configuration path for the existing GKE cluster
-- adapt the proven Xonotic image and runtime settings to the first Agones-managed server flow
-- define the smallest practical platform manifests needed beyond the checkpoint
+- republish the Xonotic server image so the GHCR tag includes the phase-1 Agones `Ready` hook
+- install Agones on the existing GKE cluster
+- deploy the single Xonotic `GameServer` and validate `Ready` state plus client connectivity
+- add a first `Fleet` only after the single `GameServer` path is proven
 - add remote state once the project moves beyond local-only iteration
 - add minimal cluster access and deployment identity groundwork when GitHub delivery is introduced
 - document observability and operations plan in more depth

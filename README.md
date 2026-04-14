@@ -93,4 +93,4 @@ Repository layout:
 
 ## Current Status
 
-This repository is past the plain Kubernetes connectivity checkpoint. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and a real client has joined the GKE-hosted server over UDP. The next step is to use that validated baseline to introduce Agones without losing the simple, proven deployment path.
+This repository is past the plain Kubernetes connectivity checkpoint. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and a real client has joined the GKE-hosted server over UDP. The repo now includes the first Agones phase: installation guidance plus one `GameServer` manifest that keeps the old checkpoint as a fallback while introducing the Agones control plane in the smallest practical step.

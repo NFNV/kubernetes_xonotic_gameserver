@@ -17,8 +17,8 @@ This directory contains an initial container setup for the Xonotic dedicated ser
 
 ## What Is Not In Scope Yet
 
-- Agones integration
-- production Kubernetes packaging; only a minimal pre-Agones connectivity checkpoint exists under `platform/connectivity-checkpoint`
+- full Agones SDK integration beyond the minimal phase-1 `Ready` hook
+- production Kubernetes packaging beyond the minimal pre-Agones checkpoint and the first single-`GameServer` Agones phase
 - broader CI/CD beyond a single manual image publish workflow
 - observability stack
 - custom maps, mods, or gameplay changes
@@ -48,6 +48,7 @@ On container start:
 2. the baseline `server.cfg` is copied into the user data directory on first boot if no custom file is already present
 3. a generated `server.autoexec.cfg` is written based on environment variables
 4. the dedicated server binary starts and loads `server.cfg`, then `server.autoexec.cfg`
+5. when explicitly enabled for Agones phase 1, the entrypoint sends a one-time `Ready` call to the local Agones SDK sidecar after a short delay
 
 This keeps the baseline config readable in Git while still allowing simple runtime overrides.
 
@@ -71,6 +72,9 @@ This keeps the baseline config readable in Git while still allowing simple runti
 - `XONOTIC_RCON_PASSWORD`: optional RCON password
 - `XONOTIC_MAP`: optional startup map
 - `XONOTIC_EXTRA_CFG`: optional raw config lines appended to the generated autoexec file; use it only as a convenience or debug override, not as the long-term config mechanism
+- `XONOTIC_AGONES_READY_ENABLE`: set to `1` only when running under Agones phase 1 so the entrypoint sends a local `Ready` call, default `0`
+- `XONOTIC_AGONES_READY_DELAY_SECONDS`: delay before the Agones `Ready` call, default `10`
+- `XONOTIC_AGONES_READY_ATTEMPTS`: retry count for the Agones `Ready` call, default `30`
 
 ## Build
 
@@ -142,6 +146,7 @@ The GitHub Actions workflow in `.github/workflows/publish-server-image.yml` publ
 - the build now fails early if the expected dedicated binary path is not present in the extracted release
 - the runtime image is kept smaller than a one-stage build by separating download and extraction from runtime dependencies
 - the container defaults are tuned for local bring-up, not internet-facing production operation
+- the runtime image now includes `curl` so the phase-1 Agones path can send a local `Ready` request without full in-process SDK integration
 
 ## Intentionally Deferred
 

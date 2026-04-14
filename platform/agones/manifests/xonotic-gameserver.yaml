@@ -1,0 +1,41 @@
+apiVersion: agones.dev/v1
+kind: GameServer
+metadata:
+  name: xonotic-gameserver
+  namespace: xonotic-agones
+spec:
+  container: server
+  ports:
+    - name: gameplay
+      portPolicy: Static
+      containerPort: 26000
+      hostPort: 26000
+      protocol: UDP
+  health:
+    disabled: true
+  template:
+    metadata:
+      labels:
+        app: xonotic-gameserver
+    spec:
+      containers:
+        - name: server
+          image: ghcr.io/nfnv/xonotic-server:connectivity-checkpoint
+          imagePullPolicy: Always
+          env:
+            - name: XONOTIC_PORT
+              value: "26000"
+            - name: XONOTIC_HOSTNAME
+              value: Xonotic Agones Phase 1
+            - name: XONOTIC_PUBLIC
+              value: "0"
+            - name: XONOTIC_MAXPLAYERS
+              value: "8"
+            - name: XONOTIC_AGONES_READY_ENABLE
+              value: "1"
+            - name: XONOTIC_AGONES_READY_DELAY_SECONDS
+              value: "10"
+          ports:
+            - name: gameplay
+              containerPort: 26000
+              protocol: UDP

@@ -8,6 +8,40 @@ readonly template_cfg="/opt/xonotic-config/server.cfg"
 readonly server_cfg="${data_dir}/server.cfg"
 readonly autoexec_cfg="${data_dir}/server.autoexec.cfg"
 
+notify_agones_ready() {
+  local sdk_http_port="${AGONES_SDK_HTTP_PORT:-}"
+  local ready_delay="${XONOTIC_AGONES_READY_DELAY_SECONDS:-10}"
+  local ready_attempts="${XONOTIC_AGONES_READY_ATTEMPTS:-30}"
+  local attempt
+
+  if [[ "${XONOTIC_AGONES_READY_ENABLE:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  if [[ -z "${sdk_http_port}" ]]; then
+    echo "XONOTIC_AGONES_READY_ENABLE=1 but AGONES_SDK_HTTP_PORT is not set" >&2
+    return 1
+  fi
+
+  sleep "${ready_delay}"
+
+  for ((attempt = 1; attempt <= ready_attempts; attempt++)); do
+    if curl --fail --silent --show-error \
+      -H "Content-Type: application/json" \
+      -X POST \
+      -d "{}" \
+      "http://127.0.0.1:${sdk_http_port}/ready" >/dev/null; then
+      echo "Agones Ready sent on attempt ${attempt}" >&2
+      return 0
+    fi
+
+    sleep 1
+  done
+
+  echo "Failed to send Agones Ready after ${ready_attempts} attempts" >&2
+  return 1
+}
+
 escape_cvar_string() {
   local value="${1}"
 
@@ -72,5 +106,13 @@ if [[ -n "${map_name}" ]]; then
 fi
 
 cmd+=("$@")
+
+if [[ "${XONOTIC_AGONES_READY_ENABLE:-0}" == "1" ]]; then
+  (
+    if ! notify_agones_ready; then
+      echo "Agones Ready notification did not succeed; the GameServer may remain in Scheduled" >&2
+    fi
+  ) &
+fi
 
 exec "${cmd[@]}"
