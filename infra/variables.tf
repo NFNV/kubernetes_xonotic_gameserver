@@ -48,7 +48,7 @@ variable "node_machine_type" {
 variable "node_disk_size_gb" {
   description = "Boot disk size in GB for GKE nodes."
   type        = number
-  default     = 30
+  default     = 100
 }
 
 variable "node_disk_type" {

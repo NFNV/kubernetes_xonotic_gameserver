@@ -22,6 +22,10 @@ It intentionally does not create:
 - advanced networking such as a dedicated VPC, subnets, NAT, or firewall customization
 - extra service accounts or broad IAM design
 
+Exception for the current Agones phase:
+
+- one narrow VPC firewall rule allowing UDP `26000` ingress so the first Agones `GameServer` is reachable through direct node access
+
 ## Required Variables
 
 At minimum, set:
@@ -37,7 +41,7 @@ The other variables have practical defaults for a low-cost MVP and can be overri
 - `network_name`: defaults to `default`
 - `subnetwork_name`: defaults to `default`
 - `node_machine_type`: defaults to `e2-medium`
-- `node_disk_size_gb`: defaults to `30`
+- `node_disk_size_gb`: defaults to `100`
 - `node_disk_type`: defaults to `pd-standard`
 - `node_count`: defaults to `1`
 
@@ -112,9 +116,21 @@ Notes:
 
 - the cluster is zonal, not regional, to avoid multiplying control-plane and node costs
 - the node pool defaults to a single `e2-medium` node
-- node disk defaults to `30 GB` on `pd-standard` to keep storage cost low
+- node disk defaults to `100 GB` on `pd-standard`; this is still a low-cost choice, but it leaves enough allocatable ephemeral storage for the first Agones controller footprint on a single-node dev cluster
 - this is a deliberate MVP baseline, not a capacity target for real gameplay load
 - once Agones and the actual game workload are added, the machine type may need to increase
+
+## Agones Disk Sizing Note
+
+The earlier `30 GB` node disk was enough for the plain Kubernetes connectivity checkpoint because that phase ran only the Xonotic workload plus the normal cluster system pods.
+
+For the first Agones phase on a single-node cluster, Agones adds controller pods that request significant `ephemeral-storage`. In practice, the default Agones controller and extensions requests can exceed the allocatable ephemeral storage left on a `30 GB` node disk after system reservations, image storage, and kubelet overhead. The `100 GB` default is a practical dev-cluster adjustment that keeps the cluster simple while giving the scheduler enough room to place those pods.
+
+## Agones Networking Note
+
+The first Agones `GameServer` in this repo does not use a `LoadBalancer` Service. It uses direct node access through Agones `hostPort` publishing on UDP `26000`.
+
+Because there is no Kubernetes `Service` of type `LoadBalancer` in that path, GKE does not create the equivalent `k8s-fw-*` ingress firewall rule for you. Terraform now creates one narrow VPC firewall rule for UDP `26000` so the Agones-managed server can be reached from the internet during this phase.
 
 ## Assumptions
 

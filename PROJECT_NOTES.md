@@ -29,6 +29,7 @@ This file is the running context log for the repository. Update it over time so 
 - Keep IAM minimal until there is a concrete deployment or access requirement
 - Keep the server image focused on the stock dedicated server path before adding orchestration-specific behavior
 - Use a public GHCR image for this checkpoint so Kubernetes deployment stays free of image pull secret work
+- Allow one narrow VPC firewall rule for UDP `26000` because the first Agones phase uses direct node access through `hostPort`, not a `LoadBalancer` Service
 
 ## Documentation Structure
 
@@ -49,6 +50,7 @@ This file is the running context log for the repository. Update it over time so 
 - one zonal GKE Standard cluster
 - one small node pool
 - explicit node disk size and disk type
+- node disk default increased to `100 GB` on `pd-standard` so a single-node dev cluster has enough allocatable ephemeral storage for the first Agones controller footprint
 - default region and zone set for South America deployment (`southamerica-west1` / `southamerica-west1-a`)
 - required GCP API enablement only
 - no Artifact Registry resources because images will come from GHCR

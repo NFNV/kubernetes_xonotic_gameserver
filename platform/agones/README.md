@@ -134,7 +134,7 @@ Assumptions for this to work on GKE:
 - UDP `26000` is allowed to that node by GCP firewall policy
 - a single `GameServer` on static UDP `26000` is acceptable for this phase
 
-That is intentionally narrower than the later production shape. If node-level UDP access is blocked in your environment, fix that first before introducing Fleets or allocation workflows.
+This repo now handles that phase-1 requirement with one narrow Terraform-managed VPC firewall rule for UDP `26000`. That is intentionally narrower than the later production shape.
 
 ## What Comes Next
 
