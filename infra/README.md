@@ -25,6 +25,7 @@ It intentionally does not create:
 Exception for the current Agones phase:
 
 - one narrow VPC firewall rule allowing UDP `26000` ingress so the first Agones `GameServer` is reachable through direct node access
+- one narrow VPC firewall rule allowing UDP `7000-7010` ingress for the Fleet's dynamic host ports
 
 ## Required Variables
 
@@ -70,7 +71,7 @@ Required environment variables:
 
 You can either export them in your shell or copy `scripts/env.sh.example` to `scripts/env.sh` and edit the values there. The scripts source `scripts/env.sh` automatically if it exists.
 
-Bring the infra and Agones phase-1 path up:
+Bring the infra and the current Agones Fleet-and-allocation phase up:
 
 ```bash
 ./scripts/up.sh
@@ -80,9 +81,9 @@ Bring the infra and Agones phase-1 path up:
 
 - applies the Terraform for the cluster and firewall rule
 - fetches kubeconfig credentials
-- installs or updates Agones with the repo's phase-1 settings
-- applies the Xonotic Agones namespace and `GameServer`
-- waits for the Agones controller deployments and then prints the `GameServer` state
+- installs or updates Agones with the repo's current Fleet-phase settings, including the narrow dynamic port range
+- applies the Xonotic Agones namespace and `Fleet`
+- waits for the Agones controller deployments and Fleet readiness, then prints Fleet and `GameServer` state
 
 Tear the current test path and infra down:
 
@@ -136,9 +137,14 @@ For the first Agones phase on a single-node cluster, Agones adds controller pods
 
 ## Agones Networking Note
 
-The first Agones `GameServer` in this repo does not use a `LoadBalancer` Service. It uses direct node access through Agones `hostPort` publishing on UDP `26000`.
+The first Agones `GameServer` reference in this repo does not use a `LoadBalancer` Service. It uses direct node access through Agones `hostPort` publishing on UDP `26000`.
 
-Because there is no Kubernetes `Service` of type `LoadBalancer` in that path, GKE does not create the equivalent `k8s-fw-*` ingress firewall rule for you. Terraform now creates one narrow VPC firewall rule for UDP `26000` so the Agones-managed server can be reached from the internet during this phase.
+The Fleet phase also does not use a `LoadBalancer` Service. It uses dynamic Agones host ports in the explicit range `7000-7010`.
+
+Because there is no Kubernetes `Service` of type `LoadBalancer` in either path, GKE does not create the equivalent `k8s-fw-*` ingress firewall rules for you. Terraform now creates:
+
+- one narrow VPC firewall rule for UDP `26000` for the single-`GameServer` reference
+- one narrow VPC firewall rule for UDP `7000-7010` for the Fleet phase
 
 ## Assumptions
 

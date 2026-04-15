@@ -17,10 +17,10 @@ fi
 
 infra_dir="${repo_root}/infra"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
-gameserver_manifest="${repo_root}/platform/agones/manifests/xonotic-gameserver.yaml"
+fleet_manifest="${repo_root}/platform/agones/manifests/xonotic-fleet.yaml"
 agones_system_namespace="agones-system"
 gameserver_namespace="xonotic-agones"
-gameserver_name="xonotic-gameserver"
+fleet_name="xonotic-fleet"
 
 cd "${infra_dir}"
 
@@ -47,25 +47,27 @@ helm upgrade --install agones agones/agones \
   --namespace "${agones_system_namespace}" \
   --create-namespace \
   --set agones.ping.install=false \
+  --set gameservers.minPort=7000 \
+  --set gameservers.maxPort=7010 \
   --set "gameservers.namespaces={${gameserver_namespace}}"
 
 kubectl rollout status deployment/agones-controller -n "${agones_system_namespace}"
 kubectl rollout status deployment/agones-extensions -n "${agones_system_namespace}"
 
-kubectl apply -f "${gameserver_manifest}"
+kubectl apply -f "${fleet_manifest}"
 
 for _ in $(seq 1 60); do
-  if [[ "$(kubectl get gameserver "${gameserver_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.state}' 2>/dev/null || true)" == "Ready" ]]; then
+  if [[ "$(kubectl get fleet "${fleet_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)" == "2" ]]; then
     break
   fi
   sleep 5
 done
 
-if [[ "$(kubectl get gameserver "${gameserver_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.state}' 2>/dev/null || true)" != "Ready" ]]; then
-  echo "GameServer ${gameserver_namespace}/${gameserver_name} did not reach Ready" >&2
+if [[ "$(kubectl get fleet "${fleet_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)" != "2" ]]; then
+  echo "Fleet ${gameserver_namespace}/${fleet_name} did not reach 2 Ready replicas" >&2
   exit 1
 fi
 
 kubectl get pods -n "${agones_system_namespace}"
-kubectl get gameserver -n "${gameserver_namespace}"
-kubectl get gameserver "${gameserver_name}" -n "${gameserver_namespace}" -o wide
+kubectl get fleet -n "${gameserver_namespace}"
+kubectl get gameserver -n "${gameserver_namespace}" -o wide

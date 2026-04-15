@@ -79,7 +79,7 @@ Repository layout:
 ### Phase 2: Platform Baseline
 
 - add Agones and shared cluster-level components
-- define basic operational conventions for platform changes
+- define the first Fleet-and-allocation workflow before autoscaling
 
 ### Phase 3: Workload Delivery
 
@@ -93,4 +93,4 @@ Repository layout:
 
 ## Current Status
 
-This repository is past the plain Kubernetes connectivity checkpoint. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and a real client has joined the GKE-hosted server over UDP. The repo now includes the first Agones phase: installation guidance plus one `GameServer` manifest that keeps the old checkpoint as a fallback while introducing the Agones control plane in the smallest practical step.
+This repository is past the plain Kubernetes connectivity checkpoint and the first single-`GameServer` Agones step. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and the repo now includes the next Agones phase: a small Fleet plus a basic `GameServerAllocation` flow, while keeping the earlier checkpoint and single-`GameServer` path as reference points.
