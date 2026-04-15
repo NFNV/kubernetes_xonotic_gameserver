@@ -59,7 +59,7 @@ terraform apply tfplan
 
 ## Local Operator Scripts
 
-For cheap on-demand testing from the repository root, these scripts bring the cluster and plain Kubernetes checkpoint up only when needed and tear them down afterward.
+For cheap on-demand testing from the repository root, these scripts bring the cluster and the current Agones phase up only when needed and tear it down afterward.
 
 Required environment variables:
 
@@ -70,13 +70,21 @@ Required environment variables:
 
 You can either export them in your shell or copy `scripts/env.sh.example` to `scripts/env.sh` and edit the values there. The scripts source `scripts/env.sh` automatically if it exists.
 
-Bring the infra and checkpoint up:
+Bring the infra and Agones phase-1 path up:
 
 ```bash
 ./scripts/up.sh
 ```
 
-Tear the checkpoint and infra down:
+`./scripts/up.sh` now does all of the following:
+
+- applies the Terraform for the cluster and firewall rule
+- fetches kubeconfig credentials
+- installs or updates Agones with the repo's phase-1 settings
+- applies the Xonotic Agones namespace and `GameServer`
+- waits for the Agones controller deployments and then prints the `GameServer` state
+
+Tear the current test path and infra down:
 
 ```bash
 ./scripts/down.sh

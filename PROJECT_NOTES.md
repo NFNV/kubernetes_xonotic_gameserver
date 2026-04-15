@@ -40,7 +40,7 @@ This file is the running context log for the repository. Update it over time so 
 - `platform/connectivity-checkpoint/README.md`: exact GHCR publish, deployment, and real-client connectivity test steps for the one-server GKE proof
 - `platform/agones/README.md`: first-phase Agones installation, one-GameServer deployment, and validation flow
 - `server/README.md`: explains the dedicated server container setup, runtime assumptions, and local test needs
-- `scripts/up.sh` and `scripts/down.sh`: local operator scripts for low-cost bring-up and teardown of the Terraform-backed GKE checkpoint
+- `scripts/up.sh` and `scripts/down.sh`: local operator scripts for low-cost bring-up and teardown of the Terraform-backed GKE cluster, now aligned with the Agones phase-1 path
 - `scripts/env.sh.example`: template for project-local operator environment variables loaded by the local scripts
 - `.github/workflows/publish-server-image.yml`: manual GHCR publish workflow for the server image
 - `.gitignore`: practical defaults for local development noise, Terraform state, local env files, and generated artifacts
@@ -76,6 +76,7 @@ This file is the running context log for the repository. Update it over time so 
 - The plain Kubernetes checkpoint is now validated, so future work can treat the image, UDP port, and basic GKE exposure path as a known-good baseline
 - The checkpoint used the least ambiguous networking path rather than the eventual long-term production exposure model
 - The first Agones phase should stay limited to controller installation plus one `GameServer`; Fleets, allocation, and scaling come later
+- The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - Distinguish clearly between infrastructure that is implemented in Terraform and infrastructure that has actually been applied in a real GCP project
 - Observability should be added later with a practical minimum: logs, metrics, alerts, and short runbooks
 - If the default VPC assumption becomes a blocker, add dedicated networking in a later infra iteration rather than now
