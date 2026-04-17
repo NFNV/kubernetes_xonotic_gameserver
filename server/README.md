@@ -70,7 +70,10 @@ This keeps the baseline config readable in Git while still allowing simple runti
 - `XONOTIC_MOTD`: message of the day
 - `XONOTIC_LOG_FILE`: log file path inside the Xonotic data dir, default `server.log`
 - `XONOTIC_RCON_PASSWORD`: optional RCON password
-- `XONOTIC_MAP`: optional startup map
+- `XONOTIC_START_MAP`: exact startup map to use; takes precedence over random selection
+- `XONOTIC_RANDOM_START_MAP_ENABLE`: set to `1` to choose one startup map randomly from `XONOTIC_MAP_POOL`, default `0`
+- `XONOTIC_MAP_POOL`: whitespace-separated startup map pool for random selection, default `xoylent stormkeep darkzone drain`
+- `XONOTIC_MAP`: legacy optional startup map fallback; used only if `XONOTIC_START_MAP` is unset and random selection is disabled
 - `XONOTIC_EXTRA_CFG`: optional raw config lines appended to the generated autoexec file; use it only as a convenience or debug override, not as the long-term config mechanism
 - `XONOTIC_AGONES_READY_ENABLE`: set to `1` only when running under Agones phase 1 so the entrypoint sends a local `Ready` call, default `0`
 - `XONOTIC_AGONES_READY_DELAY_SECONDS`: delay before the Agones `Ready` call, default `10`
@@ -147,6 +150,7 @@ The GitHub Actions workflow in `.github/workflows/publish-server-image.yml` publ
 - the runtime image is kept smaller than a one-stage build by separating download and extraction from runtime dependencies
 - the container defaults are tuned for local bring-up, not internet-facing production operation
 - the runtime image now includes `curl` so the phase-1 Agones path can send a local `Ready` request without full in-process SDK integration
+- startup map selection is now env-driven in the entrypoint: exact map first, random pool second, legacy `XONOTIC_MAP` last
 
 ## Intentionally Deferred
 

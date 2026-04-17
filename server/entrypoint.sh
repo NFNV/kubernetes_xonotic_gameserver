@@ -8,6 +8,35 @@ readonly template_cfg="/opt/xonotic-config/server.cfg"
 readonly server_cfg="${data_dir}/server.cfg"
 readonly autoexec_cfg="${data_dir}/server.autoexec.cfg"
 
+select_start_map() {
+  local fixed_start_map="${XONOTIC_START_MAP:-}"
+  local random_start_map_enable="${XONOTIC_RANDOM_START_MAP_ENABLE:-0}"
+  local map_pool="${XONOTIC_MAP_POOL:-xoylent stormkeep darkzone drain}"
+  local legacy_map="${XONOTIC_MAP:-}"
+  local -a map_pool_entries=()
+
+  if [[ -n "${fixed_start_map}" ]]; then
+    printf '%s' "${fixed_start_map}"
+    return 0
+  fi
+
+  if [[ "${random_start_map_enable}" == "1" ]]; then
+    read -r -a map_pool_entries <<< "${map_pool}"
+
+    if [[ "${#map_pool_entries[@]}" -eq 0 ]]; then
+      echo "XONOTIC_RANDOM_START_MAP_ENABLE=1 but XONOTIC_MAP_POOL is empty" >&2
+      return 1
+    fi
+
+    printf '%s' "${map_pool_entries[RANDOM % ${#map_pool_entries[@]}]}"
+    return 0
+  fi
+
+  if [[ -n "${legacy_map}" ]]; then
+    printf '%s' "${legacy_map}"
+  fi
+}
+
 notify_agones_ready() {
   local sdk_http_port="${AGONES_SDK_HTTP_PORT:-}"
   local ready_delay="${XONOTIC_AGONES_READY_DELAY_SECONDS:-10}"
@@ -65,7 +94,7 @@ maxplayers="${XONOTIC_MAXPLAYERS:-12}"
 public="${XONOTIC_PUBLIC:-0}"
 motd="${XONOTIC_MOTD:-Welcome to the Xonotic dedicated server}"
 log_file="${XONOTIC_LOG_FILE:-server.log}"
-map_name="${XONOTIC_MAP:-}"
+map_name="$(select_start_map)"
 rcon_password="${XONOTIC_RCON_PASSWORD:-}"
 extra_cfg="${XONOTIC_EXTRA_CFG:-}"
 
@@ -102,6 +131,7 @@ cmd=(
 )
 
 if [[ -n "${map_name}" ]]; then
+  echo "Startup map selected: ${map_name}" >&2
   cmd+=("+map" "${map_name}")
 fi
 

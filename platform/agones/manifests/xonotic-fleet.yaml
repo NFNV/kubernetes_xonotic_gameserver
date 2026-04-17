@@ -41,6 +41,10 @@ spec:
                   value: "0"
                 - name: XONOTIC_MAXPLAYERS
                   value: "8"
+                - name: XONOTIC_RANDOM_START_MAP_ENABLE
+                  value: "1"
+                - name: XONOTIC_MAP_POOL
+                  value: xoylent stormkeep darkzone drain
                 - name: XONOTIC_AGONES_READY_ENABLE
                   value: "1"
                 - name: XONOTIC_AGONES_READY_DELAY_SECONDS

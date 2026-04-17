@@ -98,6 +98,63 @@ The current Agones-aware `scripts/up.sh` installs or upgrades Agones with:
 - `manifests/xonotic-fleet.yaml`: current Fleet manifest with `replicas: 2`
 - `manifests/xonotic-gameserverallocation.yaml`: test allocation manifest using `generateName`
 
+## Startup Map Selection
+
+The startup map is now controlled in the image entrypoint rather than through interactive shell access.
+
+Behavior order:
+
+1. if `XONOTIC_START_MAP` is set, the server starts on that exact map
+2. otherwise, if `XONOTIC_RANDOM_START_MAP_ENABLE=1`, the server chooses one random map from `XONOTIC_MAP_POOL`
+3. otherwise, the image falls back to the previous behavior, which means no explicit startup map is injected unless the legacy `XONOTIC_MAP` variable is set
+
+The current Fleet manifest enables random startup maps by default:
+
+- `XONOTIC_RANDOM_START_MAP_ENABLE=1`
+- `XONOTIC_MAP_POOL="xoylent stormkeep darkzone drain"`
+
+### Set A Fixed Startup Map
+
+In the relevant manifest, set:
+
+```yaml
+- name: XONOTIC_START_MAP
+  value: stormkeep
+```
+
+### Enable Random Startup Maps
+
+In the relevant manifest, set:
+
+```yaml
+- name: XONOTIC_RANDOM_START_MAP_ENABLE
+  value: "1"
+```
+
+### Change The Map Pool
+
+Set a whitespace-separated list:
+
+```yaml
+- name: XONOTIC_MAP_POOL
+  value: xoylent stormkeep darkzone drain
+```
+
+### Make The Change Take Effect
+
+After changing the manifest, recreate the affected Agones servers:
+
+- for the Fleet phase, apply the updated Fleet manifest and either delete the current Fleet `GameServer` Pods or restart the Fleet rollout by changing the template
+- for the single-`GameServer` reference, reapply the manifest after deleting the current `GameServer`
+
+For the Fleet phase, the simplest manual refresh is:
+
+```bash
+kubectl apply -f platform/agones/manifests/xonotic-fleet.yaml
+kubectl delete gameserver -n xonotic-agones -l agones.dev/fleet=xonotic-fleet
+kubectl get gameserver -n xonotic-agones -w
+```
+
 ## Install Or Upgrade Agones For This Phase
 
 Create the namespace first:

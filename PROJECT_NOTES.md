@@ -64,6 +64,7 @@ This file is the running context log for the repository. Update it over time so 
 - runtime image based on Debian slim with a non-root `xonotic` user
 - baseline `server.cfg` stored in the repo
 - runtime-generated `server.autoexec.cfg` for environment-driven overrides
+- startup map selection now handled in the entrypoint through `XONOTIC_START_MAP` or optional random selection from `XONOTIC_MAP_POOL`
 - intended v1 image/runtime target is `linux/amd64`
 - Apple Silicon local runs are smoke tests only
 - no full Agones SDK integration yet; only a minimal phase-1 `Ready` hook is added so one `GameServer` can reach `Ready`
