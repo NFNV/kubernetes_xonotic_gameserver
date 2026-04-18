@@ -6,6 +6,8 @@ This directory is reserved for cluster-level platform components that sit on top
 
 `agones/` now contains the Agones migration path: the single-`GameServer` reference from phase 1 plus the current Fleet-and-allocation phase.
 
+`allocator-backend/` contains the first in-cluster backend service that allocates `GameServer` instances programmatically from the Fleet.
+
 Expected future contents:
 
 - the pre-Agones connectivity checkpoint documentation and manifests

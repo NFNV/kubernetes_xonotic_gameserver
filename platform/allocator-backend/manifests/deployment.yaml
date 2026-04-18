@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xonotic-allocator-backend
+  namespace: xonotic-allocator-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xonotic-allocator-backend
+  template:
+    metadata:
+      labels:
+        app: xonotic-allocator-backend
+    spec:
+      serviceAccountName: xonotic-allocator-backend
+      containers:
+        - name: backend
+          image: ghcr.io/nfnv/xonotic-allocator-backend:allocator-backend
+          imagePullPolicy: Always
+          env:
+            - name: AGONES_NAMESPACE
+              value: xonotic-agones
+            - name: FLEET_NAME
+              value: xonotic-fleet
+            - name: GAME_LABEL
+              value: xonotic
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http

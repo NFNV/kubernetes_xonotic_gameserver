@@ -84,7 +84,7 @@ Repository layout:
 ### Phase 3: Workload Delivery
 
 - package and deploy the Xonotic dedicated server workload
-- separate workload concerns cleanly from infrastructure and platform concerns
+- add the first in-cluster allocator backend before any frontend work
 
 ### Phase 4: CI/CD and Hardening
 
@@ -93,4 +93,4 @@ Repository layout:
 
 ## Current Status
 
-This repository is past the plain Kubernetes connectivity checkpoint and the first single-`GameServer` Agones step. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and the repo now includes the next Agones phase: a small Fleet plus a basic `GameServerAllocation` flow, while keeping the earlier checkpoint and single-`GameServer` path as reference points.
+This repository is past the plain Kubernetes connectivity checkpoint, the first single-`GameServer` Agones step, and the first manual Fleet-plus-allocation flow. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and the repo now includes the next step: a tiny in-cluster allocator backend that creates `GameServerAllocation` resources programmatically through the Kubernetes API.

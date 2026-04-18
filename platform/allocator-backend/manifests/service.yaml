@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: xonotic-allocator-backend
+  namespace: xonotic-allocator-backend
+spec:
+  type: ClusterIP
+  selector:
+    app: xonotic-allocator-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

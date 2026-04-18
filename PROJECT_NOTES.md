@@ -4,9 +4,9 @@ This file is the running context log for the repository. Update it over time so 
 
 ## Current State
 
-- Stage: Phase 2 Fleet and allocation baseline
-- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, and the repo now includes the first Fleet plus `GameServerAllocation` path for validation
-- Goal: validate a small Agones Fleet and allocation workflow before adding FleetAutoscaler or allocator-facing services
+- Stage: Phase 3 in-cluster allocator backend MVP
+- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, and the repo now includes the first in-cluster allocator backend service
+- Goal: validate a tiny backend pod that allocates Xonotic servers programmatically before adding autoscaling or any frontend
 
 ## Locked-In Context
 
@@ -40,10 +40,13 @@ This file is the running context log for the repository. Update it over time so 
 - `platform/README.md`: explains the platform area and the limited pre-Agones checkpoint exception
 - `platform/connectivity-checkpoint/README.md`: exact GHCR publish, deployment, and real-client connectivity test steps for the one-server GKE proof
 - `platform/agones/README.md`: the single-GameServer reference plus the current Fleet-and-allocation phase, including networking details
+- `platform/allocator-backend/README.md`: deployment and test flow for the first in-cluster allocator backend
+- `allocator-backend/`: Python service code and container image build context for the in-cluster allocator backend
 - `server/README.md`: explains the dedicated server container setup, runtime assumptions, and local test needs
 - `scripts/up.sh` and `scripts/down.sh`: local operator scripts for low-cost bring-up and teardown of the Terraform-backed GKE cluster, now aligned with the current Agones Fleet-and-allocation phase
 - `scripts/env.sh.example`: template for project-local operator environment variables loaded by the local scripts
 - `.github/workflows/publish-server-image.yml`: manual GHCR publish workflow for the server image
+- `.github/workflows/publish-allocator-backend-image.yml`: manual and push-triggered GHCR publish workflow for the allocator backend image
 - `.gitignore`: practical defaults for local development noise, Terraform state, local env files, and generated artifacts
 
 ## Phase 1 Terraform Shape
@@ -79,6 +82,7 @@ This file is the running context log for the repository. Update it over time so 
 - The checkpoint used the least ambiguous networking path rather than the eventual long-term production exposure model
 - The first Agones phase should stay limited to controller installation plus one `GameServer`; that phase is now reference-only
 - The current Agones phase should introduce Fleet plus allocation, but stop before FleetAutoscaler and allocator-backed services
+- The first backend phase should run inside the cluster and use the Kubernetes API directly rather than introducing the external Agones Allocator Service
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - Distinguish clearly between infrastructure that is implemented in Terraform and infrastructure that has actually been applied in a real GCP project
 - Observability should be added later with a practical minimum: logs, metrics, alerts, and short runbooks
@@ -90,8 +94,10 @@ This file is the running context log for the repository. Update it over time so 
 - republish the Xonotic server image so the GHCR tag includes the phase-1 Agones `Ready` hook
 - install Agones on the existing GKE cluster
 - deploy the `Fleet` and validate two `Ready` Xonotic `GameServer` instances
-- test `GameServerAllocation` and validate client connectivity to the returned address and dynamic port
+- publish the allocator backend image and deploy the backend manifests
+- test backend-driven allocation and validate the returned address and dynamic port
 - add `FleetAutoscaler` only after the Fleet-and-allocation path is proven
+- add frontend or allocator callers only after the in-cluster backend MVP is proven
 - add remote state once the project moves beyond local-only iteration
 - add minimal cluster access and deployment identity groundwork when GitHub delivery is introduced
 - document observability and operations plan in more depth
