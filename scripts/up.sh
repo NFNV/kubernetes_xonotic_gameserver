@@ -18,9 +18,11 @@ fi
 infra_dir="${repo_root}/infra"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
 fleet_manifest="${repo_root}/platform/agones/manifests/xonotic-fleet.yaml"
+fleet_autoscaler_manifest="${repo_root}/platform/agones/manifests/xonotic-fleetautoscaler.yaml"
 agones_system_namespace="agones-system"
 gameserver_namespace="xonotic-agones"
 fleet_name="xonotic-fleet"
+required_ready_replicas="3"
 
 cd "${infra_dir}"
 
@@ -55,19 +57,23 @@ kubectl rollout status deployment/agones-controller -n "${agones_system_namespac
 kubectl rollout status deployment/agones-extensions -n "${agones_system_namespace}"
 
 kubectl apply -f "${fleet_manifest}"
+kubectl apply -f "${fleet_autoscaler_manifest}"
 
 for _ in $(seq 1 60); do
-  if [[ "$(kubectl get fleet "${fleet_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)" == "2" ]]; then
+  ready_replicas="$(kubectl get fleet "${fleet_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+  if [[ -n "${ready_replicas}" ]] && (( ready_replicas >= required_ready_replicas )); then
     break
   fi
   sleep 5
 done
 
-if [[ "$(kubectl get fleet "${fleet_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)" != "2" ]]; then
-  echo "Fleet ${gameserver_namespace}/${fleet_name} did not reach 2 Ready replicas" >&2
+ready_replicas="$(kubectl get fleet "${fleet_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+if [[ -z "${ready_replicas}" ]] || (( ready_replicas < required_ready_replicas )); then
+  echo "Fleet ${gameserver_namespace}/${fleet_name} did not reach ${required_ready_replicas} Ready replicas" >&2
   exit 1
 fi
 
 kubectl get pods -n "${agones_system_namespace}"
+kubectl get fleetautoscaler -n "${gameserver_namespace}"
 kubectl get fleet -n "${gameserver_namespace}"
 kubectl get gameserver -n "${gameserver_namespace}" -o wide

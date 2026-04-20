@@ -1,0 +1,17 @@
+apiVersion: autoscaling.agones.dev/v1
+kind: FleetAutoscaler
+metadata:
+  name: xonotic-fleet-autoscaler
+  namespace: xonotic-agones
+spec:
+  fleetName: xonotic-fleet
+  policy:
+    type: Buffer
+    buffer:
+      bufferSize: 3
+      minReplicas: 3
+      maxReplicas: 6
+  sync:
+    type: FixedInterval
+    fixedInterval:
+      seconds: 15

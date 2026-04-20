@@ -21,35 +21,39 @@ That phase uses:
 
 This file stays in the repo as a reference and fallback while the project moves to Fleet-based allocation.
 
-## Phase Now: Fleet Plus Allocation
+## Phase 2 Reference: Fleet Plus Allocation
 
-The current Agones phase replaces the one-off `GameServer` checkpoint with:
+The previous Agones step replaced the one-off `GameServer` checkpoint with:
 
 - one small `Fleet`
 - one test `GameServerAllocation` flow
 
-This is the right next step before autoscaling because it introduces the core Agones serving model without adding more systems than necessary:
+That phase stays in the repo as the direct reference for:
 
-1. keep a warm pool of ready game servers
-2. allocate one game server atomically when a match needs one
-3. inspect the returned address and port
-4. connect the client directly to that allocated server
+1. keeping a warm pool of ready game servers
+2. allocating one game server atomically when a match needs one
+3. inspecting the returned address and port
+4. connecting the client directly to that allocated server
 
-It intentionally does not add yet:
+## Phase Now: FleetAutoscaler Buffer
 
-- `FleetAutoscaler`
-- allocator service
-- backend or frontend matchmaking components
+The current Agones phase adds one `FleetAutoscaler` on top of the working Fleet and allocation flow.
+
+The goal is simple:
+
+- keep `3` `Ready` servers on standby
+- let Agones grow total Fleet capacity automatically when allocations consume the ready pool
+- stop before adding allocator service exposure, frontend work, or more advanced scaling logic
 
 ## What A Fleet Is
 
 A `Fleet` is a managed set of warm `GameServer` instances. Instead of creating one named `GameServer` by hand, Agones maintains a desired pool size for you.
 
-For this phase, the Fleet stays deliberately small:
+For this phase, the Fleet stays deliberately small and acts as the template the autoscaler controls:
 
-- `replicas: 2`
+- `replicas: 3`
 
-That is enough to prove that Agones can keep multiple ready Xonotic servers around and allocate one on demand.
+The important shift is that `replicas` is no longer how you reason about steady-state capacity by hand. The `FleetAutoscaler` now owns that behavior.
 
 ## What GameServerAllocation Does
 
@@ -60,6 +64,31 @@ That matters because the connection target is no longer a single fixed server:
 - the allocation picks one warm server from the Fleet
 - Agones returns the server address and the actual external port to use
 - the client connects to that specific address and port
+
+## What FleetAutoscaler Changes
+
+A `FleetAutoscaler` sits above the `Fleet` and adjusts its replica count automatically.
+
+For this phase, it uses Agones buffer autoscaling:
+
+- `bufferSize: 3`
+- `minReplicas: 3`
+- `maxReplicas: 6`
+
+That means:
+
+- Agones tries to keep `3` `Ready` servers available
+- if one allocation consumes a `Ready` server, Agones scales the Fleet up so the standby pool returns to `3`
+- total Fleet size can grow above `3` while servers are `Allocated`
+- Fleet growth is capped at `6` for this small dev cluster
+
+Example:
+
+1. start with `3` `Ready`, `0` `Allocated`
+2. allocate one server
+3. Fleet briefly has `2` `Ready`, `1` `Allocated`
+4. autoscaler increases desired Fleet size
+5. once the replacement server becomes `Ready`, the Fleet settles at `3` `Ready`, `1` `Allocated`
 
 ## Why Static hostPort 26000 Is Not Right For A Fleet
 
@@ -95,7 +124,8 @@ The current Agones-aware `scripts/up.sh` installs or upgrades Agones with:
 
 - `manifests/namespace.yaml`: namespace for Xonotic Agones resources
 - `manifests/xonotic-gameserver.yaml`: single-GameServer reference from phase 1
-- `manifests/xonotic-fleet.yaml`: current Fleet manifest with `replicas: 2`
+- `manifests/xonotic-fleet.yaml`: current Fleet template manifest with the autoscaled Xonotic server spec
+- `manifests/xonotic-fleetautoscaler.yaml`: buffer autoscaler that keeps `3` `Ready` servers on standby
 - `manifests/xonotic-gameserverallocation.yaml`: test allocation manifest using `generateName`
 
 ## Startup Map Selection
@@ -183,32 +213,41 @@ Confirm the controllers are healthy:
 kubectl get pods -n agones-system
 ```
 
-## Apply The Fleet
+## Apply The Fleet And FleetAutoscaler
 
-Apply the Fleet:
+Apply the Fleet first:
 
 ```bash
 kubectl apply -f platform/agones/manifests/xonotic-fleet.yaml
 ```
 
-Watch Fleet and `GameServer` state:
+Apply the autoscaler:
 
 ```bash
+kubectl apply -f platform/agones/manifests/xonotic-fleetautoscaler.yaml
+```
+
+Watch autoscaler, Fleet, and `GameServer` state:
+
+```bash
+kubectl get fleetautoscaler -n xonotic-agones -w
 kubectl get fleet -n xonotic-agones -w
 kubectl get gameserver -n xonotic-agones -w
 ```
 
-Inspect the Fleet in more detail:
+Inspect them in more detail:
 
 ```bash
+kubectl describe fleetautoscaler xonotic-fleet-autoscaler -n xonotic-agones
 kubectl describe fleet xonotic-fleet -n xonotic-agones
 kubectl get gameserver -n xonotic-agones -o wide
 ```
 
 Success for this step means:
 
-- the Fleet reaches `replicas: 2`
-- both backing `GameServer` instances become `Ready`
+- the autoscaler is attached to `xonotic-fleet`
+- the Fleet stabilizes with `3` `Ready` servers
+- the backing `GameServer` instances become `Ready`
 
 ## Create A Test Allocation
 
@@ -234,6 +273,49 @@ kubectl get gameserver -n xonotic-agones
 ```
 
 One server should move from `Ready` to `Allocated`.
+
+With the autoscaler in place, Agones should then create a replacement server so the standby pool returns to `3` `Ready`.
+
+## Verify Standby Replenishment
+
+Start by confirming the baseline state:
+
+```bash
+kubectl get fleet xonotic-fleet -n xonotic-agones -o jsonpath='{.status.readyReplicas}{" ready / "}{.status.allocatedReplicas}{" allocated / "}{.status.replicas}{" total\n"}'
+kubectl get gameserver -n xonotic-agones
+```
+
+Expected baseline:
+
+- `3 ready / 0 allocated / 3 total`
+
+Create an allocation:
+
+```bash
+allocation_name="$(kubectl create -f platform/agones/manifests/xonotic-gameserverallocation.yaml -o name)"
+echo "${allocation_name}"
+```
+
+Then watch the Fleet recover the standby buffer:
+
+```bash
+kubectl get fleet xonotic-fleet -n xonotic-agones -w
+kubectl get gameserver -n xonotic-agones -w
+```
+
+Expected progression:
+
+1. one `GameServer` becomes `Allocated`
+2. `readyReplicas` drops below `3`
+3. the `FleetAutoscaler` increases the Fleet replica target
+4. a new `GameServer` is created
+5. the Fleet returns to `3` `Ready` while the earlier one remains `Allocated`
+
+You can re-check the counts explicitly with:
+
+```bash
+kubectl get fleet xonotic-fleet -n xonotic-agones -o jsonpath='{.status.readyReplicas}{" ready / "}{.status.allocatedReplicas}{" allocated / "}{.status.replicas}{" total\n"}'
+```
 
 ## Test Client Connectivity
 
@@ -277,13 +359,17 @@ This is the cleanest minimal approach for this phase because it:
 
 ## What Comes Later
 
-### Later: FleetAutoscaler
-
-Only after the Fleet plus allocation path is proven should the project add `FleetAutoscaler`.
-
 ### Later: Allocator Backend Or Frontend
 
-Only after the raw Kubernetes `GameServerAllocation` flow is proven should the project add:
+The repo already includes the first in-cluster allocator backend, but later work can add:
 
 - allocator service integration
 - backend or frontend allocation callers
+
+### Later: More Advanced Scaling
+
+Only after the buffer autoscaling phase is proven should the project consider:
+
+- larger Fleet limits
+- more than one node
+- custom or webhook-based autoscaling

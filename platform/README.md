@@ -4,7 +4,7 @@ This directory is reserved for cluster-level platform components that sit on top
 
 `connectivity-checkpoint/` remains the smallest pre-Agones deployment path for proving direct client connectivity on GKE.
 
-`agones/` now contains the Agones migration path: the single-`GameServer` reference from phase 1 plus the current Fleet-and-allocation phase.
+`agones/` now contains the Agones migration path: the single-`GameServer` reference from phase 1, the Fleet-and-allocation reference phase, and the current FleetAutoscaler standby-buffer phase.
 
 `allocator-backend/` contains the first in-cluster backend service that allocates `GameServer` instances programmatically from the Fleet.
 

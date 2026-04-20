@@ -93,4 +93,4 @@ Repository layout:
 
 ## Current Status
 
-This repository is past the plain Kubernetes connectivity checkpoint, the first single-`GameServer` Agones step, and the first manual Fleet-plus-allocation flow. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and the repo now includes the next step: a tiny in-cluster allocator backend that creates `GameServerAllocation` resources programmatically through the Kubernetes API.
+This repository is past the plain Kubernetes connectivity checkpoint, the first single-`GameServer` Agones step, the first manual Fleet-plus-allocation flow, and the first in-cluster allocator backend. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and the current Agones phase now adds a `FleetAutoscaler` that keeps a small standby buffer of `Ready` Xonotic servers automatically.
