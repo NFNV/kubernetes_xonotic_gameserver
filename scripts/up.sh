@@ -19,10 +19,16 @@ infra_dir="${repo_root}/infra"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
 fleet_manifest="${repo_root}/platform/agones/manifests/xonotic-fleet.yaml"
 fleet_autoscaler_manifest="${repo_root}/platform/agones/manifests/xonotic-fleetautoscaler.yaml"
+allocator_backend_namespace_manifest="${repo_root}/platform/allocator-backend/manifests/namespace.yaml"
+allocator_backend_rbac_manifest="${repo_root}/platform/allocator-backend/manifests/rbac.yaml"
+allocator_backend_deployment_manifest="${repo_root}/platform/allocator-backend/manifests/deployment.yaml"
+allocator_backend_service_manifest="${repo_root}/platform/allocator-backend/manifests/service.yaml"
 agones_system_namespace="agones-system"
 gameserver_namespace="xonotic-agones"
 fleet_name="xonotic-fleet"
 required_ready_replicas="3"
+allocator_backend_namespace="xonotic-allocator-backend"
+allocator_backend_deployment_name="xonotic-allocator-backend"
 
 cd "${infra_dir}"
 
@@ -73,7 +79,15 @@ if [[ -z "${ready_replicas}" ]] || (( ready_replicas < required_ready_replicas )
   exit 1
 fi
 
+kubectl apply -f "${allocator_backend_namespace_manifest}"
+kubectl apply -f "${allocator_backend_rbac_manifest}"
+kubectl apply -f "${allocator_backend_deployment_manifest}"
+kubectl apply -f "${allocator_backend_service_manifest}"
+kubectl rollout status "deployment/${allocator_backend_deployment_name}" -n "${allocator_backend_namespace}"
+
 kubectl get pods -n "${agones_system_namespace}"
 kubectl get fleetautoscaler -n "${gameserver_namespace}"
 kubectl get fleet -n "${gameserver_namespace}"
 kubectl get gameserver -n "${gameserver_namespace}" -o wide
+kubectl get pods -n "${allocator_backend_namespace}"
+kubectl get service -n "${allocator_backend_namespace}"

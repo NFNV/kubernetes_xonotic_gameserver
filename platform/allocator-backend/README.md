@@ -22,7 +22,8 @@ Expected JSON response:
 
 ```json
 {
-  "allocation_name": "xonotic-allocation-abcde",
+  "allocation_request_name": null,
+  "allocated_game_server_name": "xonotic-fleet-abcde-fghij",
   "address": "34.176.10.20",
   "port": 7003
 }
@@ -71,6 +72,10 @@ docker buildx build --platform linux/amd64 -t "$ALLOCATOR_BACKEND_IMAGE" --push 
 
 ## Deploy
 
+For the current repo phase, `./scripts/up.sh` already deploys these manifests after Agones, the `Fleet`, and the `FleetAutoscaler` are healthy.
+
+Manual deployment remains:
+
 Apply the namespace and RBAC:
 
 ```bash
@@ -111,6 +116,5 @@ curl -fsS -X POST http://127.0.0.1:18080/allocate
 Inspect the allocated server endpoint:
 
 ```bash
-allocation_name="$(curl -fsS -X POST http://127.0.0.1:18080/allocate | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"allocation_name\"])')"
-kubectl get gameserverallocation "${allocation_name}" -n xonotic-agones -o yaml
+curl -fsS -X POST http://127.0.0.1:18080/allocate
 ```

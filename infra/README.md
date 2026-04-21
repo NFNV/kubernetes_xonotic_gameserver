@@ -71,7 +71,7 @@ Required environment variables:
 
 You can either export them in your shell or copy `scripts/env.sh.example` to `scripts/env.sh` and edit the values there. The scripts source `scripts/env.sh` automatically if it exists.
 
-Bring the infra and the current Agones Fleet-and-allocation phase up:
+Bring the infra and the current Agones phase up:
 
 ```bash
 ./scripts/up.sh
@@ -82,8 +82,9 @@ Bring the infra and the current Agones Fleet-and-allocation phase up:
 - applies the Terraform for the cluster and firewall rule
 - fetches kubeconfig credentials
 - installs or updates Agones with the repo's current Fleet-phase settings, including the narrow dynamic port range
-- applies the Xonotic Agones namespace and `Fleet`
-- waits for the Agones controller deployments and Fleet readiness, then prints Fleet and `GameServer` state
+- applies the Xonotic Agones namespace, `Fleet`, and `FleetAutoscaler`
+- applies the allocator backend namespace, RBAC, Deployment, and Service
+- waits for the Agones controller deployments, Fleet readiness, and allocator backend rollout, then prints Fleet, `GameServer`, and allocator backend state
 
 Tear the current test path and infra down:
 

@@ -23,7 +23,8 @@ Example successful allocation response:
 
 ```json
 {
-  "allocation_name": "xonotic-allocation-abcde",
+  "allocation_request_name": null,
+  "allocated_game_server_name": "xonotic-fleet-abcde-fghij",
   "address": "34.176.10.20",
   "port": 7003
 }

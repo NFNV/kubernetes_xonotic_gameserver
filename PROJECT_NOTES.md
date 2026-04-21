@@ -44,7 +44,7 @@ This file is the running context log for the repository. Update it over time so 
 - `platform/allocator-backend/README.md`: deployment and test flow for the first in-cluster allocator backend
 - `allocator-backend/`: Python service code and container image build context for the in-cluster allocator backend
 - `server/README.md`: explains the dedicated server container setup, runtime assumptions, and local test needs
-- `scripts/up.sh` and `scripts/down.sh`: local operator scripts for low-cost bring-up and teardown of the Terraform-backed GKE cluster, now aligned with the current Agones Fleet-and-allocation phase
+- `scripts/up.sh` and `scripts/down.sh`: local operator scripts for low-cost bring-up and teardown of the Terraform-backed GKE cluster, now aligned with the current Agones phase including the allocator backend
 - `scripts/env.sh.example`: template for project-local operator environment variables loaded by the local scripts
 - `.github/workflows/publish-server-image.yml`: manual GHCR publish workflow for the server image
 - `.github/workflows/publish-allocator-backend-image.yml`: manual and push-triggered GHCR publish workflow for the allocator backend image
@@ -85,6 +85,7 @@ This file is the running context log for the repository. Update it over time so 
 - The Fleet-and-allocation phase is now the reference baseline, while the current Agones phase adds a FleetAutoscaler buffer on top of it
 - The first backend phase should run inside the cluster and use the Kubernetes API directly rather than introducing the external Agones Allocator Service; that backend now exists and should remain compatible with the autoscaled Fleet
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
+- The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
 - Distinguish clearly between infrastructure that is implemented in Terraform and infrastructure that has actually been applied in a real GCP project
 - Observability should be added later with a practical minimum: logs, metrics, alerts, and short runbooks
 - If the default VPC assumption becomes a blocker, add dedicated networking in a later infra iteration rather than now
@@ -96,6 +97,7 @@ This file is the running context log for the repository. Update it over time so 
 - install Agones on the existing GKE cluster
 - deploy the `Fleet` and validate two `Ready` Xonotic `GameServer` instances
 - apply the FleetAutoscaler and validate that the standby pool stays at `3` `Ready` servers during allocation
+- make the lifecycle scripts bring the allocator backend up and down automatically with the rest of the current phase
 - test manual and backend-driven allocation against the autoscaled Fleet
 - add frontend or allocator callers only after the in-cluster backend MVP is proven
 - add remote state once the project moves beyond local-only iteration
