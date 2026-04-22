@@ -120,6 +120,8 @@ The current Agones-aware `scripts/up.sh` installs or upgrades Agones with:
 - `gameservers.minPort=7000`
 - `gameservers.maxPort=7010`
 
+For reliability, `./scripts/up.sh` also forces the Fleet `GameServer` instances to be recreated after the Agones upgrade step. That keeps the live Fleet aligned with the current dynamic port range and avoids mixing older `GameServer` instances with newer firewall assumptions.
+
 ## Files
 
 - `manifests/namespace.yaml`: namespace for Xonotic Agones resources
@@ -142,6 +144,18 @@ The current Fleet manifest enables random startup maps by default:
 
 - `XONOTIC_RANDOM_START_MAP_ENABLE=1`
 - `XONOTIC_MAP_POOL="xoylent stormkeep darkzone drain"`
+
+## Joinability Reliability
+
+For this phase, `Ready` must mean the server is actually a valid join target.
+
+The repo now tightens the startup contract in the server image itself:
+
+- the Xonotic process starts
+- the entrypoint waits until the Xonotic UDP port is actually bound inside the container
+- only then does it send the Agones `Ready` call
+
+That is the smallest clean reliability fix because it improves the meaning of `Ready` without changing the Fleet, allocator backend, or frontend shape.
 
 ### Set A Fixed Startup Map
 
@@ -276,6 +290,44 @@ One server should move from `Ready` to `Allocated`.
 
 With the autoscaler in place, Agones should then create a replacement server so the standby pool returns to `3` `Ready`.
 
+## Verify Each Allocated Server Individually
+
+For this phase, partial success is not enough. Every allocation returned to an admin tool must be a valid join target.
+
+Use the helper script from the repo root:
+
+```bash
+./scripts/allocate-and-inspect.sh
+```
+
+It prints:
+
+- allocation request name
+- allocated `GameServer` name
+- backing Pod name
+- assigned external `address:port`
+
+Then test that exact endpoint from the client:
+
+```text
+connect <address>:<port>
+```
+
+Repeat that command several times and confirm that each allocated endpoint is joinable.
+
+You can also inspect the full live Fleet port map directly:
+
+```bash
+kubectl get gameserver -n xonotic-agones -o custom-columns=NAME:.metadata.name,STATE:.status.state,ADDRESS:.status.address,PORT:.status.ports[0].port,NODE:.status.nodeName
+```
+
+That makes it easy to compare:
+
+- allocation result
+- `GameServer` name
+- assigned IP and port
+- node placement
+
 ## Verify Standby Replenishment
 
 Start by confirming the baseline state:
@@ -356,6 +408,18 @@ This is the cleanest minimal approach for this phase because it:
 - avoids opening the full Agones default `7000-8000` range
 - allows two Fleet replicas on one node without port collisions
 - keeps the external connection model explicit and inspectable
+
+## Reliability Bug To Watch For
+
+If some allocated endpoints work and others do not, there are two likely causes to check in order:
+
+1. `GameServer` instances were marked `Ready` before the Xonotic process had actually finished binding its UDP port
+2. the live Fleet still contains older `GameServer` instances created under a different Agones dynamic port range than the one the firewall currently allows
+
+The repo now addresses both:
+
+- the server entrypoint waits for the UDP port to bind before sending Agones `Ready`
+- `./scripts/up.sh` recreates Fleet `GameServer` instances after the Agones upgrade step so the live Fleet aligns with the repo's constrained dynamic port range
 
 ## What Comes Later
 

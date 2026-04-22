@@ -71,6 +71,51 @@ notify_agones_ready() {
   return 1
 }
 
+is_udp_port_bound() {
+  local port_hex
+  port_hex="$(printf '%04X' "$1")"
+
+  awk -v port_hex="${port_hex}" '
+    NR > 1 {
+      split($2, local_address, ":")
+      if (toupper(local_address[2]) == port_hex) {
+        found = 1
+        exit 0
+      }
+    }
+    END {
+      if (found != 1) {
+        exit 1
+      }
+    }
+  ' /proc/net/udp /proc/net/udp6 2>/dev/null
+}
+
+wait_for_udp_port_bind() {
+  local port="$1"
+  local server_pid="$2"
+  local bind_timeout="${XONOTIC_AGONES_PORT_BIND_TIMEOUT_SECONDS:-60}"
+  local elapsed=0
+
+  while (( elapsed < bind_timeout )); do
+    if ! kill -0 "${server_pid}" 2>/dev/null; then
+      echo "Xonotic process exited before UDP port ${port} was bound" >&2
+      return 1
+    fi
+
+    if is_udp_port_bound "${port}"; then
+      echo "Detected UDP port ${port} bound for Xonotic server" >&2
+      return 0
+    fi
+
+    sleep 1
+    ((elapsed += 1))
+  done
+
+  echo "Timed out waiting for UDP port ${port} to bind after ${bind_timeout} seconds" >&2
+  return 1
+}
+
 escape_cvar_string() {
   local value="${1}"
 
@@ -138,11 +183,23 @@ fi
 cmd+=("$@")
 
 if [[ "${XONOTIC_AGONES_READY_ENABLE:-0}" == "1" ]]; then
-  (
-    if ! notify_agones_ready; then
-      echo "Agones Ready notification did not succeed; the GameServer may remain in Scheduled" >&2
-    fi
-  ) &
+  "${cmd[@]}" &
+  server_pid=$!
+
+  trap 'kill "${server_pid}" 2>/dev/null || true' INT TERM
+
+  if ! wait_for_udp_port_bind "${port}" "${server_pid}"; then
+    kill "${server_pid}" 2>/dev/null || true
+    wait "${server_pid}" || true
+    exit 1
+  fi
+
+  if ! notify_agones_ready; then
+    echo "Agones Ready notification did not succeed; the GameServer may remain in Scheduled" >&2
+  fi
+
+  wait "${server_pid}"
+  exit $?
 fi
 
 exec "${cmd[@]}"

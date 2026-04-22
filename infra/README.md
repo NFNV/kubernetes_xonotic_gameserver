@@ -83,6 +83,7 @@ Bring the infra and the current Agones phase up:
 - fetches kubeconfig credentials
 - installs or updates Agones with the repo's current Fleet-phase settings, including the narrow dynamic port range
 - applies the Xonotic Agones namespace, `Fleet`, and `FleetAutoscaler`
+- recreates the Fleet `GameServer` instances after the Agones upgrade so their live host ports match the repo's constrained dynamic port range
 - applies the allocator backend namespace, RBAC, Deployment, and Service
 - waits for the Agones controller deployments, Fleet readiness, and allocator backend rollout, then prints Fleet, `GameServer`, and allocator backend state
 

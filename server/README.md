@@ -48,7 +48,7 @@ On container start:
 2. the baseline `server.cfg` is copied into the user data directory on first boot if no custom file is already present
 3. a generated `server.autoexec.cfg` is written based on environment variables
 4. the dedicated server binary starts and loads `server.cfg`, then `server.autoexec.cfg`
-5. when explicitly enabled for Agones phase 1, the entrypoint sends a one-time `Ready` call to the local Agones SDK sidecar after a short delay
+5. when explicitly enabled for Agones, the entrypoint waits for the Xonotic UDP port to be bound and only then sends the one-time `Ready` call to the local Agones SDK sidecar
 
 This keeps the baseline config readable in Git while still allowing simple runtime overrides.
 
@@ -78,6 +78,7 @@ This keeps the baseline config readable in Git while still allowing simple runti
 - `XONOTIC_AGONES_READY_ENABLE`: set to `1` only when running under Agones phase 1 so the entrypoint sends a local `Ready` call, default `0`
 - `XONOTIC_AGONES_READY_DELAY_SECONDS`: delay before the Agones `Ready` call, default `10`
 - `XONOTIC_AGONES_READY_ATTEMPTS`: retry count for the Agones `Ready` call, default `30`
+- `XONOTIC_AGONES_PORT_BIND_TIMEOUT_SECONDS`: maximum time to wait for the Xonotic UDP socket to bind before failing startup, default `60`
 
 ## Build
 
@@ -150,6 +151,7 @@ The GitHub Actions workflow in `.github/workflows/publish-server-image.yml` publ
 - the runtime image is kept smaller than a one-stage build by separating download and extraction from runtime dependencies
 - the container defaults are tuned for local bring-up, not internet-facing production operation
 - the runtime image now includes `curl` so the phase-1 Agones path can send a local `Ready` request without full in-process SDK integration
+- the Agones startup path now waits for the Xonotic UDP socket to bind before sending `Ready`, so `Allocated` servers are less likely to look healthy before they are actually joinable
 - startup map selection is now env-driven in the entrypoint: exact map first, random pool second, legacy `XONOTIC_MAP` last
 
 ## Intentionally Deferred

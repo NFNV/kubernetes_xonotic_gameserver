@@ -86,6 +86,8 @@ This file is the running context log for the repository. Update it over time so 
 - The first backend phase should run inside the cluster and use the Kubernetes API directly rather than introducing the external Agones Allocator Service; that backend now exists and should remain compatible with the autoscaled Fleet
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
+- Reliability for this phase means every allocated server endpoint must be joinable, not just that some allocations succeed
+- The current Agones reliability risk is that a `GameServer` can look `Ready` before the Xonotic UDP socket is actually bound; the startup path should make `Ready` closer to real joinability
 - Distinguish clearly between infrastructure that is implemented in Terraform and infrastructure that has actually been applied in a real GCP project
 - Observability should be added later with a practical minimum: logs, metrics, alerts, and short runbooks
 - If the default VPC assumption becomes a blocker, add dedicated networking in a later infra iteration rather than now
@@ -99,6 +101,8 @@ This file is the running context log for the repository. Update it over time so 
 - apply the FleetAutoscaler and validate that the standby pool stays at `3` `Ready` servers during allocation
 - make the lifecycle scripts bring the allocator backend up and down automatically with the rest of the current phase
 - test manual and backend-driven allocation against the autoscaled Fleet
+- verify that all allocated Fleet endpoints are reachable and recycle any stale `GameServer` instances that were created under older Agones port-range settings
+- republish the Xonotic server image and refresh the Fleet so the tighter Agones readiness contract is in use
 - add frontend or allocator callers only after the in-cluster backend MVP is proven
 - add remote state once the project moves beyond local-only iteration
 - add minimal cluster access and deployment identity groundwork when GitHub delivery is introduced

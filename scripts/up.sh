@@ -63,6 +63,7 @@ kubectl rollout status deployment/agones-controller -n "${agones_system_namespac
 kubectl rollout status deployment/agones-extensions -n "${agones_system_namespace}"
 
 kubectl apply -f "${fleet_manifest}"
+kubectl delete gameserver -n "${gameserver_namespace}" -l "agones.dev/fleet=${fleet_name}" --ignore-not-found=true || true
 kubectl apply -f "${fleet_autoscaler_manifest}"
 
 for _ in $(seq 1 60); do
@@ -88,6 +89,6 @@ kubectl rollout status "deployment/${allocator_backend_deployment_name}" -n "${a
 kubectl get pods -n "${agones_system_namespace}"
 kubectl get fleetautoscaler -n "${gameserver_namespace}"
 kubectl get fleet -n "${gameserver_namespace}"
-kubectl get gameserver -n "${gameserver_namespace}" -o wide
+kubectl get gameserver -n "${gameserver_namespace}" -o custom-columns=NAME:.metadata.name,STATE:.status.state,ADDRESS:.status.address,PORT:.status.ports[0].port,NODE:.status.nodeName
 kubectl get pods -n "${allocator_backend_namespace}"
 kubectl get service -n "${allocator_backend_namespace}"
