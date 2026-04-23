@@ -8,7 +8,7 @@ It is intentionally small:
 - one HTTP process
 - no database
 - no auth
-- no frontend coupling
+- simple JSON API that can be consumed by the operator frontend
 
 The service runs inside Kubernetes and uses the Kubernetes API directly to create and read `GameServerAllocation` resources in `xonotic-agones`.
 
@@ -17,6 +17,8 @@ That is the right choice for this phase because the backend already runs in-clus
 ## API
 
 - `GET /healthz`
+- `GET /fleet-status`
+- `GET /gameservers`
 - `POST /allocate`
 
 Example successful allocation response:

@@ -4,9 +4,9 @@ This file is the running context log for the repository. Update it over time so 
 
 ## Current State
 
-- Stage: Phase 3 FleetAutoscaler standby-buffer phase
-- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, the in-cluster allocator backend exists, and the repo now includes a FleetAutoscaler-based standby buffer for the Xonotic Fleet
-- Goal: validate automatic standby replenishment on the current Xonotic Fleet before changing backend or frontend behavior
+- Stage: Phase 4 allocator admin frontend MVP
+- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, the in-cluster allocator backend exists, the FleetAutoscaler standby buffer exists, and the repo now includes the first operator-facing frontend for the allocator backend
+- Goal: validate a small React admin dashboard on top of the existing allocator backend without introducing auth, persistence, or a public-facing product surface
 
 ## Locked-In Context
 
@@ -42,12 +42,15 @@ This file is the running context log for the repository. Update it over time so 
 - `platform/agones/README.md`: the single-GameServer reference plus the current Fleet-and-allocation phase, including networking details
 - `platform/agones/manifests/xonotic-fleetautoscaler.yaml`: current buffer autoscaler that keeps a small standby pool of `Ready` Xonotic servers
 - `platform/allocator-backend/README.md`: deployment and test flow for the first in-cluster allocator backend
+- `platform/allocator-frontend/README.md`: deployment and access flow for the small operator dashboard
 - `allocator-backend/`: Python service code and container image build context for the in-cluster allocator backend
+- `allocator-frontend/`: React admin dashboard build context and static frontend source
 - `server/README.md`: explains the dedicated server container setup, runtime assumptions, and local test needs
 - `scripts/up.sh` and `scripts/down.sh`: local operator scripts for low-cost bring-up and teardown of the Terraform-backed GKE cluster, now aligned with the current Agones phase including the allocator backend
 - `scripts/env.sh.example`: template for project-local operator environment variables loaded by the local scripts
 - `.github/workflows/publish-server-image.yml`: manual GHCR publish workflow for the server image
 - `.github/workflows/publish-allocator-backend-image.yml`: manual and push-triggered GHCR publish workflow for the allocator backend image
+- `.github/workflows/publish-allocator-frontend-image.yml`: manual and push-triggered GHCR publish workflow for the allocator frontend image
 - `.gitignore`: practical defaults for local development noise, Terraform state, local env files, and generated artifacts
 
 ## Phase 1 Terraform Shape
@@ -84,6 +87,7 @@ This file is the running context log for the repository. Update it over time so 
 - The first Agones phase should stay limited to controller installation plus one `GameServer`; that phase is now reference-only
 - The Fleet-and-allocation phase is now the reference baseline, while the current Agones phase adds a FleetAutoscaler buffer on top of it
 - The first backend phase should run inside the cluster and use the Kubernetes API directly rather than introducing the external Agones Allocator Service; that backend now exists and should remain compatible with the autoscaled Fleet
+- The first frontend phase should stay operator-focused and use the in-cluster allocator backend as its only API surface
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
 - Reliability for this phase means every allocated server endpoint must be joinable, not just that some allocations succeed
@@ -103,7 +107,8 @@ This file is the running context log for the repository. Update it over time so 
 - test manual and backend-driven allocation against the autoscaled Fleet
 - verify that all allocated Fleet endpoints are reachable and recycle any stale `GameServer` instances that were created under older Agones port-range settings
 - republish the Xonotic server image and refresh the Fleet so the tighter Agones readiness contract is in use
-- add frontend or allocator callers only after the in-cluster backend MVP is proven
+- publish the allocator frontend image and deploy the in-cluster admin dashboard
+- validate the admin dashboard against the existing allocator backend read and allocate endpoints
 - add remote state once the project moves beyond local-only iteration
 - add minimal cluster access and deployment identity groundwork when GitHub delivery is introduced
 - document observability and operations plan in more depth

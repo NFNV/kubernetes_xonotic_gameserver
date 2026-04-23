@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xonotic-allocator-frontend
+  namespace: xonotic-allocator-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xonotic-allocator-frontend
+  template:
+    metadata:
+      labels:
+        app: xonotic-allocator-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/nfnv/xonotic-allocator-frontend:allocator-frontend
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http

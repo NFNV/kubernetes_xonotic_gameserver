@@ -85,7 +85,8 @@ Bring the infra and the current Agones phase up:
 - applies the Xonotic Agones namespace, `Fleet`, and `FleetAutoscaler`
 - recreates the Fleet `GameServer` instances after the Agones upgrade so their live host ports match the repo's constrained dynamic port range
 - applies the allocator backend namespace, RBAC, Deployment, and Service
-- waits for the Agones controller deployments, Fleet readiness, and allocator backend rollout, then prints Fleet, `GameServer`, and allocator backend state
+- applies the allocator frontend Deployment and Service
+- waits for the Agones controller deployments, Fleet readiness, allocator backend rollout, and allocator frontend rollout, then prints Fleet, `GameServer`, and allocator platform state
 
 Tear the current test path and infra down:
 

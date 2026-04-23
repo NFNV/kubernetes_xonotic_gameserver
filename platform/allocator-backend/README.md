@@ -16,6 +16,8 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 ## API
 
 - `GET /healthz`: simple health check
+- `GET /fleet-status`: current Fleet summary for the operator UI
+- `GET /gameservers`: current `GameServer` list for the operator UI
 - `POST /allocate`: creates a `GameServerAllocation`, waits for the result, and returns the allocated address and port
 
 Expected JSON response:

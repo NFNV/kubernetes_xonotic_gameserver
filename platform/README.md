@@ -8,6 +8,8 @@ This directory is reserved for cluster-level platform components that sit on top
 
 `allocator-backend/` contains the first in-cluster backend service that allocates `GameServer` instances programmatically from the Fleet.
 
+`allocator-frontend/` contains the small operator-facing admin dashboard for the allocator backend.
+
 Expected future contents:
 
 - the pre-Agones connectivity checkpoint documentation and manifests
