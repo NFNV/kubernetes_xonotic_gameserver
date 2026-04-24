@@ -9,6 +9,9 @@ const EMPTY_FLEET = {
   reserved_replicas: 0,
 };
 
+const AUTO_REFRESH_MS = 7000;
+const HISTORY_LIMIT = 8;
+
 async function fetchJson(path, options) {
   const response = await fetch(path, options);
   const contentType = response.headers.get("content-type") || "";
@@ -20,6 +23,18 @@ async function fetchJson(path, options) {
   }
 
   return data;
+}
+
+function allocationEndpoint(allocation) {
+  if (!allocation?.address || !allocation?.port) {
+    return "";
+  }
+
+  return `${allocation.address}:${allocation.port}`;
+}
+
+function connectCommand(endpoint) {
+  return endpoint ? `connect ${endpoint}` : "";
 }
 
 function StatusPill({ ok, label }) {
@@ -47,6 +62,14 @@ function serverEndpoint(server) {
   return `${server.address}:${server.port}`;
 }
 
+function CopyButton({ text, label, onCopy }) {
+  return (
+    <button className="copy-button" type="button" onClick={() => void onCopy(text, label)} disabled={!text}>
+      {label}
+    </button>
+  );
+}
+
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
@@ -55,17 +78,50 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [allocating, setAllocating] = useState(false);
-  const [error, setError] = useState("");
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [allocationHistory, setAllocationHistory] = useState([]);
+  const [copyMessage, setCopyMessage] = useState("");
+  const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState("");
 
-  async function loadDashboard({ silent = false } = {}) {
+  async function copyText(text, label) {
+    if (!text) {
+      return;
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+      setCopyMessage(`${label} copied`);
+    } catch {
+      setError({
+        title: "Copy failed",
+        message: "The browser could not copy this value automatically. Select the endpoint text manually.",
+      });
+      return;
+    }
+
+    window.setTimeout(() => setCopyMessage(""), 1800);
+  }
+
+  async function loadDashboard({ silent = false, source = "Refresh" } = {}) {
     if (silent) {
       setRefreshing(true);
     } else {
       setLoading(true);
     }
 
-    setError("");
+    setError(null);
 
     try {
       const [health, fleet, gameserverResponse] = await Promise.all([
@@ -79,7 +135,10 @@ export default function App() {
       setGameservers(gameserverResponse.items || []);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
-      setError(err.message);
+      setError({
+        title: `${source} failed`,
+        message: err.message,
+      });
       setBackendHealthy(false);
     } finally {
       setLoading(false);
@@ -89,14 +148,26 @@ export default function App() {
 
   async function allocateServer() {
     setAllocating(true);
-    setError("");
+    setError(null);
 
     try {
       const result = await fetchJson("/api/allocate", { method: "POST" });
+      const endpoint = allocationEndpoint(result);
       setLatestAllocation(result);
+      setAllocationHistory((current) => [
+        {
+          ...result,
+          endpoint,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+        ...current,
+      ].slice(0, HISTORY_LIMIT));
       await loadDashboard({ silent: true });
     } catch (err) {
-      setError(err.message);
+      setError({
+        title: "Allocation failed",
+        message: err.message,
+      });
     } finally {
       setAllocating(false);
     }
@@ -106,8 +177,22 @@ export default function App() {
     void loadDashboard();
   }, []);
 
+  useEffect(() => {
+    if (!autoRefresh) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadDashboard({ silent: true, source: "Auto-refresh" });
+    }, AUTO_REFRESH_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [autoRefresh]);
+
   const allocatedServers = gameservers.filter((server) => server.state === "Allocated");
   const internalServers = gameservers.filter((server) => server.state !== "Allocated");
+  const latestEndpoint = allocationEndpoint(latestAllocation);
+  const latestCommand = connectCommand(latestEndpoint);
 
   return (
     <main className="page">
@@ -121,6 +206,13 @@ export default function App() {
         </div>
         <div className="hero-actions">
           <StatusPill ok={backendHealthy} label={backendHealthy ? "Backend Healthy" : "Backend Unhealthy"} />
+          <button
+            className={`secondary ${autoRefresh ? "toggle-active" : ""}`}
+            onClick={() => setAutoRefresh((enabled) => !enabled)}
+            type="button"
+          >
+            {autoRefresh ? "Auto-refresh on" : "Auto-refresh off"}
+          </button>
           <button className="secondary" onClick={() => void loadDashboard({ silent: true })} disabled={refreshing || loading}>
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
@@ -130,10 +222,17 @@ export default function App() {
         </div>
       </section>
 
-      {error && <section className="error-banner">Request failed: {error}</section>}
+      {error && (
+        <section className="error-banner">
+          <strong>{error.title}</strong>
+          <span>{error.message}</span>
+        </section>
+      )}
+
+      {copyMessage && <section className="copy-banner">{copyMessage}</section>}
 
       <section className="notice">
-        Only allocated servers are valid join targets. Ready servers are standby capacity.
+        Only allocated servers are valid join targets. Ready servers are standby capacity. Auto-refresh checks every 7 seconds when enabled.
       </section>
 
       <section className="grid metrics">
@@ -178,13 +277,19 @@ export default function App() {
               </div>
               <div>
                 <dt>Endpoint</dt>
-                <dd>
-                  {latestAllocation.address}:{latestAllocation.port}
-                </dd>
+                <dd className="join-endpoint">{latestEndpoint}</dd>
+              </div>
+              <div>
+                <dt>Connection Helper</dt>
+                <dd className="connection-command">{latestCommand}</dd>
               </div>
               <div>
                 <dt>Request Object</dt>
                 <dd>{latestAllocation.allocation_request_name || "Inline create response"}</dd>
+              </div>
+              <div className="button-row">
+                <CopyButton text={latestEndpoint} label="Endpoint" onCopy={copyText} />
+                <CopyButton text={latestCommand} label="Command" onCopy={copyText} />
               </div>
             </dl>
           ) : (
@@ -209,19 +314,60 @@ export default function App() {
                 <tr>
                   <th>Name</th>
                   <th>Join Endpoint</th>
+                  <th>Connection Helper</th>
                   <th>Node</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {allocatedServers.map((server) => (
-                  <tr key={server.name}>
-                    <td>{server.name}</td>
-                    <td className="join-endpoint">{serverEndpoint(server)}</td>
-                    <td>{server.node_name || "-"}</td>
-                  </tr>
-                ))}
+                {allocatedServers.map((server) => {
+                  const endpoint = serverEndpoint(server);
+                  const command = connectCommand(endpoint);
+
+                  return (
+                    <tr key={server.name}>
+                      <td>{server.name}</td>
+                      <td className="join-endpoint">{endpoint}</td>
+                      <td className="connection-command">{command}</td>
+                      <td>{server.node_name || "-"}</td>
+                      <td>
+                        <div className="table-actions">
+                          <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
+                          <CopyButton text={command} label="Command" onCopy={copyText} />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Allocation History</h2>
+          <span className="panel-meta">{allocationHistory.length} recent successful allocations</span>
+        </div>
+        {allocationHistory.length === 0 ? (
+          <p className="empty-state">Successful allocations will appear here for this browser session.</p>
+        ) : (
+          <div className="history-list">
+            {allocationHistory.map((allocation) => {
+              const command = connectCommand(allocation.endpoint);
+
+              return (
+                <div className="history-item" key={`${allocation.allocated_game_server_name}-${allocation.timestamp}`}>
+                  <div>
+                    <strong>{allocation.allocated_game_server_name}</strong>
+                    <span>{allocation.timestamp}</span>
+                  </div>
+                  <code>{command}</code>
+                  <CopyButton text={command} label="Copy command" onCopy={copyText} />
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
