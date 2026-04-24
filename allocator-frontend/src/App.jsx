@@ -35,6 +35,18 @@ function MetricCard({ label, value }) {
   );
 }
 
+function serverEndpoint(server) {
+  if (server.state !== "Allocated") {
+    return "Not user-facing";
+  }
+
+  if (!server.address || !server.port) {
+    return "Missing endpoint";
+  }
+
+  return `${server.address}:${server.port}`;
+}
+
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
@@ -94,6 +106,9 @@ export default function App() {
     void loadDashboard();
   }, []);
 
+  const allocatedServers = gameservers.filter((server) => server.state === "Allocated");
+  const internalServers = gameservers.filter((server) => server.state !== "Allocated");
+
   return (
     <main className="page">
       <section className="hero">
@@ -116,6 +131,10 @@ export default function App() {
       </section>
 
       {error && <section className="error-banner">Request failed: {error}</section>}
+
+      <section className="notice">
+        Only allocated servers are valid join targets. Ready servers are standby capacity.
+      </section>
 
       <section className="grid metrics">
         <MetricCard label="Fleet Desired" value={fleetStatus.desired_replicas} />
@@ -176,13 +195,46 @@ export default function App() {
 
       <section className="panel">
         <div className="panel-header">
-          <h2>Current GameServers</h2>
-          <span className="panel-meta">{gameservers.length} visible</span>
+          <h2>Allocated Servers</h2>
+          <span className="panel-meta">{allocatedServers.length} join targets</span>
+        </div>
+        {loading ? (
+          <p className="empty-state">Loading allocated servers...</p>
+        ) : allocatedServers.length === 0 ? (
+          <p className="empty-state">No allocated servers yet. Use Allocate Server to create a user-facing join target.</p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Join Endpoint</th>
+                  <th>Node</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allocatedServers.map((server) => (
+                  <tr key={server.name}>
+                    <td>{server.name}</td>
+                    <td className="join-endpoint">{serverEndpoint(server)}</td>
+                    <td>{server.node_name || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Standby / Internal Servers</h2>
+          <span className="panel-meta">{internalServers.length} infrastructure servers</span>
         </div>
         {loading ? (
           <p className="empty-state">Loading dashboard...</p>
-        ) : gameservers.length === 0 ? (
-          <p className="empty-state">No GameServers returned by the backend.</p>
+        ) : internalServers.length === 0 ? (
+          <p className="empty-state">No standby or internal servers returned by the backend.</p>
         ) : (
           <div className="table-wrap">
             <table>
@@ -190,18 +242,18 @@ export default function App() {
                 <tr>
                   <th>Name</th>
                   <th>State</th>
-                  <th>Address</th>
-                  <th>Port</th>
+                  <th>Endpoint</th>
                   <th>Node</th>
                 </tr>
               </thead>
               <tbody>
-                {gameservers.map((server) => (
+                {internalServers.map((server) => (
                   <tr key={server.name}>
                     <td>{server.name}</td>
-                    <td>{server.state || "-"}</td>
-                    <td>{server.address || "-"}</td>
-                    <td>{server.port || "-"}</td>
+                    <td>
+                      <span className="state-badge">{server.state === "Ready" ? "Standby" : server.state || "Unknown"}</span>
+                    </td>
+                    <td className="muted-endpoint">Not user-facing</td>
                     <td>{server.node_name || "-"}</td>
                   </tr>
                 ))}

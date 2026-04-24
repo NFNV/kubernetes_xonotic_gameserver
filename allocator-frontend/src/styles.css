@@ -1,9 +1,9 @@
 :root {
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-  color: #172033;
+  color: #2f251d;
   background:
-    radial-gradient(circle at top left, rgba(255, 208, 128, 0.55), transparent 30%),
-    linear-gradient(180deg, #f4efe6 0%, #edf2f8 100%);
+    linear-gradient(135deg, rgba(194, 130, 82, 0.22), transparent 34%),
+    linear-gradient(180deg, #efe4d4 0%, #e4d5c1 100%);
 }
 
 * {
@@ -41,7 +41,7 @@ button {
   font-size: 0.8rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #7a4a18;
+  color: #8a5732;
 }
 
 .hero h1 {
@@ -52,7 +52,7 @@ button {
 
 .subtitle {
   max-width: 700px;
-  color: #415065;
+  color: #6a5848;
 }
 
 .hero-actions {
@@ -74,31 +74,40 @@ button {
 }
 
 .status-pill.ok {
-  background: #dff6e6;
-  color: #1d6d38;
+  background: #e2ead7;
+  color: #47642f;
 }
 
 .status-pill.error {
-  background: #fde2de;
-  color: #b24334;
+  background: #f2d7cd;
+  color: #8f3f2d;
 }
 
 .primary {
-  background: #1f4d8f;
+  background: #7a4f34;
   color: #fff;
 }
 
 .secondary {
-  background: #e6edf6;
-  color: #163356;
+  background: #dfcfba;
+  color: #4a3829;
 }
 
 .error-banner {
   margin-bottom: 20px;
   padding: 14px 18px;
   border-radius: 18px;
-  background: #fde2de;
-  color: #8b2f25;
+  background: #f2d7cd;
+  color: #7d3527;
+}
+
+.notice {
+  margin-bottom: 18px;
+  padding: 14px 18px;
+  border-left: 4px solid #9a6844;
+  border-radius: 8px;
+  background: rgba(255, 250, 241, 0.78);
+  color: #5c4a3b;
 }
 
 .grid {
@@ -113,11 +122,11 @@ button {
 
 .metric-card,
 .panel {
-  border: 1px solid rgba(24, 46, 80, 0.08);
+  border: 1px solid rgba(91, 61, 38, 0.12);
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.86);
+  background: rgba(255, 250, 241, 0.86);
   backdrop-filter: blur(10px);
-  box-shadow: 0 16px 40px rgba(30, 47, 70, 0.08);
+  box-shadow: 0 16px 40px rgba(89, 62, 42, 0.1);
 }
 
 .metric-card {
@@ -125,7 +134,7 @@ button {
 }
 
 .metric-label {
-  color: #617287;
+  color: #776554;
   font-size: 0.88rem;
 }
 
@@ -141,6 +150,7 @@ button {
 }
 
 .panel {
+  margin-bottom: 18px;
   padding: 22px;
 }
 
@@ -158,7 +168,7 @@ button {
 }
 
 .panel-meta {
-  color: #68798d;
+  color: #7a6755;
   font-size: 0.88rem;
 }
 
@@ -173,7 +183,7 @@ button {
 }
 
 .summary-list dt {
-  color: #68798d;
+  color: #7a6755;
   font-size: 0.88rem;
 }
 
@@ -184,7 +194,7 @@ button {
 
 .empty-state {
   margin: 0;
-  color: #68798d;
+  color: #7a6755;
 }
 
 .table-wrap {
@@ -200,15 +210,36 @@ th,
 td {
   text-align: left;
   padding: 12px 10px;
-  border-bottom: 1px solid rgba(24, 46, 80, 0.08);
+  border-bottom: 1px solid rgba(91, 61, 38, 0.1);
   font-size: 0.95rem;
 }
 
 th {
-  color: #54657c;
+  color: #705f50;
   font-size: 0.84rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.join-endpoint {
+  font-weight: 700;
+  color: #6f452c;
+}
+
+.muted-endpoint {
+  color: #8c7b68;
+}
+
+.state-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #e7dac8;
+  color: #5c4838;
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 @media (max-width: 720px) {

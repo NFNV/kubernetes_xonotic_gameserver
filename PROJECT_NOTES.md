@@ -88,6 +88,7 @@ This file is the running context log for the repository. Update it over time so 
 - The Fleet-and-allocation phase is now the reference baseline, while the current Agones phase adds a FleetAutoscaler buffer on top of it
 - The first backend phase should run inside the cluster and use the Kubernetes API directly rather than introducing the external Agones Allocator Service; that backend now exists and should remain compatible with the autoscaled Fleet
 - The first frontend phase should stay operator-focused and use the in-cluster allocator backend as its only API surface
+- The admin frontend should treat only `Allocated` `GameServer` instances as user-facing join targets; `Ready` servers are standby capacity
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
 - Reliability for this phase means every allocated server endpoint must be joinable, not just that some allocations succeed

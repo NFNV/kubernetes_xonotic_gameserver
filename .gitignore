@@ -24,6 +24,9 @@ __pycache__/
 .venv/
 venv/
 
+# Frontend build output
+allocator-frontend/dist/
+
 # Terraform local state and overrides
 .terraform/
 tfplan
