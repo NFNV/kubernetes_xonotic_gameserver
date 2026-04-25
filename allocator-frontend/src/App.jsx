@@ -26,11 +26,13 @@ async function fetchJson(path, options) {
 }
 
 function allocationEndpoint(allocation) {
-  if (!allocation?.address || !allocation?.port) {
+  const server = allocation?.allocated_server || allocation;
+
+  if (!server?.address || !server?.port) {
     return "";
   }
 
-  return `${allocation.address}:${allocation.port}`;
+  return `${server.address}:${server.port}`;
 }
 
 function connectCommand(endpoint) {
@@ -70,14 +72,22 @@ function CopyButton({ text, label, onCopy }) {
   );
 }
 
+function unknown(value) {
+  return value === null || value === undefined || value === "" ? "unknown" : value;
+}
+
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
   const [gameservers, setGameservers] = useState([]);
+  const [matches, setMatches] = useState([]);
+  const [matchForm, setMatchForm] = useState({ name: "", max_players: "8", game_mode: "dm" });
   const [latestAllocation, setLatestAllocation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [allocating, setAllocating] = useState(false);
+  const [creatingMatch, setCreatingMatch] = useState(false);
+  const [allocatingMatches, setAllocatingMatches] = useState({});
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [allocationHistory, setAllocationHistory] = useState([]);
   const [copyMessage, setCopyMessage] = useState("");
@@ -124,15 +134,17 @@ export default function App() {
     setError(null);
 
     try {
-      const [health, fleet, gameserverResponse] = await Promise.all([
+      const [health, fleet, gameserverResponse, matchResponse] = await Promise.all([
         fetchJson("/api/healthz"),
         fetchJson("/api/fleet-status"),
         fetchJson("/api/gameservers"),
+        fetchJson("/api/matches"),
       ]);
 
       setBackendHealthy(health.status === "ok");
       setFleetStatus(fleet);
       setGameservers(gameserverResponse.items || []);
+      setMatches(matchResponse.items || []);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
       setError({
@@ -143,6 +155,57 @@ export default function App() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }
+
+  async function createMatch(event) {
+    event.preventDefault();
+    setCreatingMatch(true);
+    setError(null);
+
+    try {
+      const payload = {
+        name: matchForm.name.trim() || undefined,
+        max_players: matchForm.max_players ? Number(matchForm.max_players) : undefined,
+        game_mode: matchForm.game_mode.trim() || undefined,
+      };
+      const match = await fetchJson("/api/matches", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setMatches((current) => [match, ...current]);
+      setMatchForm({ name: "", max_players: "8", game_mode: "dm" });
+      setLastUpdated(new Date().toLocaleTimeString());
+    } catch (err) {
+      setError({
+        title: "Create match failed",
+        message: err.message,
+      });
+    } finally {
+      setCreatingMatch(false);
+    }
+  }
+
+  async function allocateMatch(matchId) {
+    setAllocatingMatches((current) => ({ ...current, [matchId]: true }));
+    setError(null);
+
+    try {
+      const match = await fetchJson(`/api/matches/${matchId}/allocate`, { method: "POST" });
+      setMatches((current) => current.map((item) => (item.match_id === match.match_id ? match : item)));
+      await loadDashboard({ silent: true, source: "Match allocation refresh" });
+    } catch (err) {
+      setError({
+        title: "Match allocation failed",
+        message: err.message,
+      });
+    } finally {
+      setAllocatingMatches((current) => {
+        const next = { ...current };
+        delete next[matchId];
+        return next;
+      });
     }
   }
 
@@ -201,7 +264,7 @@ export default function App() {
           <p className="eyebrow">Xonotic Operator Console</p>
           <h1>Allocator Admin Dashboard</h1>
           <p className="subtitle">
-            Inspect allocator health, review Fleet capacity, and allocate a fresh Xonotic server from the current standby pool.
+            Create admin-facing Match Rooms, assign Agones-backed Xonotic servers, and keep standby capacity visible without treating it as joinable.
           </p>
         </div>
         <div className="hero-actions">
@@ -216,9 +279,6 @@ export default function App() {
           <button className="secondary" onClick={() => void loadDashboard({ silent: true })} disabled={refreshing || loading}>
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
-          <button className="primary" onClick={() => void allocateServer()} disabled={allocating || loading}>
-            {allocating ? "Allocating..." : "Allocate Server"}
-          </button>
         </div>
       </section>
 
@@ -232,7 +292,110 @@ export default function App() {
       {copyMessage && <section className="copy-banner">{copyMessage}</section>}
 
       <section className="notice">
-        Only allocated servers are valid join targets. Ready servers are standby capacity. Auto-refresh checks every 7 seconds when enabled.
+        Match Rooms are the admin-facing sessions. Allocated GameServers back those rooms. Ready servers remain standby/internal capacity.
+        Auto-refresh checks every 7 seconds when enabled.
+      </section>
+
+      <section className="panel match-rooms-panel">
+        <div className="panel-header">
+          <h2>Match Rooms</h2>
+          <span className="panel-meta">{matches.length} in-memory rooms</span>
+        </div>
+
+        <form className="match-form" onSubmit={(event) => void createMatch(event)}>
+          <label>
+            <span>Match name</span>
+            <input
+              value={matchForm.name}
+              onChange={(event) => setMatchForm((current) => ({ ...current, name: event.target.value }))}
+              placeholder="Quarterfinal 1"
+            />
+          </label>
+          <label>
+            <span>Max players</span>
+            <input
+              min="1"
+              max="64"
+              type="number"
+              value={matchForm.max_players}
+              onChange={(event) => setMatchForm((current) => ({ ...current, max_players: event.target.value }))}
+            />
+          </label>
+          <label>
+            <span>Game mode</span>
+            <input
+              value={matchForm.game_mode}
+              onChange={(event) => setMatchForm((current) => ({ ...current, game_mode: event.target.value }))}
+              placeholder="dm"
+            />
+          </label>
+          <button className="primary" type="submit" disabled={creatingMatch || loading}>
+            {creatingMatch ? "Creating..." : "Create Match Room"}
+          </button>
+        </form>
+
+        {loading ? (
+          <p className="empty-state">Loading match rooms...</p>
+        ) : matches.length === 0 ? (
+          <p className="empty-state">No Match Rooms yet. Create one first, then allocate a server into it.</p>
+        ) : (
+          <div className="match-grid">
+            {matches.map((match) => {
+              const endpoint = allocationEndpoint(match);
+              const command = connectCommand(endpoint);
+              const isAllocated = Boolean(match.allocated_server);
+              const isAllocating = Boolean(allocatingMatches[match.match_id]) || match.status === "allocating";
+
+              return (
+                <article className={`match-card ${isAllocated ? "match-card-allocated" : ""}`} key={match.match_id}>
+                  <div className="match-card-header">
+                    <div>
+                      <h3>{match.name}</h3>
+                      <p>{match.match_id}</p>
+                    </div>
+                    <span className="state-badge">{match.status}</span>
+                  </div>
+                  <dl className="match-details">
+                    <div>
+                      <dt>Players</dt>
+                      <dd>
+                        {unknown(match.current_players)} / {match.max_players}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Mode</dt>
+                      <dd>{unknown(match.game_mode)}</dd>
+                    </div>
+                    <div>
+                      <dt>Map</dt>
+                      <dd>{unknown(match.map)}</dd>
+                    </div>
+                    <div>
+                      <dt>Created</dt>
+                      <dd>{match.created_at}</dd>
+                    </div>
+                  </dl>
+
+                  {isAllocated ? (
+                    <div className="assigned-server">
+                      <span>Assigned server</span>
+                      <strong className="join-endpoint">{endpoint}</strong>
+                      <code>{command}</code>
+                      <div className="button-row">
+                        <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
+                        <CopyButton text={command} label="Command" onCopy={copyText} />
+                      </div>
+                    </div>
+                  ) : (
+                    <button className="primary" type="button" onClick={() => void allocateMatch(match.match_id)} disabled={isAllocating}>
+                      {isAllocating ? "Allocating..." : "Allocate Server"}
+                    </button>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section className="grid metrics">
@@ -267,8 +430,15 @@ export default function App() {
 
         <article className="panel">
           <div className="panel-header">
-            <h2>Latest Allocation</h2>
+            <h2>Manual Direct Allocation</h2>
+            <span className="panel-meta">debug path</span>
           </div>
+          <p className="empty-state debug-copy">
+            Use this only for lower-level allocator testing. Normal operator flow should allocate servers through Match Rooms.
+          </p>
+          <button className="secondary debug-action" onClick={() => void allocateServer()} disabled={allocating || loading}>
+            {allocating ? "Allocating..." : "Allocate Direct Server"}
+          </button>
           {latestAllocation ? (
             <dl className="summary-list">
               <div>
@@ -301,12 +471,12 @@ export default function App() {
       <section className="panel">
         <div className="panel-header">
           <h2>Allocated Servers</h2>
-          <span className="panel-meta">{allocatedServers.length} join targets</span>
+          <span className="panel-meta">{allocatedServers.length} infrastructure allocations</span>
         </div>
         {loading ? (
           <p className="empty-state">Loading allocated servers...</p>
         ) : allocatedServers.length === 0 ? (
-          <p className="empty-state">No allocated servers yet. Use Allocate Server to create a user-facing join target.</p>
+          <p className="empty-state">No allocated GameServers yet. Match Room allocation will assign one from standby capacity.</p>
         ) : (
           <div className="table-wrap">
             <table>
@@ -347,7 +517,7 @@ export default function App() {
 
       <section className="panel">
         <div className="panel-header">
-          <h2>Allocation History</h2>
+          <h2>Manual Allocation History</h2>
           <span className="panel-meta">{allocationHistory.length} recent successful allocations</span>
         </div>
         {allocationHistory.length === 0 ? (

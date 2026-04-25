@@ -2,6 +2,8 @@
 
 This phase adds the first backend service that allocates Xonotic game servers programmatically from inside the cluster.
 
+It now also includes the first in-memory Match Room layer for the admin workflow. Match Rooms are the operator-facing objects; allocated Agones `GameServer` instances are the infrastructure assigned to those rooms.
+
 ## Why This Backend Uses The Kubernetes API In-Cluster
 
 This backend runs as a Kubernetes Pod and only needs to create and read `GameServerAllocation` resources in the local cluster.
@@ -18,7 +20,31 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `GET /healthz`: simple health check
 - `GET /fleet-status`: current Fleet summary for the operator UI
 - `GET /gameservers`: current `GameServer` list for the operator UI
+- `POST /matches`: create an in-memory Match Room
+- `GET /matches`: list in-memory Match Rooms
+- `GET /matches/<match_id>`: inspect one Match Room
+- `POST /matches/<match_id>/allocate`: allocate one Agones `GameServer` for a Match Room
 - `POST /allocate`: creates a `GameServerAllocation`, waits for the result, and returns the allocated address and port
+
+`POST /allocate` remains available for direct/manual debugging. Normal admin flow should use Match Rooms.
+
+Match Room state is intentionally process-local memory. It is lost when the backend Pod restarts. That keeps this phase small while still moving the project toward a tournament admin tool.
+
+Current real fields:
+
+- `match_id`
+- `name`
+- `status`
+- `created_at`
+- `allocated_at`
+- `max_players`
+- `game_mode`
+- allocated server address, port, GameServer name, and allocation request name
+
+Current placeholder fields:
+
+- `current_players`: `null` until server telemetry exists
+- `map`: `null` until allocation/server metadata or runtime reporting exists
 
 Expected JSON response:
 
@@ -113,6 +139,20 @@ Then call the API:
 ```bash
 curl -fsS http://127.0.0.1:18080/healthz
 curl -fsS -X POST http://127.0.0.1:18080/allocate
+```
+
+Create and allocate a Match Room:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:18080/matches \
+  -H "content-type: application/json" \
+  -d '{"name":"Quarterfinal 1","max_players":8,"game_mode":"dm"}'
+
+curl -fsS http://127.0.0.1:18080/matches
+
+curl -fsS http://127.0.0.1:18080/matches/<match_id>
+
+curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate
 ```
 
 Inspect the allocated server endpoint:

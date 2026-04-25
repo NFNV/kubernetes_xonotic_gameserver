@@ -85,6 +85,7 @@ Repository layout:
 
 - package and deploy the Xonotic dedicated server workload
 - add the first in-cluster allocator backend before any frontend work
+- add in-memory Match Rooms as the first admin-facing layer above raw allocation
 
 ### Phase 4: CI/CD and Hardening
 
@@ -93,4 +94,4 @@ Repository layout:
 
 ## Current Status
 
-This repository is past the plain Kubernetes connectivity checkpoint, the first single-`GameServer` Agones step, the first manual Fleet-plus-allocation flow, the in-cluster allocator backend, and now the first operator-facing admin frontend. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and the current platform path includes Fleet autoscaling, backend allocation, and a small React control panel for operators.
+This repository is past the plain Kubernetes connectivity checkpoint, the first single-`GameServer` Agones step, the first manual Fleet-plus-allocation flow, the in-cluster allocator backend, and the first operator-facing admin frontend. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and the current platform path includes Fleet autoscaling, backend allocation, in-memory Match Rooms, and a small React control panel for operators.

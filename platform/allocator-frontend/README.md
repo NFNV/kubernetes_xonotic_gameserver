@@ -5,9 +5,13 @@ This phase adds a small React admin dashboard for operators.
 It is not a public user-facing site. It is a simple control panel for:
 
 - checking allocator backend health
+- creating in-memory Match Rooms
+- allocating one Xonotic server to a Match Room
 - inspecting Fleet capacity
 - reviewing the current `GameServer` list
-- allocating one server and seeing the latest result
+- running direct/manual allocation only as a debug path
+
+Match Rooms are the admin-facing objects. Allocated Agones `GameServer` instances are the infrastructure backing those rooms. `Ready` GameServers are standby/internal capacity and should not be treated as user-facing join targets.
 
 ## How It Works
 
@@ -20,7 +24,12 @@ Backend endpoints used:
 - `GET /healthz`
 - `GET /fleet-status`
 - `GET /gameservers`
+- `GET /matches`
+- `POST /matches`
+- `POST /matches/<match_id>/allocate`
 - `POST /allocate`
+
+Match Room state currently lives only in allocator backend memory. It is lost when the backend Pod restarts.
 
 ## Image Naming Convention
 

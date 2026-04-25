@@ -198,6 +198,115 @@ button:disabled {
   font-size: 0.88rem;
 }
 
+.match-rooms-panel {
+  border-color: rgba(122, 79, 52, 0.22);
+  background: rgba(255, 250, 241, 0.92);
+}
+
+.match-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(110px, 0.7fr) minmax(110px, 0.7fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 18px;
+}
+
+.match-form label {
+  display: grid;
+  gap: 6px;
+  color: #705f50;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.match-form input {
+  width: 100%;
+  border: 1px solid rgba(91, 61, 38, 0.16);
+  border-radius: 12px;
+  background: #fffaf1;
+  color: #2f251d;
+  font: inherit;
+  padding: 11px 12px;
+}
+
+.match-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.match-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(91, 61, 38, 0.12);
+  border-radius: 18px;
+  background: rgba(244, 234, 219, 0.62);
+}
+
+.match-card-allocated {
+  border-color: rgba(71, 100, 47, 0.26);
+  background: rgba(226, 234, 215, 0.58);
+}
+
+.match-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.match-card h3,
+.match-card p {
+  margin: 0;
+}
+
+.match-card p {
+  margin-top: 4px;
+  color: #7a6755;
+  font-size: 0.82rem;
+}
+
+.match-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.match-details div {
+  display: grid;
+  gap: 3px;
+}
+
+.match-details dt {
+  color: #7a6755;
+  font-size: 0.8rem;
+}
+
+.match-details dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.assigned-server {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 250, 241, 0.78);
+}
+
+.assigned-server span {
+  color: #7a6755;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .summary-list {
   display: grid;
   gap: 14px;
@@ -221,6 +330,14 @@ button:disabled {
 .empty-state {
   margin: 0;
   color: #7a6755;
+}
+
+.debug-copy {
+  margin-bottom: 12px;
+}
+
+.debug-action {
+  margin-bottom: 16px;
 }
 
 .table-wrap {
@@ -328,6 +445,14 @@ th {
 
   .hero-actions {
     justify-content: flex-start;
+  }
+
+  .match-form {
+    grid-template-columns: 1fr;
+  }
+
+  .match-details {
+    grid-template-columns: 1fr;
   }
 
   .history-item {
