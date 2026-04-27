@@ -43,6 +43,17 @@ The planned runtime path is straightforward:
 4. Agones manages dedicated game server lifecycle on the cluster.
 5. Xonotic dedicated servers run as the primary workload.
 
+## Agones Model In Plain English
+
+Think of the platform like a restaurant:
+
+- `Ready` `GameServer`: an empty table that is prepared and available
+- `GameServerAllocation`: the host assigning that table to a group
+- `FleetAutoscaler`: staff preparing more empty tables when too many are occupied
+- allocator backend and admin UI: the reservation desk
+
+A `Ready` server may already be running and technically reachable, but allocation does not turn it on. Allocation assigns and reserves one server for a match. The backend records that assignment as a Match Room, and the `FleetAutoscaler` replenishes standby capacity after servers become allocated.
+
 Repository layout:
 
 - `infra/`: GCP, IAM, networking, and cluster provisioning
