@@ -14,6 +14,7 @@ It is intentionally narrow:
 
 - backend health status
 - Match Room creation and allocation
+- live player/map/score status for allocated Match Rooms
 - Fleet summary
 - current `GameServer` list
 - direct/manual allocation as a lower-level debug action

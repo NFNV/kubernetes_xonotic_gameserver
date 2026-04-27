@@ -5,7 +5,7 @@ This file is the running context log for the repository. Update it over time so 
 ## Current State
 
 - Stage: Phase 5 in-memory Match Rooms MVP
-- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, the in-cluster allocator backend exists, the FleetAutoscaler standby buffer exists, the operator-facing frontend exists, and the backend/frontend now model in-memory Match Rooms above raw Agones allocations
+- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, the in-cluster allocator backend exists, the FleetAutoscaler standby buffer exists, the operator-facing frontend exists, the backend/frontend now model in-memory Match Rooms above raw Agones allocations, and allocated rooms expose best-effort live Xonotic `getstatus` telemetry
 - Goal: validate the first tournament-admin-shaped workflow where operators create Match Rooms and assign one allocated Xonotic server to each room, without adding auth, persistence, player accounts, brackets, or real matchmaking
 
 ## Locked-In Context
@@ -91,6 +91,7 @@ This file is the running context log for the repository. Update it over time so 
 - The admin frontend should treat only `Allocated` `GameServer` instances as user-facing join targets; `Ready` servers are standby capacity
 - Match Rooms are now the admin-facing objects; allocated Agones `GameServer` instances are infrastructure backing those rooms
 - Match Room state is intentionally in-memory and disappears on backend Pod restart until a later persistence phase
+- Live player/map/score data should use read-only Xonotic `getstatus` first; avoid RCON unless a later feature truly requires command execution
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
 - Reliability for this phase means every allocated server endpoint must be joinable, not just that some allocations succeed

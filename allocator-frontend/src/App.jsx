@@ -76,6 +76,24 @@ function unknown(value) {
   return value === null || value === undefined || value === "" ? "unknown" : value;
 }
 
+function playerScore(player) {
+  if (player.scores && Object.keys(player.scores).length > 0) {
+    return Object.entries(player.scores)
+      .map(([label, value]) => `${label}: ${value}`)
+      .join(", ");
+  }
+
+  return player.score ?? player.score_raw ?? "unknown";
+}
+
+function liveStatusLabel(liveStatus) {
+  if (!liveStatus) {
+    return "live status pending";
+  }
+
+  return liveStatus.ok ? `live ${liveStatus.queried_at}` : "live status unavailable";
+}
+
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
@@ -345,6 +363,8 @@ export default function App() {
               const command = connectCommand(endpoint);
               const isAllocated = Boolean(match.allocated_server);
               const isAllocating = Boolean(allocatingMatches[match.match_id]) || match.status === "allocating";
+              const liveStatus = match.live_status;
+              const players = liveStatus?.players || [];
 
               return (
                 <article className={`match-card ${isAllocated ? "match-card-allocated" : ""}`} key={match.match_id}>
@@ -377,15 +397,54 @@ export default function App() {
                   </dl>
 
                   {isAllocated ? (
-                    <div className="assigned-server">
-                      <span>Assigned server</span>
-                      <strong className="join-endpoint">{endpoint}</strong>
-                      <code>{command}</code>
-                      <div className="button-row">
-                        <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
-                        <CopyButton text={command} label="Command" onCopy={copyText} />
+                    <>
+                      <div className="assigned-server">
+                        <span>Assigned server</span>
+                        <strong className="join-endpoint">{endpoint}</strong>
+                        <code>{command}</code>
+                        <div className="button-row">
+                          <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
+                          <CopyButton text={command} label="Command" onCopy={copyText} />
+                        </div>
                       </div>
-                    </div>
+
+                      <div className={`live-status ${liveStatus?.ok ? "live-status-ok" : "live-status-muted"}`}>
+                        <div className="live-status-header">
+                          <span>{liveStatusLabel(liveStatus)}</span>
+                          <strong>
+                            {unknown(match.current_players)} / {match.max_players} players
+                          </strong>
+                        </div>
+                        {liveStatus?.ok ? (
+                          <>
+                            {liveStatus.teams?.length > 0 && (
+                              <div className="team-score-list">
+                                {liveStatus.teams.map((team) => (
+                                  <span key={`${match.match_id}-${team.team}`}>
+                                    Team {team.team}: {Object.values(team.scores || {}).join(", ") || team.score_raw}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {players.length > 0 ? (
+                              <div className="player-list">
+                                {players.map((player) => (
+                                  <div className="player-row" key={`${match.match_id}-${player.name}-${player.ping}`}>
+                                    <strong>{player.name}</strong>
+                                    <span>{playerScore(player)}</span>
+                                    <span>{player.ping ?? "?"} ms</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="empty-state">No connected players reported yet.</p>
+                            )}
+                          </>
+                        ) : (
+                          <p className="empty-state">{liveStatus?.message || "Waiting for the next getstatus response."}</p>
+                        )}
+                      </div>
+                    </>
                   ) : (
                     <button className="primary" type="button" onClick={() => void allocateMatch(match.match_id)} disabled={isAllocating}>
                       {isAllocating ? "Allocating..." : "Allocate Server"}

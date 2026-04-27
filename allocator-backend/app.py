@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import os
+import re
+import socket
 import time
 import uuid
 from datetime import UTC, datetime
@@ -20,6 +22,8 @@ FLEET_NAME = os.environ.get("FLEET_NAME", "xonotic-fleet")
 GAME_LABEL = os.environ.get("GAME_LABEL", "xonotic")
 ALLOCATION_TIMEOUT_SECONDS = int(os.environ.get("ALLOCATION_TIMEOUT_SECONDS", "5"))
 ALLOCATION_POLL_INTERVAL_SECONDS = float(os.environ.get("ALLOCATION_POLL_INTERVAL_SECONDS", "0.25"))
+XONOTIC_STATUS_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_STATUS_TIMEOUT_SECONDS", "1"))
+XONOTIC_STATUS_CACHE_SECONDS = float(os.environ.get("XONOTIC_STATUS_CACHE_SECONDS", "5"))
 
 ALLOCATION_GROUP = "allocation.agones.dev"
 ALLOCATION_VERSION = "v1"
@@ -30,8 +34,11 @@ FLEET_RESOURCE_KIND = "Fleet"
 
 MATCHES: dict[str, dict[str, Any]] = {}
 MATCHES_LOCK = Lock()
+STATUS_CACHE: dict[str, dict[str, Any]] = {}
+STATUS_CACHE_LOCK = Lock()
 DEFAULT_MAX_PLAYERS = int(os.environ.get("DEFAULT_MATCH_MAX_PLAYERS", "8"))
 DEFAULT_GAME_MODE = os.environ.get("DEFAULT_MATCH_GAME_MODE", "dm")
+PLAYER_STATUS_PATTERN = re.compile(r'^(?P<score>\S+)\s+(?P<ping>\d+)(?:\s+(?P<team>\d+))?\s+"(?P<name>.*)"$')
 
 
 class BackendApiError(Exception):
@@ -43,6 +50,27 @@ class BackendApiError(Exception):
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def parse_optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_score_value(value: str) -> int | float | str:
+    try:
+        parsed_float = float(value)
+    except ValueError:
+        return value
+
+    parsed_int = int(parsed_float)
+    return parsed_int if parsed_float == parsed_int else parsed_float
+
+
+def clean_score_label(label: str) -> str:
+    return label.replace("!", "").replace("<", "").strip()
 
 
 def load_kubernetes_config() -> None:
@@ -245,6 +273,170 @@ def extract_gameserver_summary(gameserver: dict) -> dict:
     }
 
 
+def parse_info_string(info_string: str) -> dict[str, str]:
+    parts = info_string.strip().split("\\")
+    info: dict[str, str] = {}
+
+    for index in range(1, len(parts) - 1, 2):
+        key = parts[index]
+        value = parts[index + 1]
+        if key:
+            info[key] = value
+
+    return info
+
+
+def parse_qcstatus(qcstatus: str | None) -> dict[str, Any]:
+    if not qcstatus:
+        return {"game_mode": None, "player_score_labels": [], "team_score_labels": [], "teams": []}
+
+    metadata, _, scores = qcstatus.partition("::")
+    metadata_parts = metadata.split(":")
+    score_parts = scores.split(":") if scores else []
+    player_score_labels = []
+    team_score_labels = []
+    teams = []
+
+    if score_parts:
+        player_score_labels = [clean_score_label(label) for label in score_parts[0].split(",") if clean_score_label(label)]
+
+    if len(score_parts) > 1:
+        team_score_labels = [clean_score_label(label) for label in score_parts[1].split(",") if clean_score_label(label)]
+
+    for index in range(2, len(score_parts) - 1, 2):
+        team_id = parse_optional_int(score_parts[index])
+        score_values = score_parts[index + 1].split(",") if score_parts[index + 1] else []
+        team_scores = {
+            label: parse_score_value(score_values[label_index])
+            for label_index, label in enumerate(team_score_labels)
+            if label_index < len(score_values)
+        }
+        teams.append(
+            {
+                "team": team_id,
+                "score_raw": score_parts[index + 1],
+                "scores": team_scores,
+            }
+        )
+
+    return {
+        "game_mode": metadata_parts[0] if metadata_parts else None,
+        "player_score_labels": player_score_labels,
+        "team_score_labels": team_score_labels,
+        "teams": teams,
+    }
+
+
+def parse_player_status_line(line: str, score_labels: list[str]) -> dict[str, Any] | None:
+    match = PLAYER_STATUS_PATTERN.match(line.strip())
+    if not match:
+        return None
+
+    score_raw = match.group("score")
+    score_values = score_raw.split(",")
+    scores = {
+        label: parse_score_value(score_values[index])
+        for index, label in enumerate(score_labels)
+        if index < len(score_values)
+    }
+
+    return {
+        "name": match.group("name"),
+        "ping": parse_optional_int(match.group("ping")),
+        "team": parse_optional_int(match.group("team")),
+        "score": parse_score_value(score_values[0]) if score_values and score_values[0] else None,
+        "score_raw": score_raw,
+        "scores": scores,
+    }
+
+
+def parse_status_response(raw_response: bytes) -> dict[str, Any]:
+    if raw_response.startswith(b"\xff\xff\xff\xff"):
+        raw_response = raw_response[4:]
+
+    response = raw_response.decode("utf-8", errors="replace")
+
+    header, _, body = response.partition("\n")
+    if header != "statusResponse":
+        raise ValueError(f"unexpected status response header: {header}")
+
+    info_line, _, player_blob = body.partition("\n")
+    info = parse_info_string(info_line)
+    qcstatus = parse_qcstatus(info.get("qcstatus"))
+    players = []
+
+    for line in player_blob.splitlines():
+        if not line.strip():
+            continue
+        player = parse_player_status_line(line, qcstatus["player_score_labels"])
+        if player:
+            players.append(player)
+
+    return {
+        "ok": True,
+        "source": "getstatus",
+        "queried_at": utc_now(),
+        "hostname": info.get("hostname"),
+        "map": info.get("mapname"),
+        "game_mode": qcstatus["game_mode"] or info.get("gamename"),
+        "current_players": parse_optional_int(info.get("clients")),
+        "bots": parse_optional_int(info.get("bots")),
+        "max_players": parse_optional_int(info.get("sv_maxclients")),
+        "players": players,
+        "player_score_labels": qcstatus["player_score_labels"],
+        "team_score_labels": qcstatus["team_score_labels"],
+        "teams": qcstatus["teams"],
+    }
+
+
+def query_xonotic_status(address: str, port: int) -> dict[str, Any]:
+    message = b"\xff\xff\xff\xffgetstatus xonotic-admin\n"
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(XONOTIC_STATUS_TIMEOUT_SECONDS)
+        sock.sendto(message, (address, port))
+        response, _ = sock.recvfrom(8192)
+
+    return parse_status_response(response)
+
+
+def live_status_error_payload(message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "source": "getstatus",
+        "queried_at": utc_now(),
+        "error": "status_query_failed",
+        "message": message,
+    }
+
+
+def get_cached_xonotic_status(address: str | None, port: int | None) -> dict[str, Any] | None:
+    if not address or not port:
+        return None
+
+    cache_key = f"{address}:{port}"
+    now = time.monotonic()
+
+    with STATUS_CACHE_LOCK:
+        cached = STATUS_CACHE.get(cache_key)
+        if cached and cached["expires_at"] > now:
+            return cached["status"]
+
+    try:
+        status = query_xonotic_status(address, port)
+    except Exception as exc:
+        APP.logger.info("Xonotic getstatus query failed for %s: %s", cache_key, exc)
+        status = live_status_error_payload(str(exc))
+
+    with STATUS_CACHE_LOCK:
+        STATUS_CACHE[cache_key] = {
+            "expires_at": now + XONOTIC_STATUS_CACHE_SECONDS,
+            "status": status,
+        }
+
+    return status
+
+
 def wait_for_allocation(name: str) -> dict:
     deadline = time.time() + ALLOCATION_TIMEOUT_SECONDS
 
@@ -380,17 +572,33 @@ def validate_max_players(value: Any) -> int:
 
 
 def match_response(match: dict[str, Any]) -> dict[str, Any]:
+    allocated_server = match["allocated_server"]
+    live_status = None
+    current_players = match["current_players"]
+    max_players = match["max_players"]
+    game_mode = match["game_mode"]
+    map_name = match["map"]
+
+    if allocated_server:
+        live_status = get_cached_xonotic_status(allocated_server.get("address"), allocated_server.get("port"))
+        if live_status and live_status.get("ok"):
+            current_players = live_status.get("current_players")
+            max_players = live_status.get("max_players") or max_players
+            game_mode = live_status.get("game_mode") or game_mode
+            map_name = live_status.get("map") or map_name
+
     return {
         "match_id": match["match_id"],
         "name": match["name"],
         "status": match["status"],
         "created_at": match["created_at"],
         "allocated_at": match["allocated_at"],
-        "max_players": match["max_players"],
-        "current_players": match["current_players"],
-        "game_mode": match["game_mode"],
-        "map": match["map"],
-        "allocated_server": match["allocated_server"],
+        "max_players": max_players,
+        "current_players": current_players,
+        "game_mode": game_mode,
+        "map": map_name,
+        "allocated_server": allocated_server,
+        "live_status": live_status,
     }
 
 
@@ -491,8 +699,9 @@ def create_match():
 @APP.get("/matches")
 def list_matches():
     with MATCHES_LOCK:
-        matches = sorted(MATCHES.values(), key=lambda match: match["created_at"], reverse=True)
-        return jsonify({"items": [match_response(match) for match in matches]})
+        matches = [match.copy() for match in sorted(MATCHES.values(), key=lambda match: match["created_at"], reverse=True)]
+
+    return jsonify({"items": [match_response(match) for match in matches]})
 
 
 @APP.get("/matches/<match_id>")
@@ -501,7 +710,9 @@ def get_match(match_id: str):
         match = MATCHES.get(match_id)
         if not match:
             return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
-        return jsonify(match_response(match))
+        match_snapshot = match.copy()
+
+    return jsonify(match_response(match_snapshot))
 
 
 @APP.post("/matches/<match_id>/allocate")
@@ -512,7 +723,8 @@ def allocate_match(match_id: str):
             return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
 
         if match["allocated_server"]:
-            return jsonify(match_response(match))
+            match_snapshot = match.copy()
+            return jsonify(match_response(match_snapshot))
 
         if match["status"] == "allocating":
             return jsonify({"error": "allocation_in_progress", "message": f"match {match_id} is already allocating a server"}), 409
@@ -543,7 +755,9 @@ def allocate_match(match_id: str):
             match["allocated_server"] = allocated_server
             match["allocated_at"] = utc_now()
             match["status"] = "allocated"
-        return jsonify(match_response(match))
+        match_snapshot = match.copy()
+
+    return jsonify(match_response(match_snapshot))
 
 
 @APP.post("/allocate")

@@ -7,6 +7,7 @@ It is not a public user-facing site. It is a simple control panel for:
 - checking allocator backend health
 - creating in-memory Match Rooms
 - allocating one Xonotic server to a Match Room
+- viewing live map, player, score, and ping data from allocated rooms
 - inspecting Fleet capacity
 - reviewing the current `GameServer` list
 - running direct/manual allocation only as a debug path

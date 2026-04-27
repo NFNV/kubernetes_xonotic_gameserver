@@ -22,6 +22,8 @@ A Match Room represents an operator-created match/session. It can have one alloc
 
 Match Rooms are stored only in backend process memory for now. They disappear when the backend Pod restarts. That is intentional for this MVP because there is no database, auth, player account model, or tournament bracket logic yet.
 
+For allocated rooms, the backend also sends a read-only UDP `getstatus` query to the assigned Xonotic server. That response is cached briefly and used to fill live player count, map, game mode, player names, scores, ping, and team score data when available. This does not use RCON.
+
 ## API
 
 - `GET /healthz`
@@ -61,9 +63,9 @@ Allocate a server for one Match Room:
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate
 ```
 
-Fields that are real now: `match_id`, `name`, `status`, `created_at`, `allocated_at`, `max_players`, `game_mode`, and assigned server endpoint data.
+Fields that are real now: `match_id`, `name`, `status`, `created_at`, `allocated_at`, `max_players`, `game_mode`, assigned server endpoint data, and best-effort `live_status` from Xonotic `getstatus`.
 
-Fields that are placeholders until later backend/game telemetry exists: `current_players` and `map`.
+Fields that remain best-effort: `current_players`, `map`, player scores, and team scores. They are populated only after a server is allocated and responds to `getstatus`.
 
 Example successful allocation response:
 
@@ -83,3 +85,5 @@ Example successful allocation response:
 - `GAME_LABEL`: defaults to `xonotic`
 - `ALLOCATION_TIMEOUT_SECONDS`: defaults to `5`
 - `ALLOCATION_POLL_INTERVAL_SECONDS`: defaults to `0.25`
+- `XONOTIC_STATUS_TIMEOUT_SECONDS`: defaults to `1`
+- `XONOTIC_STATUS_CACHE_SECONDS`: defaults to `5`

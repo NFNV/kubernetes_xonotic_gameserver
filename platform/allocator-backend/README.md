@@ -30,6 +30,8 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 
 Match Room state is intentionally process-local memory. It is lost when the backend Pod restarts. That keeps this phase small while still moving the project toward a tournament admin tool.
 
+For allocated Match Rooms, the backend queries the assigned Xonotic server with UDP `getstatus` and briefly caches the result. This provides live map, game mode, player count, player names, scores, ping, and team scores when available. It is read-only and does not use RCON.
+
 Current real fields:
 
 - `match_id`
@@ -40,11 +42,13 @@ Current real fields:
 - `max_players`
 - `game_mode`
 - allocated server address, port, GameServer name, and allocation request name
+- best-effort live status from Xonotic `getstatus`
 
-Current placeholder fields:
+Current temporary limitations:
 
-- `current_players`: `null` until server telemetry exists
-- `map`: `null` until allocation/server metadata or runtime reporting exists
+- live status is cached briefly and may be stale for a few seconds
+- status is unavailable until a room has an allocated server
+- Match Room and live status state are not persisted across backend restarts
 
 Expected JSON response:
 
