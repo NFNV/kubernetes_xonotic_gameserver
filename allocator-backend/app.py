@@ -37,7 +37,8 @@ MATCHES_LOCK = Lock()
 STATUS_CACHE: dict[str, dict[str, Any]] = {}
 STATUS_CACHE_LOCK = Lock()
 DEFAULT_MAX_PLAYERS = int(os.environ.get("DEFAULT_MATCH_MAX_PLAYERS", "8"))
-DEFAULT_GAME_MODE = os.environ.get("DEFAULT_MATCH_GAME_MODE", "dm")
+MAX_MATCH_PLAYERS_LIMIT = int(os.environ.get("MAX_MATCH_PLAYERS_LIMIT", "32"))
+FINISHED_MATCH_STATUSES = {"released", "finished"}
 PLAYER_STATUS_PATTERN = re.compile(r'^(?P<score>\S+)\s+(?P<ping>\d+)(?:\s+(?P<team>\d+))?\s+"(?P<name>.*)"$')
 
 
@@ -538,6 +539,32 @@ def allocate_gameserver() -> dict:
         ) from exc
 
 
+def delete_gameserver(name: str) -> dict[str, Any]:
+    try:
+        custom_objects_api.delete_namespaced_custom_object(
+            group="agones.dev",
+            version="v1",
+            namespace=AGONES_NAMESPACE,
+            plural="gameservers",
+            name=name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            return {"deleted": False, "already_missing": True}
+        raise_kubernetes_api_error(
+            operation="delete",
+            resource_type=GAMESERVER_RESOURCE_KIND,
+            namespace=AGONES_NAMESPACE,
+            name=name,
+            request_context={"gameserver_name": name},
+            exc=exc,
+        )
+    except Exception as exc:
+        raise BackendApiError({"error": "gameserver_delete_failed", "message": str(exc), "gameserver_name": name}, 500) from exc
+
+    return {"deleted": True, "already_missing": False}
+
+
 def parse_json_body() -> dict[str, Any]:
     if not request.data:
         return {}
@@ -565,8 +592,14 @@ def validate_max_players(value: Any) -> int:
     except (TypeError, ValueError) as exc:
         raise BackendApiError({"error": "invalid_max_players", "message": "max_players must be a positive integer"}, 400) from exc
 
-    if max_players < 1 or max_players > 64:
-        raise BackendApiError({"error": "invalid_max_players", "message": "max_players must be between 1 and 64"}, 400)
+    if max_players < 1 or max_players > MAX_MATCH_PLAYERS_LIMIT:
+        raise BackendApiError(
+            {
+                "error": "invalid_max_players",
+                "message": f"max_players must be between 1 and {MAX_MATCH_PLAYERS_LIMIT}",
+            },
+            400,
+        )
 
     return max_players
 
@@ -575,7 +608,7 @@ def match_response(match: dict[str, Any]) -> dict[str, Any]:
     allocated_server = match["allocated_server"]
     live_status = None
     current_players = match["current_players"]
-    max_players = match["max_players"]
+    live_max_players = None
     game_mode = match["game_mode"]
     map_name = match["map"]
 
@@ -583,7 +616,7 @@ def match_response(match: dict[str, Any]) -> dict[str, Any]:
         live_status = get_cached_xonotic_status(allocated_server.get("address"), allocated_server.get("port"))
         if live_status and live_status.get("ok"):
             current_players = live_status.get("current_players")
-            max_players = live_status.get("max_players") or max_players
+            live_max_players = live_status.get("max_players")
             game_mode = live_status.get("game_mode") or game_mode
             map_name = live_status.get("map") or map_name
 
@@ -593,10 +626,14 @@ def match_response(match: dict[str, Any]) -> dict[str, Any]:
         "status": match["status"],
         "created_at": match["created_at"],
         "allocated_at": match["allocated_at"],
-        "max_players": max_players,
+        "released_at": match.get("released_at"),
+        "max_players": match["max_players"],
         "current_players": current_players,
         "game_mode": game_mode,
         "map": map_name,
+        "live_max_players": live_max_players,
+        "released_server": match.get("released_server"),
+        "release_result": match.get("release_result"),
         "allocated_server": allocated_server,
         "live_status": live_status,
     }
@@ -608,19 +645,20 @@ def build_match(body: dict[str, Any]) -> dict[str, Any]:
     if not name:
         name = f"Match {len(MATCHES) + 1}"
 
-    game_mode = str(body.get("game_mode") or DEFAULT_GAME_MODE).strip() or DEFAULT_GAME_MODE
-
     return {
         "match_id": match_id,
         "name": name,
         "status": "waiting_for_server",
         "created_at": utc_now(),
         "allocated_at": None,
+        "released_at": None,
         "max_players": validate_max_players(body.get("max_players")),
         "current_players": None,
-        "game_mode": game_mode,
+        "game_mode": None,
         "map": None,
         "allocated_server": None,
+        "released_server": None,
+        "release_result": None,
     }
 
 
@@ -722,6 +760,10 @@ def allocate_match(match_id: str):
         if not match:
             return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
 
+        if match["status"] in FINISHED_MATCH_STATUSES:
+            match_snapshot = match.copy()
+            return jsonify(match_response(match_snapshot))
+
         if match["allocated_server"]:
             match_snapshot = match.copy()
             return jsonify(match_response(match_snapshot))
@@ -751,11 +793,84 @@ def allocate_match(match_id: str):
         match = MATCHES.get(match_id)
         if not match:
             return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
+        if match["status"] in FINISHED_MATCH_STATUSES:
+            match_snapshot = match.copy()
+            should_cleanup_allocation = True
+        else:
+            should_cleanup_allocation = False
+
+    if should_cleanup_allocation:
+        try:
+            delete_gameserver(allocation["allocated_game_server_name"])
+        except BackendApiError:
+            APP.logger.warning("allocated GameServer cleanup failed after finished match allocation race", exc_info=True)
+        return jsonify(match_response(match_snapshot))
+
+    with MATCHES_LOCK:
+        match = MATCHES.get(match_id)
+        if not match:
+            return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
         if not match["allocated_server"]:
             match["allocated_server"] = allocated_server
             match["allocated_at"] = utc_now()
             match["status"] = "allocated"
         match_snapshot = match.copy()
+
+    return jsonify(match_response(match_snapshot))
+
+
+@APP.post("/matches/<match_id>/release")
+def release_match(match_id: str):
+    with MATCHES_LOCK:
+        match = MATCHES.get(match_id)
+        if not match:
+            return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
+
+        if match["status"] in FINISHED_MATCH_STATUSES:
+            match_snapshot = match.copy()
+            return jsonify(match_response(match_snapshot))
+
+        if match["status"] == "allocating":
+            return jsonify({"error": "allocation_in_progress", "message": f"match {match_id} is still allocating a server"}), 409
+
+        allocated_server = match.get("allocated_server")
+        if not allocated_server:
+            match["status"] = "released"
+            match["released_at"] = utc_now()
+            match_snapshot = match.copy()
+            return jsonify(match_response(match_snapshot))
+
+        gameserver_name = allocated_server.get("allocated_game_server_name")
+        if not gameserver_name:
+            return jsonify({"error": "release_failed", "message": "allocated GameServer name is missing"}), 500
+
+        match["status"] = "releasing"
+
+    try:
+        release_result = delete_gameserver(gameserver_name)
+    except BackendApiError as exc:
+        with MATCHES_LOCK:
+            match = MATCHES.get(match_id)
+            if match and match["status"] == "releasing":
+                match["status"] = "allocated"
+        return jsonify(exc.payload), exc.status_code
+
+    with MATCHES_LOCK:
+        match = MATCHES.get(match_id)
+        if not match:
+            return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
+
+        released_server = match.get("allocated_server")
+        match["released_server"] = released_server
+        match["release_result"] = release_result
+        match["allocated_server"] = None
+        match["released_at"] = utc_now()
+        match["status"] = "released"
+        match_snapshot = match.copy()
+
+    if released_server:
+        with STATUS_CACHE_LOCK:
+            STATUS_CACHE.pop(f"{released_server.get('address')}:{released_server.get('port')}", None)
 
     return jsonify(match_response(match_snapshot))
 

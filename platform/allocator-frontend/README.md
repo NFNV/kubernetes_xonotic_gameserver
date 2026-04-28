@@ -7,12 +7,15 @@ It is not a public user-facing site. It is a simple control panel for:
 - checking allocator backend health
 - creating in-memory Match Rooms
 - allocating one Xonotic server to a Match Room
+- ending a Match Room by releasing its allocated server
 - viewing live map, player, score, and ping data from allocated rooms
 - inspecting Fleet capacity
 - reviewing the current `GameServer` list
 - running direct/manual allocation only as a debug path
 
 Match Rooms are the admin-facing objects. Allocated Agones `GameServer` instances are the infrastructure backing those rooms. `Ready` GameServers are standby/internal capacity and should not be treated as user-facing join targets.
+
+Map, mode, and max-player controls are intentionally deferred. With the current warm Fleet model, servers are already running before allocation, so the dashboard shows live server status instead of presenting non-enforced config as a real control feature. Real per-match server control is deferred pending RCON investigation or a per-match provisioning design.
 
 ## How It Works
 
@@ -28,6 +31,7 @@ Backend endpoints used:
 - `GET /matches`
 - `POST /matches`
 - `POST /matches/<match_id>/allocate`
+- `POST /matches/<match_id>/release`
 - `POST /allocate`
 
 Match Room state currently lives only in allocator backend memory. It is lost when the backend Pod restarts.

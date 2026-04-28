@@ -5,7 +5,7 @@ This file is the running context log for the repository. Update it over time so 
 ## Current State
 
 - Stage: Phase 5 in-memory Match Rooms MVP
-- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, the in-cluster allocator backend exists, the FleetAutoscaler standby buffer exists, the operator-facing frontend exists, the backend/frontend now model in-memory Match Rooms above raw Agones allocations, and allocated rooms expose best-effort live Xonotic `getstatus` telemetry
+- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, the in-cluster allocator backend exists, the FleetAutoscaler standby buffer exists, the operator-facing frontend exists, the backend/frontend now model in-memory Match Rooms above raw Agones allocations, allocated rooms expose best-effort live Xonotic `getstatus` telemetry, and rooms can be released by deleting the allocated Agones `GameServer`
 - Goal: validate the first tournament-admin-shaped workflow where operators create Match Rooms and assign one allocated Xonotic server to each room, without adding auth, persistence, player accounts, brackets, or real matchmaking
 
 ## Locked-In Context
@@ -92,6 +92,8 @@ This file is the running context log for the repository. Update it over time so 
 - Match Rooms are now the admin-facing objects; allocated Agones `GameServer` instances are infrastructure backing those rooms
 - Match Room state is intentionally in-memory and disappears on backend Pod restart until a later persistence phase
 - Live player/map/score data should use read-only Xonotic `getstatus` first; avoid RCON unless a later feature truly requires command execution
+- Match Room map/mode/max-player controls are intentionally deferred in the current Fleet model because servers are already running before allocation; enforcing per-match config later likely needs RCON investigation, per-match GameServer creation, config-specific Fleets, or another safe server-side control path
+- Releasing a Match Room deletes the allocated Agones `GameServer` resource and relies on Fleet/FleetAutoscaler to replenish standby capacity
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
 - Reliability for this phase means every allocated server endpoint must be joinable, not just that some allocations succeed

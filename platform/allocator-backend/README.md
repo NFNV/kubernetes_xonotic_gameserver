@@ -4,9 +4,11 @@ This phase adds the first backend service that allocates Xonotic game servers pr
 
 It now also includes the first in-memory Match Room layer for the admin workflow. Match Rooms are the operator-facing objects; allocated Agones `GameServer` instances are the infrastructure assigned to those rooms.
 
+Per-match map, game mode, and max-player controls are intentionally deferred for now. The current Fleet uses already-running standby servers, so those values cannot be honestly applied at allocation time without a future RCON or per-match provisioning model. Live `getstatus` data remains the source of truth for what the running server is actually doing.
+
 ## Why This Backend Uses The Kubernetes API In-Cluster
 
-This backend runs as a Kubernetes Pod and only needs to create and read `GameServerAllocation` resources in the local cluster.
+This backend runs as a Kubernetes Pod and only needs to create/read `GameServerAllocation` resources and delete allocated `GameServer` resources in the local cluster.
 
 For this phase, using the Kubernetes API directly is the simplest and most practical option:
 
@@ -24,6 +26,7 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `GET /matches`: list in-memory Match Rooms
 - `GET /matches/<match_id>`: inspect one Match Room
 - `POST /matches/<match_id>/allocate`: allocate one Agones `GameServer` for a Match Room
+- `POST /matches/<match_id>/release`: end a Match Room and delete the allocated Agones `GameServer`
 - `POST /allocate`: creates a `GameServerAllocation`, waits for the result, and returns the allocated address and port
 
 `POST /allocate` remains available for direct/manual debugging. Normal admin flow should use Match Rooms.
@@ -39,7 +42,7 @@ Current real fields:
 - `status`
 - `created_at`
 - `allocated_at`
-- `max_players`
+- `released_at`
 - `game_mode`
 - allocated server address, port, GameServer name, and allocation request name
 - best-effort live status from Xonotic `getstatus`
@@ -48,6 +51,7 @@ Current temporary limitations:
 
 - live status is cached briefly and may be stale for a few seconds
 - status is unavailable until a room has an allocated server
+- map/mode/max-player controls are deferred pending RCON investigation or a per-match provisioning design
 - Match Room and live status state are not persisted across backend restarts
 
 Expected JSON response:
@@ -73,7 +77,7 @@ The backend:
 ## Files
 
 - `manifests/namespace.yaml`: namespace for the backend service
-- `manifests/rbac.yaml`: `ServiceAccount`, `Role`, and `RoleBinding`
+- `manifests/rbac.yaml`: `ServiceAccount`, `Role`, and `RoleBinding`; includes namespaced `GameServer` delete so release can remove an allocated server
 - `manifests/deployment.yaml`: backend Deployment
 - `manifests/service.yaml`: in-cluster ClusterIP Service
 
@@ -150,13 +154,15 @@ Create and allocate a Match Room:
 ```bash
 curl -fsS -X POST http://127.0.0.1:18080/matches \
   -H "content-type: application/json" \
-  -d '{"name":"Quarterfinal 1","max_players":8,"game_mode":"dm"}'
+  -d '{"name":"Quarterfinal 1"}'
 
 curl -fsS http://127.0.0.1:18080/matches
 
 curl -fsS http://127.0.0.1:18080/matches/<match_id>
 
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate
+
+curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/release
 ```
 
 Inspect the allocated server endpoint:

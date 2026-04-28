@@ -99,13 +99,14 @@ export default function App() {
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
   const [gameservers, setGameservers] = useState([]);
   const [matches, setMatches] = useState([]);
-  const [matchForm, setMatchForm] = useState({ name: "", max_players: "8", game_mode: "dm" });
+  const [matchForm, setMatchForm] = useState({ name: "" });
   const [latestAllocation, setLatestAllocation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [allocating, setAllocating] = useState(false);
   const [creatingMatch, setCreatingMatch] = useState(false);
   const [allocatingMatches, setAllocatingMatches] = useState({});
+  const [releasingMatches, setReleasingMatches] = useState({});
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [allocationHistory, setAllocationHistory] = useState([]);
   const [copyMessage, setCopyMessage] = useState("");
@@ -184,8 +185,6 @@ export default function App() {
     try {
       const payload = {
         name: matchForm.name.trim() || undefined,
-        max_players: matchForm.max_players ? Number(matchForm.max_players) : undefined,
-        game_mode: matchForm.game_mode.trim() || undefined,
       };
       const match = await fetchJson("/api/matches", {
         method: "POST",
@@ -193,7 +192,7 @@ export default function App() {
         body: JSON.stringify(payload),
       });
       setMatches((current) => [match, ...current]);
-      setMatchForm({ name: "", max_players: "8", game_mode: "dm" });
+      setMatchForm({ name: "" });
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
       setError({
@@ -222,6 +221,33 @@ export default function App() {
       setAllocatingMatches((current) => {
         const next = { ...current };
         delete next[matchId];
+        return next;
+      });
+    }
+  }
+
+  async function releaseMatch(match) {
+    const confirmed = window.confirm(`End match "${match.name}" and release its allocated server?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setReleasingMatches((current) => ({ ...current, [match.match_id]: true }));
+    setError(null);
+
+    try {
+      const updatedMatch = await fetchJson(`/api/matches/${match.match_id}/release`, { method: "POST" });
+      setMatches((current) => current.map((item) => (item.match_id === updatedMatch.match_id ? updatedMatch : item)));
+      await loadDashboard({ silent: true, source: "Release refresh" });
+    } catch (err) {
+      setError({
+        title: "Release failed",
+        message: err.message,
+      });
+    } finally {
+      setReleasingMatches((current) => {
+        const next = { ...current };
+        delete next[match.match_id];
         return next;
       });
     }
@@ -329,28 +355,14 @@ export default function App() {
               placeholder="Quarterfinal 1"
             />
           </label>
-          <label>
-            <span>Max players</span>
-            <input
-              min="1"
-              max="64"
-              type="number"
-              value={matchForm.max_players}
-              onChange={(event) => setMatchForm((current) => ({ ...current, max_players: event.target.value }))}
-            />
-          </label>
-          <label>
-            <span>Game mode</span>
-            <input
-              value={matchForm.game_mode}
-              onChange={(event) => setMatchForm((current) => ({ ...current, game_mode: event.target.value }))}
-              placeholder="dm"
-            />
-          </label>
           <button className="primary" type="submit" disabled={creatingMatch || loading}>
             {creatingMatch ? "Creating..." : "Create Match Room"}
           </button>
         </form>
+        <p className="deferred-note">
+          Map, mode, and max-player controls are intentionally deferred. Warm Fleet servers are already running before allocation, so the
+          dashboard shows live server status instead of pretending those values are enforceable controls.
+        </p>
 
         {loading ? (
           <p className="empty-state">Loading match rooms...</p>
@@ -363,11 +375,17 @@ export default function App() {
               const command = connectCommand(endpoint);
               const isAllocated = Boolean(match.allocated_server);
               const isAllocating = Boolean(allocatingMatches[match.match_id]) || match.status === "allocating";
+              const isReleasing = Boolean(releasingMatches[match.match_id]) || match.status === "releasing";
+              const isReleased = match.status === "released" || match.status === "finished";
               const liveStatus = match.live_status;
               const players = liveStatus?.players || [];
+              const liveMaxPlayers = liveStatus?.max_players ?? match.live_max_players;
 
               return (
-                <article className={`match-card ${isAllocated ? "match-card-allocated" : ""}`} key={match.match_id}>
+                <article
+                  className={`match-card ${isAllocated ? "match-card-allocated" : ""} ${isReleased ? "match-card-released" : ""}`}
+                  key={match.match_id}
+                >
                   <div className="match-card-header">
                     <div>
                       <h3>{match.name}</h3>
@@ -375,20 +393,20 @@ export default function App() {
                     </div>
                     <span className="state-badge">{match.status}</span>
                   </div>
-                  <dl className="match-details">
+                  <dl className="match-details live-config">
                     <div>
-                      <dt>Players</dt>
-                      <dd>
-                        {unknown(match.current_players)} / {match.max_players}
-                      </dd>
+                      <dt>Live Map</dt>
+                      <dd>{unknown(match.map)}</dd>
                     </div>
                     <div>
-                      <dt>Mode</dt>
+                      <dt>Live Mode</dt>
                       <dd>{unknown(match.game_mode)}</dd>
                     </div>
                     <div>
-                      <dt>Map</dt>
-                      <dd>{unknown(match.map)}</dd>
+                      <dt>Live Players</dt>
+                      <dd>
+                        {unknown(match.current_players)} / {unknown(liveMaxPlayers)}
+                      </dd>
                     </div>
                     <div>
                       <dt>Created</dt>
@@ -405,6 +423,9 @@ export default function App() {
                         <div className="button-row">
                           <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
                           <CopyButton text={command} label="Command" onCopy={copyText} />
+                          <button className="danger-button" type="button" onClick={() => void releaseMatch(match)} disabled={isReleasing}>
+                            {isReleasing ? "Releasing..." : "End Match"}
+                          </button>
                         </div>
                       </div>
 
@@ -412,7 +433,7 @@ export default function App() {
                         <div className="live-status-header">
                           <span>{liveStatusLabel(liveStatus)}</span>
                           <strong>
-                            {unknown(match.current_players)} / {match.max_players} players
+                            {unknown(match.current_players)} / {unknown(liveMaxPlayers)} players
                           </strong>
                         </div>
                         {liveStatus?.ok ? (
@@ -446,9 +467,14 @@ export default function App() {
                       </div>
                     </>
                   ) : (
-                    <button className="primary" type="button" onClick={() => void allocateMatch(match.match_id)} disabled={isAllocating}>
-                      {isAllocating ? "Allocating..." : "Allocate Server"}
+                    <button className="primary" type="button" onClick={() => void allocateMatch(match.match_id)} disabled={isAllocating || isReleased}>
+                      {isAllocating ? "Allocating..." : isReleased ? "Match Ended" : "Allocate Server"}
                     </button>
+                  )}
+                  {isReleased && (
+                    <p className="release-note">
+                      Match ended. The user-facing endpoint was removed and the allocated GameServer was released.
+                    </p>
                   )}
                 </article>
               );
