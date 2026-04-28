@@ -25,6 +25,11 @@ spec:
               value: xonotic-fleet
             - name: GAME_LABEL
               value: xonotic
+            - name: XONOTIC_RCON_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: xonotic-rcon
+                  key: XONOTIC_RCON_PASSWORD
           ports:
             - name: http
               containerPort: 8080

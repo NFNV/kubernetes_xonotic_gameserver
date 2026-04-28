@@ -14,6 +14,7 @@ fi
 : "${GCP_REGION:?GCP_REGION must be set}"
 : "${GCP_ZONE:?GCP_ZONE must be set}"
 : "${GKE_CLUSTER_NAME:?GKE_CLUSTER_NAME must be set}"
+: "${XONOTIC_RCON_PASSWORD:?XONOTIC_RCON_PASSWORD must be set}"
 
 infra_dir="${repo_root}/infra"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
@@ -32,6 +33,8 @@ required_ready_replicas="3"
 allocator_backend_namespace="xonotic-allocator-backend"
 allocator_backend_deployment_name="xonotic-allocator-backend"
 allocator_frontend_deployment_name="xonotic-allocator-frontend"
+rcon_secret_name="xonotic-rcon"
+rcon_password_b64="$(printf '%s' "${XONOTIC_RCON_PASSWORD}" | base64 | tr -d '\n')"
 
 cd "${infra_dir}"
 
@@ -51,6 +54,16 @@ credentials_command="$(terraform output -raw get_credentials_command)"
 bash -lc "${credentials_command}"
 
 kubectl apply -f "${agones_namespace_manifest}"
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${rcon_secret_name}
+  namespace: ${gameserver_namespace}
+type: Opaque
+data:
+  XONOTIC_RCON_PASSWORD: ${rcon_password_b64}
+EOF
 
 helm repo add agones https://agones.dev/chart/stable --force-update
 helm repo update
@@ -84,6 +97,16 @@ if [[ -z "${ready_replicas}" ]] || (( ready_replicas < required_ready_replicas )
 fi
 
 kubectl apply -f "${allocator_backend_namespace_manifest}"
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${rcon_secret_name}
+  namespace: ${allocator_backend_namespace}
+type: Opaque
+data:
+  XONOTIC_RCON_PASSWORD: ${rcon_password_b64}
+EOF
 kubectl apply -f "${allocator_backend_rbac_manifest}"
 kubectl apply -f "${allocator_backend_deployment_manifest}"
 kubectl apply -f "${allocator_backend_service_manifest}"

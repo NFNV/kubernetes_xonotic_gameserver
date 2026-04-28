@@ -1,12 +1,12 @@
 # RCON Admin Controls Investigation
 
-This is an investigation note only. Do not implement RCON-backed admin controls until the command behavior is verified against a running allocated `GameServer`.
+This document tracks the RCON investigation and the minimal backend-only smoke-test phase. Do not add frontend RCON controls until the smoke test is verified against a running allocated `GameServer`.
 
 ## Current Answer
 
 Xonotic RCON looks suitable for a small set of backend-owned admin actions, but it should not be exposed as a generic command runner.
 
-The recommended next implementation shape is:
+The recommended full implementation shape is:
 
 1. enable RCON on Fleet servers with a strong password from a Kubernetes `Secret`
 2. keep the password only in the Xonotic server container and allocator backend Pod environment
@@ -14,6 +14,17 @@ The recommended next implementation shape is:
 4. have the backend apply a whitelisted match configuration over RCON before returning the join endpoint
 5. verify the result with the existing read-only `getstatus` query
 6. return the endpoint only if verification succeeds or return a clear partial-allocation error
+
+The current implemented phase is smaller than that full shape:
+
+- `./scripts/up.sh` recreates Kubernetes Secrets from local `XONOTIC_RCON_PASSWORD`
+- the Xonotic Fleet receives `XONOTIC_RCON_PASSWORD`
+- the allocator backend receives `XONOTIC_RCON_PASSWORD`
+- the backend exposes `POST /matches/<match_id>/rcon-smoke-test`
+- the endpoint sends only a hardcoded `status` command by default
+- the endpoint can optionally send a hardcoded `say "RCON smoke test"` after `status`
+- no arbitrary RCON command endpoint exists
+- no frontend RCON controls exist
 
 ## Source Notes
 
@@ -49,13 +60,28 @@ RCON should target the same allocated `address:port`.
 
 The container already supports an optional `XONOTIC_RCON_PASSWORD` environment variable. `server/entrypoint.sh` writes `rcon_password "<value>"` into the generated `server.autoexec.cfg` only when the variable is non-empty.
 
-The Fleet does not currently set `XONOTIC_RCON_PASSWORD`, which is correct until the feature is implemented.
+The Fleet now receives `XONOTIC_RCON_PASSWORD` from a Kubernetes Secret named `xonotic-rcon`.
 
-Recommended enablement later:
+For local dev, set:
 
-1. create a Kubernetes `Secret` in `xonotic-agones`, for example `xonotic-rcon`
-2. add `XONOTIC_RCON_PASSWORD` to the Fleet server container from that Secret
-3. add the same Secret value to the allocator backend Pod as `XONOTIC_RCON_PASSWORD`
+```bash
+export XONOTIC_RCON_PASSWORD="change-me-local-dev-password"
+```
+
+The preferred local workflow is to copy `scripts/env.sh.example` to `scripts/env.sh` and edit the value there. `scripts/env.sh` is ignored by Git.
+
+`./scripts/up.sh` creates the Secret every time it brings the cluster up. Because Kubernetes Secrets are namespace-scoped, the script creates the same-named Secret in both namespaces:
+
+- `xonotic-agones/xonotic-rcon` for Fleet server Pods
+- `xonotic-allocator-backend/xonotic-rcon` for the allocator backend Pod
+
+That means a destroyed/recreated cluster does not need manual Secret repair as long as `XONOTIC_RCON_PASSWORD` is present in the local environment or `scripts/env.sh`.
+
+Recommended production-grade enablement later:
+
+1. create namespace-scoped Kubernetes Secrets named `xonotic-rcon`
+2. add `XONOTIC_RCON_PASSWORD` to the Fleet server container from the `xonotic-agones` Secret
+3. add the same Secret value to the allocator backend Pod from the `xonotic-allocator-backend` Secret
 4. do not expose the password through frontend config, API responses, logs, or errors
 5. rotate the Secret if it is ever copied into a local shell, logs, screenshots, or client console
 
@@ -175,7 +201,7 @@ Secret handling:
 - store the password in a Kubernetes `Secret`
 - mount it into the Xonotic Fleet as `XONOTIC_RCON_PASSWORD`
 - mount it into the allocator backend as `XONOTIC_RCON_PASSWORD`
-- do not put the password in manifests, `.env` examples, docs, or frontend build config
+- do not put the real password in manifests, docs, or frontend build config
 
 ## Recommendation
 
@@ -190,3 +216,122 @@ Use RCON only for structured live server controls:
 - optional broadcast message
 
 The first RCON implementation should be backend-only and allocation-time only: allocate a warm server, apply whitelisted config, verify with `getstatus`, then expose the endpoint.
+
+## Implemented Smoke-Test Endpoint
+
+Endpoint:
+
+```text
+POST /matches/<match_id>/rcon-smoke-test
+```
+
+Behavior:
+
+- requires the Match Room to exist
+- requires the Match Room to have an allocated server
+- requires `XONOTIC_RCON_PASSWORD` to be configured in the backend Pod
+- sends only `status` by default
+- optionally sends only `say "RCON smoke test"` when the request body includes `{"include_say": true}`
+- returns sanitized/truncated output
+- never returns or logs the RCON password
+
+Example success shape:
+
+```json
+{
+  "ok": true,
+  "target": {
+    "address": "34.176.10.20",
+    "port": 7003,
+    "allocated_game_server_name": "xonotic-fleet-abcde-fghij"
+  },
+  "commands": [
+    {
+      "ok": true,
+      "command": "status",
+      "response_expected": true,
+      "bytes": 1200,
+      "output": "hostname: Xonotic Agones Fleet\n..."
+    }
+  ],
+  "live_status": {
+    "ok": true,
+    "source": "getstatus"
+  }
+}
+```
+
+Expected failure cases:
+
+- `404 match_not_found`: the Match Room ID is wrong or backend memory was reset
+- `409 match_not_allocated`: the room exists but has no allocated server yet
+- `409 match_finished`: the room was already released
+- `503 rcon_not_configured`: backend Pod does not have `XONOTIC_RCON_PASSWORD`
+- `504 rcon_timeout`: RCON did not respond at the allocated endpoint
+- `502 rcon_network_error`: UDP send/receive failed
+
+## Smoke-Test Steps
+
+Bring the cluster up with RCON enabled:
+
+```bash
+cp scripts/env.sh.example scripts/env.sh
+```
+
+Edit `scripts/env.sh`, set the GCP values and replace `XONOTIC_RCON_PASSWORD`.
+
+```bash
+./scripts/up.sh
+```
+
+Port-forward the backend:
+
+```bash
+kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18080:8080
+```
+
+Create a Match Room:
+
+```bash
+MATCH_ID="$(curl -fsS -X POST http://127.0.0.1:18080/matches \
+  -H "content-type: application/json" \
+  -d '{"name":"RCON smoke test"}' | jq -r .match_id)"
+```
+
+Allocate a server:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/allocate"
+```
+
+Run the RCON status smoke test:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/rcon-smoke-test"
+```
+
+Optionally also send the hardcoded smoke message:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/rcon-smoke-test" \
+  -H "content-type: application/json" \
+  -d '{"include_say":true}'
+```
+
+Release the server when done:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/release"
+```
+
+## Security Limitations In This Phase
+
+This is still a dev-cluster smoke test:
+
+- the RCON password is stored in Kubernetes Secrets, not an external secret manager
+- the backend API has no authentication yet
+- anyone with access to the backend HTTP endpoint can call the smoke-test endpoint
+- the smoke-test endpoint does not expose arbitrary RCON, but it still proves privileged server control
+- local `scripts/env.sh` must stay uncommitted
+
+Before any non-local/admin-only use, add authentication around the backend/admin UI and move secret management to the platform's chosen secret-management model.

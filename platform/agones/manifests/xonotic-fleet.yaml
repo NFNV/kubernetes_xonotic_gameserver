@@ -41,6 +41,11 @@ spec:
                   value: "0"
                 - name: XONOTIC_MAXPLAYERS
                   value: "8"
+                - name: XONOTIC_RCON_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: xonotic-rcon
+                      key: XONOTIC_RCON_PASSWORD
                 - name: XONOTIC_RANDOM_START_MAP_ENABLE
                   value: "1"
                 - name: XONOTIC_MAP_POOL

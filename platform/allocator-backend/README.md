@@ -27,6 +27,7 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `GET /matches/<match_id>`: inspect one Match Room
 - `POST /matches/<match_id>/allocate`: allocate one Agones `GameServer` for a Match Room
 - `POST /matches/<match_id>/release`: end a Match Room and delete the allocated Agones `GameServer`
+- `POST /matches/<match_id>/rcon-smoke-test`: backend-only RCON verification for an allocated Match Room
 - `POST /allocate`: creates a `GameServerAllocation`, waits for the result, and returns the allocated address and port
 
 `POST /allocate` remains available for direct/manual debugging. Normal admin flow should use Match Rooms.
@@ -52,6 +53,7 @@ Current temporary limitations:
 - live status is cached briefly and may be stale for a few seconds
 - status is unavailable until a room has an allocated server
 - map/mode/max-player controls are deferred pending RCON investigation or a per-match provisioning design
+- RCON is currently limited to a backend-only smoke endpoint; there are no frontend RCON controls and no arbitrary command execution
 - Match Room and live status state are not persisted across backend restarts
 
 Expected JSON response:
@@ -116,6 +118,16 @@ Apply the namespace and RBAC:
 
 ```bash
 kubectl apply -f platform/allocator-backend/manifests/namespace.yaml
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: xonotic-rcon
+  namespace: xonotic-allocator-backend
+type: Opaque
+stringData:
+  XONOTIC_RCON_PASSWORD: ${XONOTIC_RCON_PASSWORD}
+EOF
 kubectl apply -f platform/allocator-backend/manifests/rbac.yaml
 ```
 
@@ -161,6 +173,8 @@ curl -fsS http://127.0.0.1:18080/matches
 curl -fsS http://127.0.0.1:18080/matches/<match_id>
 
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate
+
+curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/rcon-smoke-test
 
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/release
 ```

@@ -24,6 +24,9 @@ ALLOCATION_TIMEOUT_SECONDS = int(os.environ.get("ALLOCATION_TIMEOUT_SECONDS", "5
 ALLOCATION_POLL_INTERVAL_SECONDS = float(os.environ.get("ALLOCATION_POLL_INTERVAL_SECONDS", "0.25"))
 XONOTIC_STATUS_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_STATUS_TIMEOUT_SECONDS", "1"))
 XONOTIC_STATUS_CACHE_SECONDS = float(os.environ.get("XONOTIC_STATUS_CACHE_SECONDS", "5"))
+XONOTIC_RCON_PASSWORD = os.environ.get("XONOTIC_RCON_PASSWORD", "")
+XONOTIC_RCON_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_RCON_TIMEOUT_SECONDS", "2"))
+XONOTIC_RCON_OUTPUT_LIMIT = int(os.environ.get("XONOTIC_RCON_OUTPUT_LIMIT", "4000"))
 
 ALLOCATION_GROUP = "allocation.agones.dev"
 ALLOCATION_VERSION = "v1"
@@ -436,6 +439,108 @@ def get_cached_xonotic_status(address: str | None, port: int | None) -> dict[str
         }
 
     return status
+
+
+def sanitize_rcon_output(raw_response: bytes, password: str) -> str:
+    if raw_response.startswith(b"\xff\xff\xff\xff"):
+        raw_response = raw_response[4:]
+
+    output = raw_response.decode("utf-8", errors="replace")
+    output = output.replace(password, "[redacted]")
+    output = "".join(character for character in output if character == "\n" or character == "\t" or ord(character) >= 32)
+    output = output.strip()
+
+    if output.startswith("print\n"):
+        output = output.removeprefix("print\n").strip()
+    elif output.startswith("n"):
+        output = output[1:].strip()
+
+    if len(output) > XONOTIC_RCON_OUTPUT_LIMIT:
+        return f"{output[:XONOTIC_RCON_OUTPUT_LIMIT]}\n...[truncated]"
+
+    return output
+
+
+def send_rcon_command(address: str, port: int, command: str, *, expect_response: bool) -> dict[str, Any]:
+    if not XONOTIC_RCON_PASSWORD:
+        raise BackendApiError(
+            {
+                "error": "rcon_not_configured",
+                "message": "XONOTIC_RCON_PASSWORD is not configured for the allocator backend",
+            },
+            503,
+        )
+
+    packet = f"\xff\xff\xff\xffrcon {XONOTIC_RCON_PASSWORD} {command}\n".encode("utf-8")
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(XONOTIC_RCON_TIMEOUT_SECONDS)
+            sock.sendto(packet, (address, port))
+
+            if not expect_response:
+                return {
+                    "ok": True,
+                    "command": command.split(" ", 1)[0],
+                    "response_expected": False,
+                    "sent": True,
+                }
+
+            response, _ = sock.recvfrom(16384)
+    except socket.timeout as exc:
+        raise BackendApiError(
+            {
+                "error": "rcon_timeout",
+                "message": f"timed out waiting for RCON response from {address}:{port}",
+                "target": {"address": address, "port": port},
+                "command": command.split(" ", 1)[0],
+            },
+            504,
+        ) from exc
+    except OSError as exc:
+        raise BackendApiError(
+            {
+                "error": "rcon_network_error",
+                "message": str(exc),
+                "target": {"address": address, "port": port},
+                "command": command.split(" ", 1)[0],
+            },
+            502,
+        ) from exc
+
+    sanitized_output = sanitize_rcon_output(response, XONOTIC_RCON_PASSWORD)
+    return {
+        "ok": True,
+        "command": command.split(" ", 1)[0],
+        "response_expected": True,
+        "bytes": len(response),
+        "output": sanitized_output,
+    }
+
+
+def run_rcon_smoke_test(allocated_server: dict[str, Any], *, include_say: bool) -> dict[str, Any]:
+    address = allocated_server.get("address")
+    port = allocated_server.get("port")
+    if not address or not port:
+        raise BackendApiError({"error": "missing_allocated_endpoint", "message": "allocated server address or port is missing"}, 409)
+
+    target = {
+        "address": address,
+        "port": port,
+        "allocated_game_server_name": allocated_server.get("allocated_game_server_name"),
+    }
+    status_result = send_rcon_command(address, int(port), "status", expect_response=True)
+    commands = [status_result]
+
+    if include_say:
+        commands.append(send_rcon_command(address, int(port), 'say "RCON smoke test"', expect_response=False))
+
+    return {
+        "ok": True,
+        "target": target,
+        "commands": commands,
+        "live_status": get_cached_xonotic_status(address, int(port)),
+    }
 
 
 def wait_for_allocation(name: str) -> dict:
@@ -873,6 +978,36 @@ def release_match(match_id: str):
             STATUS_CACHE.pop(f"{released_server.get('address')}:{released_server.get('port')}", None)
 
     return jsonify(match_response(match_snapshot))
+
+
+@APP.post("/matches/<match_id>/rcon-smoke-test")
+def rcon_smoke_test(match_id: str):
+    try:
+        body = parse_json_body()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
+    include_say = body.get("include_say") is True or body.get("say") is True
+
+    with MATCHES_LOCK:
+        match = MATCHES.get(match_id)
+        if not match:
+            return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
+        if match["status"] in FINISHED_MATCH_STATUSES:
+            return jsonify({"error": "match_finished", "message": f"match {match_id} has already been released"}), 409
+
+        allocated_server = match.get("allocated_server")
+        if not allocated_server:
+            return jsonify({"error": "match_not_allocated", "message": f"match {match_id} does not have an allocated server"}), 409
+
+        allocated_server_snapshot = allocated_server.copy()
+
+    try:
+        result = run_rcon_smoke_test(allocated_server_snapshot, include_say=include_say)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
+    return jsonify(result)
 
 
 @APP.post("/allocate")

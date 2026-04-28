@@ -68,6 +68,7 @@ Required environment variables:
 - `GCP_REGION`
 - `GCP_ZONE`
 - `GKE_CLUSTER_NAME`
+- `XONOTIC_RCON_PASSWORD`
 
 You can either export them in your shell or copy `scripts/env.sh.example` to `scripts/env.sh` and edit the values there. The scripts source `scripts/env.sh` automatically if it exists.
 
@@ -83,6 +84,7 @@ Bring the infra and the current Agones phase up:
 - fetches kubeconfig credentials
 - installs or updates Agones with the repo's current Fleet-phase settings, including the narrow dynamic port range
 - applies the Xonotic Agones namespace, `Fleet`, and `FleetAutoscaler`
+- recreates the RCON Kubernetes Secrets from `XONOTIC_RCON_PASSWORD`
 - recreates the Fleet `GameServer` instances after the Agones upgrade so their live host ports match the repo's constrained dynamic port range
 - applies the allocator backend namespace, RBAC, Deployment, and Service
 - applies the allocator frontend Deployment and Service

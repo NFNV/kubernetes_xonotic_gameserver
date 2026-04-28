@@ -26,6 +26,7 @@ allocator_backend_service_manifest="${repo_root}/platform/allocator-backend/mani
 allocator_frontend_deployment_manifest="${repo_root}/platform/allocator-frontend/manifests/deployment.yaml"
 allocator_frontend_service_manifest="${repo_root}/platform/allocator-frontend/manifests/service.yaml"
 infra_dir="${repo_root}/infra"
+rcon_secret_name="xonotic-rcon"
 
 kubectl delete -f "${manifest_path}" --ignore-not-found=true || true
 kubectl delete -f "${agones_gameserver_manifest}" --ignore-not-found=true || true
@@ -33,10 +34,12 @@ kubectl delete -f "${allocator_frontend_service_manifest}" --ignore-not-found=tr
 kubectl delete -f "${allocator_frontend_deployment_manifest}" --ignore-not-found=true || true
 kubectl delete -f "${allocator_backend_service_manifest}" --ignore-not-found=true || true
 kubectl delete -f "${allocator_backend_deployment_manifest}" --ignore-not-found=true || true
+kubectl delete secret "${rcon_secret_name}" -n xonotic-allocator-backend --ignore-not-found=true || true
 kubectl delete -f "${allocator_backend_rbac_manifest}" --ignore-not-found=true || true
 kubectl delete -f "${allocator_backend_namespace_manifest}" --ignore-not-found=true || true
 kubectl delete -f "${agones_fleet_autoscaler_manifest}" --ignore-not-found=true || true
 kubectl delete -f "${agones_fleet_manifest}" --ignore-not-found=true || true
+kubectl delete secret "${rcon_secret_name}" -n xonotic-agones --ignore-not-found=true || true
 
 cd "${infra_dir}"
 
