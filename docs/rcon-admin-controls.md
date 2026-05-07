@@ -231,9 +231,19 @@ Behavior:
 - requires the Match Room to have an allocated server
 - requires `XONOTIC_RCON_PASSWORD` to be configured in the backend Pod
 - sends only `status` by default
+- tries DarkPlaces secure challenge RCON first
+- falls back to secure TIME RCON, then plaintext RCON
 - optionally sends only `say "RCON smoke test"` when the request body includes `{"include_say": true}`
 - returns sanitized/truncated output
 - never returns or logs the RCON password
+
+Protocol detail:
+
+- plaintext packet: `0xffffffff + "rcon <password> <command>"`
+- secure TIME packet: `0xffffffff + "srcon HMAC-MD4 TIME " + hmac + " " + "<timestamp.random> <command>"`
+- secure challenge packet: request `getchallenge`, strip packet prefix/NUL terminators from the `challenge` reply, then send `0xffffffff + "srcon HMAC-MD4 CHALLENGE " + hmac + " " + "<challenge> <command>"`
+
+DarkPlaces ignores plaintext RCON when `rcon_secure > 0`, and ignores secure TIME RCON when `rcon_secure > 1`, so the backend must not rely on the simple Quake-style packet or the TIME packet alone. Challenge RCON is the safest default for this smoke-test phase.
 
 Example success shape:
 

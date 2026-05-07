@@ -2,6 +2,7 @@
 import os
 import re
 import socket
+import struct
 import time
 import uuid
 from datetime import UTC, datetime
@@ -27,6 +28,11 @@ XONOTIC_STATUS_CACHE_SECONDS = float(os.environ.get("XONOTIC_STATUS_CACHE_SECOND
 XONOTIC_RCON_PASSWORD = os.environ.get("XONOTIC_RCON_PASSWORD", "")
 XONOTIC_RCON_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_RCON_TIMEOUT_SECONDS", "2"))
 XONOTIC_RCON_OUTPUT_LIMIT = int(os.environ.get("XONOTIC_RCON_OUTPUT_LIMIT", "4000"))
+XONOTIC_RCON_PROTOCOLS = tuple(
+    protocol.strip()
+    for protocol in os.environ.get("XONOTIC_RCON_PROTOCOLS", "secure-challenge,secure-time,plaintext").split(",")
+    if protocol.strip()
+)
 
 ALLOCATION_GROUP = "allocation.agones.dev"
 ALLOCATION_VERSION = "v1"
@@ -43,6 +49,8 @@ DEFAULT_MAX_PLAYERS = int(os.environ.get("DEFAULT_MATCH_MAX_PLAYERS", "8"))
 MAX_MATCH_PLAYERS_LIMIT = int(os.environ.get("MAX_MATCH_PLAYERS_LIMIT", "32"))
 FINISHED_MATCH_STATUSES = {"released", "finished"}
 PLAYER_STATUS_PATTERN = re.compile(r'^(?P<score>\S+)\s+(?P<ping>\d+)(?:\s+(?P<team>\d+))?\s+"(?P<name>.*)"$')
+
+RCON_PACKET_PREFIX = b"\xff\xff\xff\xff"
 
 
 class BackendApiError(Exception):
@@ -441,8 +449,73 @@ def get_cached_xonotic_status(address: str | None, port: int | None) -> dict[str
     return status
 
 
+def md4_digest(message: bytes) -> bytes:
+    def left_rotate(value: int, shift: int) -> int:
+        value &= 0xFFFFFFFF
+        return ((value << shift) | (value >> (32 - shift))) & 0xFFFFFFFF
+
+    def f(x: int, y: int, z: int) -> int:
+        return ((x & y) | (~x & z)) & 0xFFFFFFFF
+
+    def g(x: int, y: int, z: int) -> int:
+        return ((x & y) | (x & z) | (y & z)) & 0xFFFFFFFF
+
+    def h(x: int, y: int, z: int) -> int:
+        return (x ^ y ^ z) & 0xFFFFFFFF
+
+    original_bit_length = (8 * len(message)) & 0xFFFFFFFFFFFFFFFF
+    message += b"\x80"
+    while len(message) % 64 != 56:
+        message += b"\x00"
+    message += struct.pack("<Q", original_bit_length)
+
+    a = 0x67452301
+    b = 0xEFCDAB89
+    c = 0x98BADCFE
+    d = 0x10325476
+
+    for offset in range(0, len(message), 64):
+        x = list(struct.unpack("<16I", message[offset : offset + 64]))
+        aa, bb, cc, dd = a, b, c, d
+
+        for index in range(0, 16, 4):
+            a = left_rotate(a + f(b, c, d) + x[index], 3)
+            d = left_rotate(d + f(a, b, c) + x[index + 1], 7)
+            c = left_rotate(c + f(d, a, b) + x[index + 2], 11)
+            b = left_rotate(b + f(c, d, a) + x[index + 3], 19)
+
+        for index in (0, 1, 2, 3):
+            a = left_rotate(a + g(b, c, d) + x[index] + 0x5A827999, 3)
+            d = left_rotate(d + g(a, b, c) + x[index + 4] + 0x5A827999, 5)
+            c = left_rotate(c + g(d, a, b) + x[index + 8] + 0x5A827999, 9)
+            b = left_rotate(b + g(c, d, a) + x[index + 12] + 0x5A827999, 13)
+
+        for index in (0, 2, 1, 3):
+            a = left_rotate(a + h(b, c, d) + x[index] + 0x6ED9EBA1, 3)
+            d = left_rotate(d + h(a, b, c) + x[index + 8] + 0x6ED9EBA1, 9)
+            c = left_rotate(c + h(d, a, b) + x[index + 4] + 0x6ED9EBA1, 11)
+            b = left_rotate(b + h(c, d, a) + x[index + 12] + 0x6ED9EBA1, 15)
+
+        a = (a + aa) & 0xFFFFFFFF
+        b = (b + bb) & 0xFFFFFFFF
+        c = (c + cc) & 0xFFFFFFFF
+        d = (d + dd) & 0xFFFFFFFF
+
+    return struct.pack("<4I", a, b, c, d)
+
+
+def hmac_md4(key: bytes, message: bytes) -> bytes:
+    block_size = 64
+    if len(key) > block_size:
+        key = md4_digest(key)
+    key = key.ljust(block_size, b"\x00")
+    outer_key_pad = bytes(byte ^ 0x5C for byte in key)
+    inner_key_pad = bytes(byte ^ 0x36 for byte in key)
+    return md4_digest(outer_key_pad + md4_digest(inner_key_pad + message))
+
+
 def sanitize_rcon_output(raw_response: bytes, password: str) -> str:
-    if raw_response.startswith(b"\xff\xff\xff\xff"):
+    if raw_response.startswith(RCON_PACKET_PREFIX):
         raw_response = raw_response[4:]
 
     output = raw_response.decode("utf-8", errors="replace")
@@ -461,7 +534,83 @@ def sanitize_rcon_output(raw_response: bytes, password: str) -> str:
     return output
 
 
-def send_rcon_command(address: str, port: int, command: str, *, expect_response: bool) -> dict[str, Any]:
+def build_rcon_packet(command: str, protocol: str, challenge: str | None = None) -> bytes:
+    password = XONOTIC_RCON_PASSWORD.encode("utf-8")
+    command_bytes = command.encode("utf-8")
+
+    if protocol == "secure-time":
+        timestamp = f"{int(time.time())}.{uuid.uuid4().int % 1000000:06d}".encode("ascii")
+        signed_payload = timestamp + b" " + command_bytes
+        digest = hmac_md4(password, signed_payload)
+        return RCON_PACKET_PREFIX + b"srcon HMAC-MD4 TIME " + digest + b" " + signed_payload
+
+    if protocol == "secure-challenge":
+        if not challenge:
+            raise ValueError("secure-challenge requires a challenge")
+        signed_payload = challenge.encode("ascii") + b" " + command_bytes
+        digest = hmac_md4(password, signed_payload)
+        return RCON_PACKET_PREFIX + b"srcon HMAC-MD4 CHALLENGE " + digest + b" " + signed_payload
+
+    if protocol == "plaintext":
+        return RCON_PACKET_PREFIX + b"rcon " + password + b" " + command_bytes
+
+    raise ValueError(f"unsupported RCON protocol {protocol}")
+
+
+def receive_rcon_response(sock: socket.socket, address: str, port: int, command_name: str, protocol: str) -> bytes:
+    try:
+        response, _ = sock.recvfrom(16384)
+    except socket.timeout as exc:
+        APP.logger.warning("RCON timeout target=%s:%s command=%s protocol=%s", address, port, command_name, protocol)
+        raise BackendApiError(
+            {
+                "error": "rcon_timeout",
+                "message": f"timed out waiting for RCON response from {address}:{port}",
+                "target": {"address": address, "port": port},
+                "command": command_name,
+                "protocol": protocol,
+            },
+            504,
+        ) from exc
+
+    return response
+
+
+def request_rcon_challenge(sock: socket.socket, address: str, port: int, command_name: str) -> str:
+    APP.logger.info("RCON requesting challenge target=%s:%s command=%s protocol=secure-challenge", address, port, command_name)
+    sock.sendto(RCON_PACKET_PREFIX + b"getchallenge", (address, port))
+    APP.logger.info("RCON challenge request sent target=%s:%s command=%s protocol=secure-challenge", address, port, command_name)
+    response = receive_rcon_response(sock, address, port, command_name, "secure-challenge")
+
+    if response.startswith(RCON_PACKET_PREFIX):
+        response = response[4:]
+
+    decoded = response.decode("ascii", errors="replace").replace("\x00", "").strip()
+    if not decoded.startswith("challenge "):
+        raise BackendApiError(
+            {
+                "error": "rcon_invalid_challenge",
+                "message": f"unexpected RCON challenge response: {decoded[:80]}",
+                "target": {"address": address, "port": port},
+                "command": command_name,
+                "protocol": "secure-challenge",
+            },
+            502,
+        )
+
+    challenge = decoded.removeprefix("challenge ").split()[0]
+    APP.logger.info("RCON challenge received target=%s:%s command=%s protocol=secure-challenge", address, port, command_name)
+    return challenge
+
+
+def send_rcon_command(
+    address: str,
+    port: int,
+    command: str,
+    *,
+    expect_response: bool,
+    preferred_protocol: str | None = None,
+) -> dict[str, Any]:
     if not XONOTIC_RCON_PASSWORD:
         raise BackendApiError(
             {
@@ -471,51 +620,89 @@ def send_rcon_command(address: str, port: int, command: str, *, expect_response:
             503,
         )
 
-    packet = f"\xff\xff\xff\xffrcon {XONOTIC_RCON_PASSWORD} {command}\n".encode("utf-8")
+    command_name = command.split(" ", 1)[0]
+    protocols = (preferred_protocol,) if preferred_protocol else XONOTIC_RCON_PROTOCOLS
+    timeout_errors: list[dict[str, Any]] = []
 
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.settimeout(XONOTIC_RCON_TIMEOUT_SECONDS)
-            sock.sendto(packet, (address, port))
+    for protocol in protocols:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(XONOTIC_RCON_TIMEOUT_SECONDS)
+                challenge = request_rcon_challenge(sock, address, port, command_name) if protocol == "secure-challenge" else None
+                packet = build_rcon_packet(command, protocol, challenge)
 
-            if not expect_response:
-                return {
-                    "ok": True,
-                    "command": command.split(" ", 1)[0],
-                    "response_expected": False,
-                    "sent": True,
-                }
+                APP.logger.info("RCON sending target=%s:%s command=%s protocol=%s", address, port, command_name, protocol)
+                sock.sendto(packet, (address, port))
+                APP.logger.info("RCON packet sent target=%s:%s command=%s protocol=%s bytes=%s", address, port, command_name, protocol, len(packet))
 
-            response, _ = sock.recvfrom(16384)
-    except socket.timeout as exc:
+                if not expect_response:
+                    return {
+                        "ok": True,
+                        "command": command_name,
+                        "protocol": protocol,
+                        "response_expected": False,
+                        "sent": True,
+                    }
+
+                response = receive_rcon_response(sock, address, port, command_name, protocol)
+        except BackendApiError as exc:
+            if exc.payload.get("error") == "rcon_timeout":
+                timeout_errors.append(exc.payload)
+                continue
+            raise
+        except OSError as exc:
+            APP.logger.warning(
+                "RCON network error target=%s:%s command=%s protocol=%s error=%s",
+                address,
+                port,
+                command_name,
+                protocol,
+                exc,
+            )
+            raise BackendApiError(
+                {
+                    "error": "rcon_network_error",
+                    "message": str(exc),
+                    "target": {"address": address, "port": port},
+                    "command": command_name,
+                    "protocol": protocol,
+                },
+                502,
+            ) from exc
+
+        sanitized_output = sanitize_rcon_output(response, XONOTIC_RCON_PASSWORD)
+        APP.logger.info("RCON response received target=%s:%s command=%s protocol=%s bytes=%s", address, port, command_name, protocol, len(response))
+        return {
+            "ok": True,
+            "command": command_name,
+            "protocol": protocol,
+            "response_expected": True,
+            "bytes": len(response),
+            "output": sanitized_output,
+        }
+
+    if timeout_errors:
         raise BackendApiError(
             {
                 "error": "rcon_timeout",
                 "message": f"timed out waiting for RCON response from {address}:{port}",
                 "target": {"address": address, "port": port},
-                "command": command.split(" ", 1)[0],
+                "command": command_name,
+                "protocols_attempted": list(protocols),
+                "attempts": timeout_errors,
             },
             504,
-        ) from exc
-    except OSError as exc:
-        raise BackendApiError(
-            {
-                "error": "rcon_network_error",
-                "message": str(exc),
-                "target": {"address": address, "port": port},
-                "command": command.split(" ", 1)[0],
-            },
-            502,
-        ) from exc
+        )
 
-    sanitized_output = sanitize_rcon_output(response, XONOTIC_RCON_PASSWORD)
-    return {
-        "ok": True,
-        "command": command.split(" ", 1)[0],
-        "response_expected": True,
-        "bytes": len(response),
-        "output": sanitized_output,
-    }
+    raise BackendApiError(
+        {
+            "error": "rcon_protocol_error",
+            "message": "no RCON protocol attempts were configured",
+            "target": {"address": address, "port": port},
+            "command": command_name,
+        },
+        500,
+    )
 
 
 def run_rcon_smoke_test(allocated_server: dict[str, Any], *, include_say: bool) -> dict[str, Any]:
@@ -533,7 +720,15 @@ def run_rcon_smoke_test(allocated_server: dict[str, Any], *, include_say: bool) 
     commands = [status_result]
 
     if include_say:
-        commands.append(send_rcon_command(address, int(port), 'say "RCON smoke test"', expect_response=False))
+        commands.append(
+            send_rcon_command(
+                address,
+                int(port),
+                'say "RCON smoke test"',
+                expect_response=False,
+                preferred_protocol=status_result["protocol"],
+            )
+        )
 
     return {
         "ok": True,

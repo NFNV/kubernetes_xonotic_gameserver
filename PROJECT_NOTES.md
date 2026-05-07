@@ -94,6 +94,7 @@ This file is the running context log for the repository. Update it over time so 
 - Live player/map/score data should use read-only Xonotic `getstatus` first; avoid RCON unless a later feature truly requires command execution
 - Match Room map/mode/max-player controls are intentionally deferred in the current Fleet model because servers are already running before allocation; enforcing per-match config later likely needs RCON investigation, per-match GameServer creation, config-specific Fleets, or another safe server-side control path
 - `docs/rcon-admin-controls.md` captures the RCON investigation and the current backend-only smoke-test phase; `./scripts/up.sh` recreates namespace-scoped `xonotic-rcon` Secrets from local `XONOTIC_RCON_PASSWORD`
+- The RCON client should use DarkPlaces secure HMAC-MD4 challenge RCON first because plaintext RCON is ignored when `rcon_secure > 0` and secure TIME RCON is ignored when `rcon_secure > 1`; challenge replies may be NUL-terminated and must be stripped before signing `"<challenge> <command>"`
 - Releasing a Match Room deletes the allocated Agones `GameServer` resource and relies on Fleet/FleetAutoscaler to replenish standby capacity
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
