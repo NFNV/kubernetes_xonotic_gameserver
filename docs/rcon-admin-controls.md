@@ -1,6 +1,6 @@
 # RCON Admin Controls Investigation
 
-This document tracks the RCON investigation and the minimal backend-only smoke-test phase. Do not add frontend RCON controls until the smoke test is verified against a running allocated `GameServer`.
+This document tracks the RCON investigation and the first whitelisted admin-control phase. Do not add raw RCON command access.
 
 ## Current Answer
 
@@ -21,10 +21,13 @@ The current implemented phase is smaller than that full shape:
 - the Xonotic Fleet receives `XONOTIC_RCON_PASSWORD`
 - the allocator backend receives `XONOTIC_RCON_PASSWORD`
 - the backend exposes `POST /matches/<match_id>/rcon-smoke-test`
+- the backend exposes `POST /matches/<match_id>/admin/broadcast`
+- the backend exposes `POST /matches/<match_id>/admin/change-map`
 - the endpoint sends only a hardcoded `status` command by default
 - the endpoint can optionally send a hardcoded `say "RCON smoke test"` after `status`
+- the frontend exposes only structured broadcast and map-change controls for allocated Match Rooms
 - no arbitrary RCON command endpoint exists
-- no frontend RCON controls exist
+- no frontend raw command input exists
 
 ## Source Notes
 
@@ -244,6 +247,54 @@ Protocol detail:
 - secure challenge packet: request `getchallenge`, strip packet prefix/NUL terminators from the `challenge` reply, then send `0xffffffff + "srcon HMAC-MD4 CHALLENGE " + hmac + " " + "<challenge> <command>"`
 
 DarkPlaces ignores plaintext RCON when `rcon_secure > 0`, and ignores secure TIME RCON when `rcon_secure > 1`, so the backend must not rely on the simple Quake-style packet or the TIME packet alone. Challenge RCON is the safest default for this smoke-test phase.
+
+## Implemented Admin Actions
+
+The first frontend-visible RCON controls are deliberately narrow and whitelisted.
+
+Implemented endpoints:
+
+```text
+POST /matches/<match_id>/admin/broadcast
+POST /matches/<match_id>/admin/change-map
+```
+
+Safety model:
+
+- both endpoints require an existing allocated Match Room
+- neither endpoint accepts raw RCON commands
+- the RCON password stays in Kubernetes Secret-backed backend/server environment variables
+- the frontend never sees the RCON password
+- backend logs include action/target/protocol details, not the password
+- change-map is limited to an allowlist: `xoylent`, `stormkeep`, `implosion`, `drain`, `darkzone`, `solarium`
+- broadcast messages are required, trimmed, limited to 160 characters, and reject control characters, newlines, and command separators
+
+Broadcast request:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/admin/broadcast" \
+  -H "content-type: application/json" \
+  -d '{"message":"Match starts in 2 minutes"}'
+```
+
+The backend sends a whitelisted `say "<message>"` RCON command.
+
+Change-map request:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/admin/change-map" \
+  -H "content-type: application/json" \
+  -d '{"map":"stormkeep"}'
+```
+
+The backend sends `changelevel <map>`, clears cached live status, waits briefly, then queries `getstatus` and returns the best available updated live status.
+
+Known limitations:
+
+- command behavior depends on Xonotic accepting the chosen RCON command syntax
+- `getstatus` is best-effort and may briefly report the old map or a transient failure during a map change
+- game mode, max players, restart, kick/ban, and arbitrary commands remain intentionally deferred
+- there is still no backend/frontend authentication in this dev phase
 
 Example success shape:
 

@@ -28,6 +28,7 @@ XONOTIC_STATUS_CACHE_SECONDS = float(os.environ.get("XONOTIC_STATUS_CACHE_SECOND
 XONOTIC_RCON_PASSWORD = os.environ.get("XONOTIC_RCON_PASSWORD", "")
 XONOTIC_RCON_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_RCON_TIMEOUT_SECONDS", "2"))
 XONOTIC_RCON_OUTPUT_LIMIT = int(os.environ.get("XONOTIC_RCON_OUTPUT_LIMIT", "4000"))
+XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS = float(os.environ.get("XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS", "1"))
 XONOTIC_RCON_PROTOCOLS = tuple(
     protocol.strip()
     for protocol in os.environ.get("XONOTIC_RCON_PROTOCOLS", "secure-challenge,secure-time,plaintext").split(",")
@@ -49,6 +50,8 @@ DEFAULT_MAX_PLAYERS = int(os.environ.get("DEFAULT_MATCH_MAX_PLAYERS", "8"))
 MAX_MATCH_PLAYERS_LIMIT = int(os.environ.get("MAX_MATCH_PLAYERS_LIMIT", "32"))
 FINISHED_MATCH_STATUSES = {"released", "finished"}
 PLAYER_STATUS_PATTERN = re.compile(r'^(?P<score>\S+)\s+(?P<ping>\d+)(?:\s+(?P<team>\d+))?\s+"(?P<name>.*)"$')
+ADMIN_BROADCAST_MAX_LENGTH = 160
+ADMIN_ALLOWED_MAPS = ("xoylent", "stormkeep", "implosion", "drain", "darkzone", "solarium")
 
 RCON_PACKET_PREFIX = b"\xff\xff\xff\xff"
 
@@ -449,6 +452,14 @@ def get_cached_xonotic_status(address: str | None, port: int | None) -> dict[str
     return status
 
 
+def clear_status_cache(address: str | None, port: int | None) -> None:
+    if not address or not port:
+        return
+
+    with STATUS_CACHE_LOCK:
+        STATUS_CACHE.pop(f"{address}:{port}", None)
+
+
 def md4_digest(message: bytes) -> bytes:
     def left_rotate(value: int, shift: int) -> int:
         value &= 0xFFFFFFFF
@@ -642,6 +653,7 @@ def send_rcon_command(
                         "protocol": protocol,
                         "response_expected": False,
                         "sent": True,
+                        "output": None,
                     }
 
                 response = receive_rcon_response(sock, address, port, command_name, protocol)
@@ -735,6 +747,143 @@ def run_rcon_smoke_test(allocated_server: dict[str, Any], *, include_say: bool) 
         "target": target,
         "commands": commands,
         "live_status": get_cached_xonotic_status(address, int(port)),
+    }
+
+
+def validate_admin_broadcast_message(value: Any) -> str:
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_message", "message": "message is required and must be a string"}, 400)
+
+    message = value.strip()
+    if not message:
+        raise BackendApiError({"error": "invalid_message", "message": "message cannot be empty"}, 400)
+
+    if len(message) > ADMIN_BROADCAST_MAX_LENGTH:
+        raise BackendApiError(
+            {
+                "error": "invalid_message",
+                "message": f"message must be {ADMIN_BROADCAST_MAX_LENGTH} characters or fewer",
+            },
+            400,
+        )
+
+    if any(ord(character) < 32 or ord(character) == 127 for character in message) or ";" in message:
+        raise BackendApiError(
+            {
+                "error": "invalid_message",
+                "message": "message cannot contain control characters, newlines, or command separators",
+            },
+            400,
+        )
+
+    return message
+
+
+def validate_admin_map(value: Any) -> str:
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_map", "message": "map is required and must be a string"}, 400)
+
+    map_name = value.strip().lower()
+    if map_name not in ADMIN_ALLOWED_MAPS:
+        raise BackendApiError(
+            {
+                "error": "invalid_map",
+                "message": f"map must be one of: {', '.join(ADMIN_ALLOWED_MAPS)}",
+                "allowed_maps": list(ADMIN_ALLOWED_MAPS),
+            },
+            400,
+        )
+
+    return map_name
+
+
+def rcon_quote_argument(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def allocated_match_snapshot(match_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    with MATCHES_LOCK:
+        match = MATCHES.get(match_id)
+        if not match:
+            raise BackendApiError({"error": "match_not_found", "message": f"match {match_id} was not found"}, 404)
+        if match["status"] in FINISHED_MATCH_STATUSES:
+            raise BackendApiError({"error": "match_finished", "message": f"match {match_id} has already been released"}, 409)
+
+        allocated_server = match.get("allocated_server")
+        if not allocated_server:
+            raise BackendApiError({"error": "match_not_allocated", "message": f"match {match_id} does not have an allocated server"}, 409)
+
+        return match.copy(), allocated_server.copy()
+
+
+def run_admin_broadcast(match_id: str, message: str) -> dict[str, Any]:
+    match_snapshot, allocated_server = allocated_match_snapshot(match_id)
+    address = allocated_server.get("address")
+    port = allocated_server.get("port")
+    if not address or not port:
+        raise BackendApiError({"error": "missing_allocated_endpoint", "message": "allocated server address or port is missing"}, 409)
+
+    rcon_result = send_rcon_command(
+        address,
+        int(port),
+        f"say {rcon_quote_argument(message)}",
+        expect_response=False,
+    )
+
+    return {
+        "ok": True,
+        "action": "broadcast",
+        "message": message,
+        "match": match_response(match_snapshot),
+        "target": {
+            "address": address,
+            "port": port,
+            "allocated_game_server_name": allocated_server.get("allocated_game_server_name"),
+        },
+        "rcon": rcon_result,
+    }
+
+
+def run_admin_change_map(match_id: str, map_name: str) -> dict[str, Any]:
+    match_snapshot, allocated_server = allocated_match_snapshot(match_id)
+    address = allocated_server.get("address")
+    port = allocated_server.get("port")
+    if not address or not port:
+        raise BackendApiError({"error": "missing_allocated_endpoint", "message": "allocated server address or port is missing"}, 409)
+
+    rcon_result = send_rcon_command(
+        address,
+        int(port),
+        f"changelevel {map_name}",
+        expect_response=False,
+    )
+
+    clear_status_cache(address, int(port))
+    time.sleep(XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS)
+    live_status = get_cached_xonotic_status(address, int(port))
+
+    if live_status and live_status.get("ok"):
+        with MATCHES_LOCK:
+            match = MATCHES.get(match_id)
+            if match:
+                match["map"] = live_status.get("map") or match.get("map")
+                match["game_mode"] = live_status.get("game_mode") or match.get("game_mode")
+                match["current_players"] = live_status.get("current_players")
+                match_snapshot = match.copy()
+
+    return {
+        "ok": True,
+        "action": "change_map",
+        "map": map_name,
+        "match": match_response(match_snapshot),
+        "target": {
+            "address": address,
+            "port": port,
+            "allocated_game_server_name": allocated_server.get("allocated_game_server_name"),
+        },
+        "rcon": rcon_result,
+        "live_status": live_status,
     }
 
 
@@ -1169,8 +1318,7 @@ def release_match(match_id: str):
         match_snapshot = match.copy()
 
     if released_server:
-        with STATUS_CACHE_LOCK:
-            STATUS_CACHE.pop(f"{released_server.get('address')}:{released_server.get('port')}", None)
+        clear_status_cache(released_server.get("address"), released_server.get("port"))
 
     return jsonify(match_response(match_snapshot))
 
@@ -1199,6 +1347,30 @@ def rcon_smoke_test(match_id: str):
 
     try:
         result = run_rcon_smoke_test(allocated_server_snapshot, include_say=include_say)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
+    return jsonify(result)
+
+
+@APP.post("/matches/<match_id>/admin/broadcast")
+def admin_broadcast(match_id: str):
+    try:
+        body = parse_json_body()
+        message = validate_admin_broadcast_message(body.get("message"))
+        result = run_admin_broadcast(match_id, message)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
+    return jsonify(result)
+
+
+@APP.post("/matches/<match_id>/admin/change-map")
+def admin_change_map(match_id: str):
+    try:
+        body = parse_json_body()
+        map_name = validate_admin_map(body.get("map"))
+        result = run_admin_change_map(match_id, map_name)
     except BackendApiError as exc:
         return jsonify(exc.payload), exc.status_code
 

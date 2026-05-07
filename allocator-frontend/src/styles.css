@@ -317,7 +317,9 @@ button:disabled {
   letter-spacing: 0.12em;
 }
 
-.match-form input {
+.match-form input,
+.admin-control-row input,
+.admin-control-row select {
   width: 100%;
   border: 1px solid rgba(126, 176, 211, 0.18);
   border-radius: 12px;
@@ -328,12 +330,15 @@ button:disabled {
   outline: none;
 }
 
-.match-form input:focus {
+.match-form input:focus,
+.admin-control-row input:focus,
+.admin-control-row select:focus {
   border-color: rgba(0, 209, 255, 0.62);
   box-shadow: 0 0 0 3px rgba(0, 209, 255, 0.12);
 }
 
-.match-form input::placeholder {
+.match-form input::placeholder,
+.admin-control-row input::placeholder {
   color: #627b90;
 }
 
@@ -457,6 +462,61 @@ button:disabled {
 
 .assigned-server code {
   color: #dffbff;
+}
+
+.admin-controls {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(255, 177, 74, 0.22);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255, 107, 36, 0.12), transparent 13rem),
+    rgba(8, 14, 25, 0.62);
+}
+
+.admin-controls-header h4,
+.admin-controls-header p {
+  margin: 0;
+}
+
+.admin-controls-header h4 {
+  color: #ffb14a;
+  font-size: 0.95rem;
+}
+
+.admin-controls-header p {
+  margin-top: 3px;
+  color: #8fa8bc;
+  font-size: 0.84rem;
+}
+
+.admin-control-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.admin-control-row label {
+  display: grid;
+  gap: 6px;
+  color: #8fa8bc;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.admin-feedback {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(0, 255, 180, 0.18);
+  border-radius: 10px;
+  background: rgba(0, 255, 180, 0.08);
+  color: #9ffff0;
+  font-size: 0.86rem;
+  font-weight: 800;
 }
 
 .live-status {
@@ -741,6 +801,10 @@ th {
   }
 
   .match-form {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-control-row {
     grid-template-columns: 1fr;
   }
 

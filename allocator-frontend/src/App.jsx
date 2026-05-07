@@ -11,6 +11,8 @@ const EMPTY_FLEET = {
 
 const AUTO_REFRESH_MS = 7000;
 const HISTORY_LIMIT = 8;
+const ADMIN_MAPS = ["xoylent", "stormkeep", "implosion", "drain", "darkzone", "solarium"];
+const BROADCAST_MAX_LENGTH = 160;
 
 async function fetchJson(path, options) {
   const response = await fetch(path, options);
@@ -107,6 +109,10 @@ export default function App() {
   const [creatingMatch, setCreatingMatch] = useState(false);
   const [allocatingMatches, setAllocatingMatches] = useState({});
   const [releasingMatches, setReleasingMatches] = useState({});
+  const [adminActions, setAdminActions] = useState({});
+  const [adminFeedback, setAdminFeedback] = useState({});
+  const [broadcastForms, setBroadcastForms] = useState({});
+  const [changeMapForms, setChangeMapForms] = useState({});
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [allocationHistory, setAllocationHistory] = useState([]);
   const [copyMessage, setCopyMessage] = useState("");
@@ -253,6 +259,84 @@ export default function App() {
     }
   }
 
+  function adminActionKey(matchId, action) {
+    return `${matchId}:${action}`;
+  }
+
+  function setAdminActionLoading(matchId, action, isBusy) {
+    setAdminActions((current) => {
+      const next = { ...current };
+      const key = adminActionKey(matchId, action);
+      if (isBusy) {
+        next[key] = true;
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  }
+
+  async function broadcastToMatch(match) {
+    const message = (broadcastForms[match.match_id] || "").trim();
+    if (!message) {
+      setError({
+        title: "Broadcast failed",
+        message: "Enter a message before sending a broadcast.",
+      });
+      return;
+    }
+
+    setAdminActionLoading(match.match_id, "broadcast", true);
+    setError(null);
+
+    try {
+      const result = await fetchJson(`/api/matches/${match.match_id}/admin/broadcast`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      if (result.match) {
+        setMatches((current) => current.map((item) => (item.match_id === result.match.match_id ? result.match : item)));
+      }
+      setBroadcastForms((current) => ({ ...current, [match.match_id]: "" }));
+      setAdminFeedback((current) => ({ ...current, [match.match_id]: `Broadcast sent: "${result.message}"` }));
+    } catch (err) {
+      setError({
+        title: "Broadcast failed",
+        message: err.message,
+      });
+    } finally {
+      setAdminActionLoading(match.match_id, "broadcast", false);
+    }
+  }
+
+  async function changeMatchMap(match) {
+    const map = changeMapForms[match.match_id] || (ADMIN_MAPS.includes(match.map) ? match.map : ADMIN_MAPS[0]);
+
+    setAdminActionLoading(match.match_id, "change-map", true);
+    setError(null);
+
+    try {
+      const result = await fetchJson(`/api/matches/${match.match_id}/admin/change-map`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ map }),
+      });
+      if (result.match) {
+        setMatches((current) => current.map((item) => (item.match_id === result.match.match_id ? result.match : item)));
+      }
+      setAdminFeedback((current) => ({ ...current, [match.match_id]: `Map change sent: ${result.map}` }));
+      await loadDashboard({ silent: true, source: "Map change refresh" });
+    } catch (err) {
+      setError({
+        title: "Change map failed",
+        message: err.message,
+      });
+    } finally {
+      setAdminActionLoading(match.match_id, "change-map", false);
+    }
+  }
+
   async function allocateServer() {
     setAllocating(true);
     setError(null);
@@ -360,8 +444,7 @@ export default function App() {
           </button>
         </form>
         <p className="deferred-note">
-          Map, mode, and max-player controls are intentionally deferred. Warm Fleet servers are already running before allocation, so the
-          dashboard shows live server status instead of pretending those values are enforceable controls.
+          Mode and max-player controls are still deferred. Map changes now use a whitelisted RCON action against allocated rooms only.
         </p>
 
         {loading ? (
@@ -380,6 +463,11 @@ export default function App() {
               const liveStatus = match.live_status;
               const players = liveStatus?.players || [];
               const liveMaxPlayers = liveStatus?.max_players ?? match.live_max_players;
+              const broadcastValue = broadcastForms[match.match_id] || "";
+              const selectedMap = changeMapForms[match.match_id] || (ADMIN_MAPS.includes(match.map) ? match.map : ADMIN_MAPS[0]);
+              const isBroadcasting = Boolean(adminActions[adminActionKey(match.match_id, "broadcast")]);
+              const isChangingMap = Boolean(adminActions[adminActionKey(match.match_id, "change-map")]);
+              const feedback = adminFeedback[match.match_id];
 
               return (
                 <article
@@ -427,6 +515,57 @@ export default function App() {
                             {isReleasing ? "Releasing..." : "End Match"}
                           </button>
                         </div>
+                      </div>
+
+                      <div className="admin-controls">
+                        <div className="admin-controls-header">
+                          <div>
+                            <h4>Admin Controls</h4>
+                            <p>Whitelisted RCON actions only. No raw command access.</p>
+                          </div>
+                        </div>
+
+                        <form className="admin-control-row" onSubmit={(event) => {
+                          event.preventDefault();
+                          void broadcastToMatch(match);
+                        }}>
+                          <label>
+                            <span>Broadcast message</span>
+                            <input
+                              value={broadcastValue}
+                              maxLength={BROADCAST_MAX_LENGTH}
+                              onChange={(event) => setBroadcastForms((current) => ({ ...current, [match.match_id]: event.target.value }))}
+                              placeholder="Match starts in 2 minutes"
+                            />
+                          </label>
+                          <button className="secondary" type="submit" disabled={isBroadcasting || !broadcastValue.trim()}>
+                            {isBroadcasting ? "Sending..." : "Send Message"}
+                          </button>
+                        </form>
+
+                        <form className="admin-control-row" onSubmit={(event) => {
+                          event.preventDefault();
+                          void changeMatchMap(match);
+                        }}>
+                          <label>
+                            <span>Change map</span>
+                            <select
+                              value={selectedMap}
+                              onChange={(event) => setChangeMapForms((current) => ({ ...current, [match.match_id]: event.target.value }))}
+                            >
+                              {ADMIN_MAPS.map((mapName) => (
+                                <option key={mapName} value={mapName}>
+                                  {mapName}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button className="secondary" type="submit" disabled={isChangingMap}>
+                            {isChangingMap ? "Changing..." : "Change Map"}
+                          </button>
+                        </form>
+
+                        {feedback && <p className="admin-feedback">{feedback}</p>}
                       </div>
 
                       <div className={`live-status ${liveStatus?.ok ? "live-status-ok" : "live-status-muted"}`}>

@@ -4,7 +4,7 @@ This phase adds the first backend service that allocates Xonotic game servers pr
 
 It now also includes the first in-memory Match Room layer for the admin workflow. Match Rooms are the operator-facing objects; allocated Agones `GameServer` instances are the infrastructure assigned to those rooms.
 
-Per-match map, game mode, and max-player controls are intentionally deferred for now. The current Fleet uses already-running standby servers, so those values cannot be honestly applied at allocation time without a future RCON or per-match provisioning model. Live `getstatus` data remains the source of truth for what the running server is actually doing.
+Per-match game mode and max-player controls are intentionally deferred for now. The current Fleet uses already-running standby servers, so those values cannot be honestly applied at allocation time without a future RCON or per-match provisioning model. The current RCON admin-control phase supports only two whitelisted live actions for allocated rooms: broadcast a server message and change to an allowlisted map.
 
 ## Why This Backend Uses The Kubernetes API In-Cluster
 
@@ -28,6 +28,8 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `POST /matches/<match_id>/allocate`: allocate one Agones `GameServer` for a Match Room
 - `POST /matches/<match_id>/release`: end a Match Room and delete the allocated Agones `GameServer`
 - `POST /matches/<match_id>/rcon-smoke-test`: backend-only RCON verification for an allocated Match Room
+- `POST /matches/<match_id>/admin/broadcast`: broadcast a validated message to an allocated Match Room
+- `POST /matches/<match_id>/admin/change-map`: change an allocated Match Room to an allowlisted map
 - `POST /allocate`: creates a `GameServerAllocation`, waits for the result, and returns the allocated address and port
 
 `POST /allocate` remains available for direct/manual debugging. Normal admin flow should use Match Rooms.
@@ -52,8 +54,8 @@ Current temporary limitations:
 
 - live status is cached briefly and may be stale for a few seconds
 - status is unavailable until a room has an allocated server
-- map/mode/max-player controls are deferred pending RCON investigation or a per-match provisioning design
-- RCON is currently limited to a backend-only smoke endpoint; there are no frontend RCON controls and no arbitrary command execution
+- game mode and max-player controls are deferred pending a stronger RCON/per-match provisioning design
+- RCON controls are whitelisted only; there is no raw command endpoint and the frontend never receives the RCON password
 - Match Room and live status state are not persisted across backend restarts
 
 Expected JSON response:
@@ -175,6 +177,14 @@ curl -fsS http://127.0.0.1:18080/matches/<match_id>
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate
 
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/rcon-smoke-test
+
+curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/admin/broadcast \
+  -H "content-type: application/json" \
+  -d '{"message":"Match starts in 2 minutes"}'
+
+curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/admin/change-map \
+  -H "content-type: application/json" \
+  -d '{"map":"stormkeep"}'
 
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/release
 ```

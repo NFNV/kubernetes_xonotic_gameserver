@@ -5,7 +5,7 @@ This file is the running context log for the repository. Update it over time so 
 ## Current State
 
 - Stage: Phase 5 in-memory Match Rooms MVP
-- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, the in-cluster allocator backend exists, the FleetAutoscaler standby buffer exists, the operator-facing frontend exists, the backend/frontend now model in-memory Match Rooms above raw Agones allocations, allocated rooms expose best-effort live Xonotic `getstatus` telemetry, and rooms can be released by deleting the allocated Agones `GameServer`
+- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, the in-cluster allocator backend exists, the FleetAutoscaler standby buffer exists, the operator-facing frontend exists, the backend/frontend now model in-memory Match Rooms above raw Agones allocations, allocated rooms expose best-effort live Xonotic `getstatus` telemetry, rooms can be released by deleting the allocated Agones `GameServer`, and the first whitelisted RCON admin controls support broadcast message plus allowlisted map change
 - Goal: validate the first tournament-admin-shaped workflow where operators create Match Rooms and assign one allocated Xonotic server to each room, without adding auth, persistence, player accounts, brackets, or real matchmaking
 
 ## Locked-In Context
@@ -92,9 +92,10 @@ This file is the running context log for the repository. Update it over time so 
 - Match Rooms are now the admin-facing objects; allocated Agones `GameServer` instances are infrastructure backing those rooms
 - Match Room state is intentionally in-memory and disappears on backend Pod restart until a later persistence phase
 - Live player/map/score data should use read-only Xonotic `getstatus` first; avoid RCON unless a later feature truly requires command execution
-- Match Room map/mode/max-player controls are intentionally deferred in the current Fleet model because servers are already running before allocation; enforcing per-match config later likely needs RCON investigation, per-match GameServer creation, config-specific Fleets, or another safe server-side control path
-- `docs/rcon-admin-controls.md` captures the RCON investigation and the current backend-only smoke-test phase; `./scripts/up.sh` recreates namespace-scoped `xonotic-rcon` Secrets from local `XONOTIC_RCON_PASSWORD`
+- Match Room game mode and max-player controls are intentionally deferred in the current Fleet model; map changes are now supported only as a whitelisted RCON action against already allocated rooms
+- `docs/rcon-admin-controls.md` captures the RCON investigation, smoke-test endpoint, and first whitelisted admin-control phase; `./scripts/up.sh` recreates namespace-scoped `xonotic-rcon` Secrets from local `XONOTIC_RCON_PASSWORD`
 - The RCON client should use DarkPlaces secure HMAC-MD4 challenge RCON first because plaintext RCON is ignored when `rcon_secure > 0` and secure TIME RCON is ignored when `rcon_secure > 1`; challenge replies may be NUL-terminated and must be stripped before signing `"<challenge> <command>"`
+- RCON admin controls must remain whitelisted backend actions only; the current frontend exposes broadcast message and allowlisted map change for allocated Match Rooms, but no raw command input and no RCON password
 - Releasing a Match Room deletes the allocated Agones `GameServer` resource and relies on Fleet/FleetAutoscaler to replenish standby capacity
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
