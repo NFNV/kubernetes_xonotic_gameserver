@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 const EMPTY_FLEET = {
   name: "xonotic-fleet",
@@ -113,6 +113,8 @@ export default function App() {
   const [adminFeedback, setAdminFeedback] = useState({});
   const [broadcastForms, setBroadcastForms] = useState({});
   const [changeMapForms, setChangeMapForms] = useState({});
+  const [commandPanelServerName, setCommandPanelServerName] = useState("");
+  const [terminatingServers, setTerminatingServers] = useState({});
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [allocationHistory, setAllocationHistory] = useState([]);
   const [copyMessage, setCopyMessage] = useState("");
@@ -299,7 +301,10 @@ export default function App() {
         setMatches((current) => current.map((item) => (item.match_id === result.match.match_id ? result.match : item)));
       }
       setBroadcastForms((current) => ({ ...current, [match.match_id]: "" }));
-      setAdminFeedback((current) => ({ ...current, [match.match_id]: `Broadcast sent: "${result.message}"` }));
+      setAdminFeedback((current) => ({
+        ...current,
+        [match.match_id]: { type: "success", message: `Broadcast sent: "${result.message}"` },
+      }));
     } catch (err) {
       setError({
         title: "Broadcast failed",
@@ -325,7 +330,15 @@ export default function App() {
       if (result.match) {
         setMatches((current) => current.map((item) => (item.match_id === result.match.match_id ? result.match : item)));
       }
-      setAdminFeedback((current) => ({ ...current, [match.match_id]: `Map change sent: ${result.map}` }));
+      setAdminFeedback((current) => ({
+        ...current,
+        [match.match_id]: {
+          type: result.verified ? "success" : "warning",
+          message: result.verified
+            ? `Map change verified: ${result.map}`
+            : result.message || "Map change command sent, but live status verification is temporarily unavailable.",
+        },
+      }));
       await loadDashboard({ silent: true, source: "Map change refresh" });
     } catch (err) {
       setError({
@@ -334,6 +347,46 @@ export default function App() {
       });
     } finally {
       setAdminActionLoading(match.match_id, "change-map", false);
+    }
+  }
+
+  function linkedMatchForServer(serverName) {
+    return matches.find((match) => match.allocated_server?.allocated_game_server_name === serverName) || null;
+  }
+
+  async function terminateAllocatedServer(server) {
+    const linkedMatch = linkedMatchForServer(server.name);
+    const scope = linkedMatch ? `linked to "${linkedMatch.name}"` : "not linked to a Match Room";
+    const confirmed = window.confirm(
+      `Terminate allocated GameServer "${server.name}" (${scope})? This deletes the backing server and Fleet/FleetAutoscaler should replenish capacity.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setTerminatingServers((current) => ({ ...current, [server.name]: true }));
+    setError(null);
+
+    try {
+      const result = await fetchJson(`/api/allocated-servers/${encodeURIComponent(server.name)}/terminate`, { method: "POST" });
+      if (result.linked_match) {
+        setMatches((current) => current.map((item) => (item.match_id === result.linked_match.match_id ? result.linked_match : item)));
+      }
+      setCopyMessage(`Terminated ${server.name}; standby capacity should replenish.`);
+      window.setTimeout(() => setCopyMessage(""), 2400);
+      setCommandPanelServerName("");
+      await loadDashboard({ silent: true, source: "Terminate refresh" });
+    } catch (err) {
+      setError({
+        title: "Terminate failed",
+        message: err.message,
+      });
+    } finally {
+      setTerminatingServers((current) => {
+        const next = { ...current };
+        delete next[server.name];
+        return next;
+      });
     }
   }
 
@@ -532,6 +585,7 @@ export default function App() {
                           <label>
                             <span>Broadcast message</span>
                             <input
+                              id={`broadcast-${match.match_id}`}
                               value={broadcastValue}
                               maxLength={BROADCAST_MAX_LENGTH}
                               onChange={(event) => setBroadcastForms((current) => ({ ...current, [match.match_id]: event.target.value }))}
@@ -550,6 +604,7 @@ export default function App() {
                           <label>
                             <span>Change map</span>
                             <select
+                              id={`change-map-${match.match_id}`}
                               value={selectedMap}
                               onChange={(event) => setChangeMapForms((current) => ({ ...current, [match.match_id]: event.target.value }))}
                             >
@@ -565,7 +620,11 @@ export default function App() {
                           </button>
                         </form>
 
-                        {feedback && <p className="admin-feedback">{feedback}</p>}
+                        {feedback && (
+                          <p className={`admin-feedback ${feedback.type === "warning" ? "admin-feedback-warning" : ""}`}>
+                            {feedback.message || feedback}
+                          </p>
+                        )}
                       </div>
 
                       <div className={`live-status ${liveStatus?.ok ? "live-status-ok" : "live-status-muted"}`}>
@@ -577,6 +636,11 @@ export default function App() {
                         </div>
                         {liveStatus?.ok ? (
                           <>
+                            {match.last_status_error && (
+                              <p className="status-warning">
+                                Latest live status check failed, showing last known good status.
+                              </p>
+                            )}
                             {liveStatus.teams?.length > 0 && (
                               <div className="team-score-list">
                                 {liveStatus.teams.map((team) => (
@@ -652,51 +716,83 @@ export default function App() {
           </dl>
         </article>
 
-        <article className="panel">
-          <div className="panel-header">
-            <h2>Manual Direct Allocation</h2>
-            <span className="panel-meta">debug path</span>
+        <details className="panel debug-panel">
+          <summary>
+            <span>Advanced / Debug</span>
+            <small>Manual direct allocation for lower-level allocator testing only</small>
+          </summary>
+          <div className="debug-panel-body">
+            <p className="empty-state debug-copy">
+              This bypasses Match Rooms and should not be used as the normal operator workflow.
+            </p>
+            <button className="secondary debug-action" onClick={() => void allocateServer()} disabled={allocating || loading}>
+              {allocating ? "Allocating..." : "Allocate Direct Server"}
+            </button>
+            {latestAllocation ? (
+              <dl className="summary-list">
+                <div>
+                  <dt>GameServer</dt>
+                  <dd>{latestAllocation.allocated_game_server_name}</dd>
+                </div>
+                <div>
+                  <dt>Endpoint</dt>
+                  <dd className="join-endpoint">{latestEndpoint}</dd>
+                </div>
+                <div>
+                  <dt>Connection Helper</dt>
+                  <dd className="connection-command">{latestCommand}</dd>
+                </div>
+                <div>
+                  <dt>Request Object</dt>
+                  <dd>{latestAllocation.allocation_request_name || "Inline create response"}</dd>
+                </div>
+                <div className="button-row">
+                  <CopyButton text={latestEndpoint} label="Endpoint" onCopy={copyText} />
+                  <CopyButton text={latestCommand} label="Copy connect" onCopy={copyText} />
+                </div>
+              </dl>
+            ) : (
+              <p className="empty-state">No direct debug allocation yet in this browser session.</p>
+            )}
+
+            <div className="debug-history">
+              <div className="panel-header">
+                <h3>Manual Allocation History</h3>
+                <span className="panel-meta">{allocationHistory.length} recent debug allocations</span>
+              </div>
+              {allocationHistory.length === 0 ? (
+                <p className="empty-state">Successful direct debug allocations will appear here for this browser session.</p>
+              ) : (
+                <div className="history-list">
+                  {allocationHistory.map((allocation) => {
+                    const command = connectCommand(allocation.endpoint);
+
+                    return (
+                      <div className="history-item" key={`${allocation.allocated_game_server_name}-${allocation.timestamp}`}>
+                        <div>
+                          <strong>{allocation.allocated_game_server_name}</strong>
+                          <span>{allocation.timestamp}</span>
+                        </div>
+                        <code>{command}</code>
+                        <CopyButton text={command} label="Copy connect" onCopy={copyText} />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
-          <p className="empty-state debug-copy">
-            Use this only for lower-level allocator testing. Normal operator flow should allocate servers through Match Rooms.
-          </p>
-          <button className="secondary debug-action" onClick={() => void allocateServer()} disabled={allocating || loading}>
-            {allocating ? "Allocating..." : "Allocate Direct Server"}
-          </button>
-          {latestAllocation ? (
-            <dl className="summary-list">
-              <div>
-                <dt>GameServer</dt>
-                <dd>{latestAllocation.allocated_game_server_name}</dd>
-              </div>
-              <div>
-                <dt>Endpoint</dt>
-                <dd className="join-endpoint">{latestEndpoint}</dd>
-              </div>
-              <div>
-                <dt>Connection Helper</dt>
-                <dd className="connection-command">{latestCommand}</dd>
-              </div>
-              <div>
-                <dt>Request Object</dt>
-                <dd>{latestAllocation.allocation_request_name || "Inline create response"}</dd>
-              </div>
-              <div className="button-row">
-                <CopyButton text={latestEndpoint} label="Endpoint" onCopy={copyText} />
-                <CopyButton text={latestCommand} label="Command" onCopy={copyText} />
-              </div>
-            </dl>
-          ) : (
-            <p className="empty-state">No server allocated yet in this session.</p>
-          )}
-        </article>
+        </details>
       </section>
 
       <section className="panel">
         <div className="panel-header">
           <h2>Allocated Servers</h2>
-          <span className="panel-meta">{allocatedServers.length} infrastructure allocations</span>
+          <span className="panel-meta">{allocatedServers.length} backing infrastructure allocations</span>
         </div>
+        <p className="empty-state infra-note">
+          These are allocated Agones GameServers. Prefer Match Room controls when a server is linked to a room; terminate is for cleaning up allocated backing servers.
+        </p>
         {loading ? (
           <p className="empty-state">Loading allocated servers...</p>
         ) : allocatedServers.length === 0 ? (
@@ -717,51 +813,130 @@ export default function App() {
                 {allocatedServers.map((server) => {
                   const endpoint = serverEndpoint(server);
                   const command = connectCommand(endpoint);
+                  const linkedMatch = linkedMatchForServer(server.name);
+                  const isTerminating = Boolean(terminatingServers[server.name]);
+                  const isCommandPanelOpen = commandPanelServerName === server.name;
 
                   return (
-                    <tr key={server.name}>
-                      <td>{server.name}</td>
-                      <td className="join-endpoint">{endpoint}</td>
-                      <td className="connection-command">{command}</td>
-                      <td>{server.node_name || "-"}</td>
-                      <td>
-                        <div className="table-actions">
-                          <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
-                          <CopyButton text={command} label="Command" onCopy={copyText} />
-                        </div>
-                      </td>
-                    </tr>
+                    <Fragment key={server.name}>
+                      <tr>
+                        <td>
+                          <div className="server-name-cell">
+                            <strong>{server.name}</strong>
+                            <span>{linkedMatch ? `Match Room: ${linkedMatch.name}` : "No linked Match Room"}</span>
+                          </div>
+                        </td>
+                        <td className="join-endpoint">{endpoint}</td>
+                        <td className="connection-command">{command}</td>
+                        <td>{server.node_name || "-"}</td>
+                        <td>
+                          <div className="table-actions">
+                            <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
+                            <CopyButton text={command} label="Copy connect" onCopy={copyText} />
+                            <button
+                              className="copy-button"
+                              type="button"
+                              onClick={() => setCommandPanelServerName((current) => (current === server.name ? "" : server.name))}
+                            >
+                              Commands
+                            </button>
+                            <button
+                              className="danger-button"
+                              type="button"
+                              onClick={() => void terminateAllocatedServer(server)}
+                              disabled={isTerminating}
+                            >
+                              {isTerminating ? "Terminating..." : "Terminate"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {isCommandPanelOpen && (
+                        <tr className="command-panel-row">
+                          <td colSpan="5">
+                            <div className="command-panel">
+                              <div>
+                                <h4>Safe Commands</h4>
+                                <p>
+                                  Broadcast and map-change actions are available only through a linked Match Room. Direct/manual allocations can be terminated, but RCON commands stay disabled until they have a safe room context.
+                                </p>
+                              </div>
+                              {linkedMatch ? (
+                                <>
+                                  <form className="admin-control-row" onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void broadcastToMatch(linkedMatch);
+                                  }}>
+                                    <label>
+                                      <span>Broadcast message</span>
+                                      <input
+                                        value={broadcastForms[linkedMatch.match_id] || ""}
+                                        maxLength={BROADCAST_MAX_LENGTH}
+                                        onChange={(event) => setBroadcastForms((current) => ({
+                                          ...current,
+                                          [linkedMatch.match_id]: event.target.value,
+                                        }))}
+                                        placeholder="Match starts in 2 minutes"
+                                      />
+                                    </label>
+                                    <button
+                                      className="secondary"
+                                      type="submit"
+                                      disabled={Boolean(adminActions[adminActionKey(linkedMatch.match_id, "broadcast")]) || !(broadcastForms[linkedMatch.match_id] || "").trim()}
+                                    >
+                                      {adminActions[adminActionKey(linkedMatch.match_id, "broadcast")] ? "Sending..." : "Send Message"}
+                                    </button>
+                                  </form>
+
+                                  <form className="admin-control-row" onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void changeMatchMap(linkedMatch);
+                                  }}>
+                                    <label>
+                                      <span>Change map</span>
+                                      <select
+                                        value={changeMapForms[linkedMatch.match_id] || (ADMIN_MAPS.includes(linkedMatch.map) ? linkedMatch.map : ADMIN_MAPS[0])}
+                                        onChange={(event) => setChangeMapForms((current) => ({
+                                          ...current,
+                                          [linkedMatch.match_id]: event.target.value,
+                                        }))}
+                                      >
+                                        {ADMIN_MAPS.map((mapName) => (
+                                          <option key={mapName} value={mapName}>
+                                            {mapName}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <button
+                                      className="secondary"
+                                      type="submit"
+                                      disabled={Boolean(adminActions[adminActionKey(linkedMatch.match_id, "change-map")])}
+                                    >
+                                      {adminActions[adminActionKey(linkedMatch.match_id, "change-map")] ? "Changing..." : "Change Map"}
+                                    </button>
+                                  </form>
+                                  {adminFeedback[linkedMatch.match_id] && (
+                                    <p className={`admin-feedback ${adminFeedback[linkedMatch.match_id].type === "warning" ? "admin-feedback-warning" : ""}`}>
+                                      {adminFeedback[linkedMatch.match_id].message || adminFeedback[linkedMatch.match_id]}
+                                    </p>
+                                  )}
+                                  <span>Commands route through linked Match Room: {linkedMatch.name}.</span>
+                                </>
+                              ) : (
+                                <p className="empty-state">
+                                  Command actions disabled: this allocated server is not linked to an in-memory Match Room.
+                                </p>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>
             </table>
-          </div>
-        )}
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Manual Allocation History</h2>
-          <span className="panel-meta">{allocationHistory.length} recent successful allocations</span>
-        </div>
-        {allocationHistory.length === 0 ? (
-          <p className="empty-state">Successful allocations will appear here for this browser session.</p>
-        ) : (
-          <div className="history-list">
-            {allocationHistory.map((allocation) => {
-              const command = connectCommand(allocation.endpoint);
-
-              return (
-                <div className="history-item" key={`${allocation.allocated_game_server_name}-${allocation.timestamp}`}>
-                  <div>
-                    <strong>{allocation.allocated_game_server_name}</strong>
-                    <span>{allocation.timestamp}</span>
-                  </div>
-                  <code>{command}</code>
-                  <CopyButton text={command} label="Copy command" onCopy={copyText} />
-                </div>
-              );
-            })}
           </div>
         )}
       </section>

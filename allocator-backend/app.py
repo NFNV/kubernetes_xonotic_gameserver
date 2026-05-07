@@ -29,6 +29,8 @@ XONOTIC_RCON_PASSWORD = os.environ.get("XONOTIC_RCON_PASSWORD", "")
 XONOTIC_RCON_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_RCON_TIMEOUT_SECONDS", "2"))
 XONOTIC_RCON_OUTPUT_LIMIT = int(os.environ.get("XONOTIC_RCON_OUTPUT_LIMIT", "4000"))
 XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS = float(os.environ.get("XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS", "1"))
+XONOTIC_RCON_CHANGE_MAP_VERIFY_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_RCON_CHANGE_MAP_VERIFY_TIMEOUT_SECONDS", "12"))
+XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS = float(os.environ.get("XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS", "1"))
 XONOTIC_RCON_PROTOCOLS = tuple(
     protocol.strip()
     for protocol in os.environ.get("XONOTIC_RCON_PROTOCOLS", "secure-challenge,secure-time,plaintext").split(",")
@@ -443,11 +445,12 @@ def get_cached_xonotic_status(address: str | None, port: int | None) -> dict[str
         APP.logger.info("Xonotic getstatus query failed for %s: %s", cache_key, exc)
         status = live_status_error_payload(str(exc))
 
-    with STATUS_CACHE_LOCK:
-        STATUS_CACHE[cache_key] = {
-            "expires_at": now + XONOTIC_STATUS_CACHE_SECONDS,
-            "status": status,
-        }
+    if status.get("ok"):
+        with STATUS_CACHE_LOCK:
+            STATUS_CACHE[cache_key] = {
+                "expires_at": now + XONOTIC_STATUS_CACHE_SECONDS,
+                "status": status,
+            }
 
     return status
 
@@ -458,6 +461,56 @@ def clear_status_cache(address: str | None, port: int | None) -> None:
 
     with STATUS_CACHE_LOCK:
         STATUS_CACHE.pop(f"{address}:{port}", None)
+
+
+def apply_successful_live_status(match: dict[str, Any], live_status: dict[str, Any]) -> None:
+    match["live_status"] = live_status
+    match["last_status_error"] = None
+    match["last_status_error_at"] = None
+    match["current_players"] = live_status.get("current_players")
+    match["live_max_players"] = live_status.get("max_players")
+    match["game_mode"] = live_status.get("game_mode") or match.get("game_mode")
+    match["map"] = live_status.get("map") or match.get("map")
+
+
+def apply_live_status_error(match: dict[str, Any], error_status: dict[str, Any]) -> None:
+    match["last_status_error"] = error_status
+    match["last_status_error_at"] = error_status.get("queried_at") or utc_now()
+
+
+def update_stored_match_live_status(match_id: str, status: dict[str, Any]) -> dict[str, Any] | None:
+    with MATCHES_LOCK:
+        stored_match = MATCHES.get(match_id)
+        if not stored_match:
+            return None
+
+        if status.get("ok"):
+            apply_successful_live_status(stored_match, status)
+        else:
+            apply_live_status_error(stored_match, status)
+
+        return stored_match.copy()
+
+
+def query_live_status_with_preservation(match: dict[str, Any]) -> dict[str, Any] | None:
+    allocated_server = match.get("allocated_server")
+    if not allocated_server:
+        return None
+
+    status = get_cached_xonotic_status(allocated_server.get("address"), allocated_server.get("port"))
+    if not status:
+        return match.get("live_status")
+
+    if status.get("ok"):
+        apply_successful_live_status(match, status)
+    else:
+        apply_live_status_error(match, status)
+
+    stored_snapshot = update_stored_match_live_status(match["match_id"], status)
+    if stored_snapshot:
+        match.update(stored_snapshot)
+
+    return match.get("live_status") or status
 
 
 def md4_digest(message: bytes) -> bytes:
@@ -845,6 +898,67 @@ def run_admin_broadcast(match_id: str, message: str) -> dict[str, Any]:
     }
 
 
+def verify_change_map_status(address: str, port: int, expected_map: str) -> dict[str, Any]:
+    time.sleep(XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS)
+    deadline = time.monotonic() + XONOTIC_RCON_CHANGE_MAP_VERIFY_TIMEOUT_SECONDS
+    last_error = None
+    last_live_status = None
+
+    while time.monotonic() <= deadline:
+        try:
+            live_status = query_xonotic_status(address, port)
+        except Exception as exc:
+            APP.logger.info("Xonotic getstatus verification failed for %s:%s after changelevel: %s", address, port, exc)
+            last_error = live_status_error_payload(str(exc))
+        else:
+            last_live_status = live_status
+            with STATUS_CACHE_LOCK:
+                STATUS_CACHE[f"{address}:{port}"] = {
+                    "expires_at": time.monotonic() + XONOTIC_STATUS_CACHE_SECONDS,
+                    "status": live_status,
+                }
+
+            if live_status.get("map") == expected_map:
+                return {
+                    "ok": True,
+                    "verified": True,
+                    "expected_map": expected_map,
+                    "actual_map": live_status.get("map"),
+                    "live_status": live_status,
+                    "error": None,
+                }
+
+            last_error = {
+                "ok": False,
+                "source": "getstatus",
+                "queried_at": utc_now(),
+                "error": "change_map_verification_failed",
+                "message": f"expected map {expected_map}, got {live_status.get('map') or 'unknown'}",
+                "expected_map": expected_map,
+                "actual_map": live_status.get("map"),
+            }
+
+        time.sleep(XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS)
+
+    return {
+        "ok": False,
+        "verified": False,
+        "expected_map": expected_map,
+        "actual_map": last_live_status.get("map") if last_live_status else None,
+        "live_status": last_live_status,
+        "error": last_error
+        or {
+            "ok": False,
+            "source": "getstatus",
+            "queried_at": utc_now(),
+            "error": "change_map_verification_failed",
+            "message": "live status verification is temporarily unavailable",
+            "expected_map": expected_map,
+            "actual_map": None,
+        },
+    }
+
+
 def run_admin_change_map(match_id: str, map_name: str) -> dict[str, Any]:
     match_snapshot, allocated_server = allocated_match_snapshot(match_id)
     address = allocated_server.get("address")
@@ -860,22 +974,36 @@ def run_admin_change_map(match_id: str, map_name: str) -> dict[str, Any]:
     )
 
     clear_status_cache(address, int(port))
-    time.sleep(XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS)
-    live_status = get_cached_xonotic_status(address, int(port))
+    verification = verify_change_map_status(address, int(port), map_name)
+    live_status = verification.get("live_status")
 
     if live_status and live_status.get("ok"):
         with MATCHES_LOCK:
             match = MATCHES.get(match_id)
             if match:
-                match["map"] = live_status.get("map") or match.get("map")
-                match["game_mode"] = live_status.get("game_mode") or match.get("game_mode")
-                match["current_players"] = live_status.get("current_players")
+                apply_successful_live_status(match, live_status)
+                match["change_map_verification"] = verification
+                if not verification.get("verified"):
+                    apply_live_status_error(match, verification["error"])
+                match_snapshot = match.copy()
+    else:
+        with MATCHES_LOCK:
+            match = MATCHES.get(match_id)
+            if match:
+                match["change_map_verification"] = verification
+                apply_live_status_error(match, verification["error"])
                 match_snapshot = match.copy()
 
     return {
-        "ok": True,
+        "ok": verification.get("verified") is True,
         "action": "change_map",
         "map": map_name,
+        "rcon_sent": True,
+        "verified": verification.get("verified") is True,
+        "error": None if verification.get("verified") else "change_map_verification_failed",
+        "message": None
+        if verification.get("verified")
+        else "Map change command sent, but live status verification is temporarily unavailable.",
         "match": match_response(match_snapshot),
         "target": {
             "address": address,
@@ -883,6 +1011,7 @@ def run_admin_change_map(match_id: str, map_name: str) -> dict[str, Any]:
             "allocated_game_server_name": allocated_server.get("allocated_game_server_name"),
         },
         "rcon": rcon_result,
+        "change_map_verification": verification,
         "live_status": live_status,
     }
 
@@ -1014,6 +1143,100 @@ def delete_gameserver(name: str) -> dict[str, Any]:
     return {"deleted": True, "already_missing": False}
 
 
+def get_gameserver(name: str) -> dict[str, Any]:
+    try:
+        return custom_objects_api.get_namespaced_custom_object(
+            group="agones.dev",
+            version="v1",
+            namespace=AGONES_NAMESPACE,
+            plural="gameservers",
+            name=name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            raise BackendApiError(
+                {
+                    "error": "gameserver_not_found",
+                    "message": f"GameServer {name} was not found",
+                    "resource_type": GAMESERVER_RESOURCE_KIND,
+                    "namespace": AGONES_NAMESPACE,
+                    "name": name,
+                },
+                404,
+            ) from exc
+        raise_kubernetes_api_error(
+            operation="get",
+            resource_type=GAMESERVER_RESOURCE_KIND,
+            namespace=AGONES_NAMESPACE,
+            name=name,
+            request_context={"gameserver_name": name},
+            exc=exc,
+        )
+    except Exception as exc:
+        raise BackendApiError({"error": "gameserver_read_failed", "message": str(exc), "gameserver_name": name}, 500) from exc
+
+
+def linked_match_for_gameserver(name: str) -> dict[str, Any] | None:
+    for match in MATCHES.values():
+        allocated_server = match.get("allocated_server") or {}
+        if allocated_server.get("allocated_game_server_name") == name:
+            return match
+
+    return None
+
+
+def terminate_allocated_gameserver(name: str) -> dict[str, Any]:
+    gameserver = get_gameserver(name)
+    summary = extract_gameserver_summary(gameserver)
+
+    if summary.get("state") != "Allocated":
+        raise BackendApiError(
+            {
+                "error": "gameserver_not_allocated",
+                "message": f"GameServer {name} is {summary.get('state') or 'unknown'}, not Allocated",
+                "gameserver": summary,
+            },
+            409,
+        )
+
+    with MATCHES_LOCK:
+        linked_match = linked_match_for_gameserver(name)
+        if linked_match and linked_match["status"] not in FINISHED_MATCH_STATUSES:
+            linked_match["status"] = "releasing"
+
+    try:
+        release_result = delete_gameserver(name)
+    except BackendApiError:
+        with MATCHES_LOCK:
+            linked_match = linked_match_for_gameserver(name)
+            if linked_match and linked_match["status"] == "releasing":
+                linked_match["status"] = "allocated"
+        raise
+
+    linked_match_snapshot = None
+
+    with MATCHES_LOCK:
+        linked_match = linked_match_for_gameserver(name)
+        if linked_match:
+            released_server = linked_match.get("allocated_server")
+            linked_match["released_server"] = released_server
+            linked_match["release_result"] = release_result
+            linked_match["allocated_server"] = None
+            linked_match["released_at"] = utc_now()
+            linked_match["status"] = "released"
+            linked_match_snapshot = linked_match.copy()
+
+    clear_status_cache(summary.get("address"), summary.get("port"))
+
+    return {
+        "terminated": release_result.get("deleted") is True,
+        "already_missing": release_result.get("already_missing") is True,
+        "gameserver": summary,
+        "release_result": release_result,
+        "linked_match": match_response(linked_match_snapshot) if linked_match_snapshot else None,
+    }
+
+
 def parse_json_body() -> dict[str, Any]:
     if not request.data:
         return {}
@@ -1055,19 +1278,10 @@ def validate_max_players(value: Any) -> int:
 
 def match_response(match: dict[str, Any]) -> dict[str, Any]:
     allocated_server = match["allocated_server"]
-    live_status = None
-    current_players = match["current_players"]
-    live_max_players = None
-    game_mode = match["game_mode"]
-    map_name = match["map"]
+    live_status = match.get("live_status")
 
     if allocated_server:
-        live_status = get_cached_xonotic_status(allocated_server.get("address"), allocated_server.get("port"))
-        if live_status and live_status.get("ok"):
-            current_players = live_status.get("current_players")
-            live_max_players = live_status.get("max_players")
-            game_mode = live_status.get("game_mode") or game_mode
-            map_name = live_status.get("map") or map_name
+        live_status = query_live_status_with_preservation(match)
 
     return {
         "match_id": match["match_id"],
@@ -1077,10 +1291,13 @@ def match_response(match: dict[str, Any]) -> dict[str, Any]:
         "allocated_at": match["allocated_at"],
         "released_at": match.get("released_at"),
         "max_players": match["max_players"],
-        "current_players": current_players,
-        "game_mode": game_mode,
-        "map": map_name,
-        "live_max_players": live_max_players,
+        "current_players": match["current_players"],
+        "game_mode": match["game_mode"],
+        "map": match["map"],
+        "live_max_players": match.get("live_max_players"),
+        "last_status_error": match.get("last_status_error"),
+        "last_status_error_at": match.get("last_status_error_at"),
+        "change_map_verification": match.get("change_map_verification"),
         "released_server": match.get("released_server"),
         "release_result": match.get("release_result"),
         "allocated_server": allocated_server,
@@ -1103,8 +1320,13 @@ def build_match(body: dict[str, Any]) -> dict[str, Any]:
         "released_at": None,
         "max_players": validate_max_players(body.get("max_players")),
         "current_players": None,
+        "live_max_players": None,
         "game_mode": None,
         "map": None,
+        "live_status": None,
+        "last_status_error": None,
+        "last_status_error_at": None,
+        "change_map_verification": None,
         "allocated_server": None,
         "released_server": None,
         "release_result": None,
@@ -1371,6 +1593,16 @@ def admin_change_map(match_id: str):
         body = parse_json_body()
         map_name = validate_admin_map(body.get("map"))
         result = run_admin_change_map(match_id, map_name)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
+    return jsonify(result)
+
+
+@APP.post("/allocated-servers/<gameserver_name>/terminate")
+def terminate_allocated_server(gameserver_name: str):
+    try:
+        result = terminate_allocated_gameserver(gameserver_name)
     except BackendApiError as exc:
         return jsonify(exc.payload), exc.status_code
 

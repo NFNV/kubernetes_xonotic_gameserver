@@ -30,6 +30,7 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `POST /matches/<match_id>/rcon-smoke-test`: backend-only RCON verification for an allocated Match Room
 - `POST /matches/<match_id>/admin/broadcast`: broadcast a validated message to an allocated Match Room
 - `POST /matches/<match_id>/admin/change-map`: change an allocated Match Room to an allowlisted map
+- `POST /allocated-servers/<gameserver_name>/terminate`: terminate an allocated GameServer directly after validating it is `Allocated`
 - `POST /allocate`: creates a `GameServerAllocation`, waits for the result, and returns the allocated address and port
 
 `POST /allocate` remains available for direct/manual debugging. Normal admin flow should use Match Rooms.
@@ -185,6 +186,8 @@ curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/admin/broadcast \
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/admin/change-map \
   -H "content-type: application/json" \
   -d '{"map":"stormkeep"}'
+
+curl -fsS -X POST http://127.0.0.1:18080/allocated-servers/<gameserver_name>/terminate
 
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/release
 ```

@@ -268,6 +268,8 @@ Safety model:
 - backend logs include action/target/protocol details, not the password
 - change-map is limited to an allowlist: `xoylent`, `stormkeep`, `implosion`, `drain`, `darkzone`, `solarium`
 - broadcast messages are required, trimmed, limited to 160 characters, and reject control characters, newlines, and command separators
+- allocated-server table command actions route through the linked Match Room when available
+- direct/manual allocated servers do not expose RCON actions until they have a safe Match Room context
 
 Broadcast request:
 
@@ -287,12 +289,22 @@ curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/admin/change-map" 
   -d '{"map":"stormkeep"}'
 ```
 
-The backend sends `changelevel <map>`, clears cached live status, waits briefly, then queries `getstatus` and returns the best available updated live status.
+The backend sends `changelevel <map>`, clears cached live status, waits briefly, then retries `getstatus` for a short verification window.
+
+Verification behavior:
+
+- waits 1 second after the RCON command
+- retries `getstatus` every 1 second for about 12 seconds
+- if `getstatus` succeeds and reports the requested map, returns `verified: true`
+- if `getstatus` succeeds but reports another map until the timeout, returns `verified: false` with verification details
+- if `getstatus` times out during map reload, returns partial success with `rcon_sent: true`, `verified: false`, and `error: "change_map_verification_failed"`
+- transient `getstatus` failures are stored separately as `last_status_error` / `last_status_error_at`
+- the previous successful `live_status` is preserved instead of being overwritten by a transient timeout
 
 Known limitations:
 
 - command behavior depends on Xonotic accepting the chosen RCON command syntax
-- `getstatus` is best-effort and may briefly report the old map or a transient failure during a map change
+- `getstatus` is best-effort and may briefly report the old map or a transient failure during a map change; the UI shows a warning and keeps the last known good status in that case
 - game mode, max players, restart, kick/ban, and arbitrary commands remain intentionally deferred
 - there is still no backend/frontend authentication in this dev phase
 

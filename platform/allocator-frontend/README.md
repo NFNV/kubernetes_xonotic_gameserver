@@ -10,13 +10,16 @@ It is not a public user-facing site. It is a simple control panel for:
 - ending a Match Room by releasing its allocated server
 - viewing live map, player, score, and ping data from allocated rooms
 - broadcasting a message and changing to an allowlisted map for allocated rooms
+- terminating allocated infrastructure GameServers when cleanup is needed
 - inspecting Fleet capacity
 - reviewing the current `GameServer` list
-- running direct/manual allocation only as a debug path
+- running direct/manual allocation only from a collapsed Advanced / Debug path
 
 Match Rooms are the admin-facing objects. Allocated Agones `GameServer` instances are the infrastructure backing those rooms. `Ready` GameServers are standby/internal capacity and should not be treated as user-facing join targets.
 
 Game mode and max-player controls are intentionally deferred. The current admin controls are intentionally narrow: broadcast a message with RCON `say` and change to an allowlisted map with RCON `changelevel`. The UI does not expose raw RCON command input or the RCON password.
+
+Allocated-server command actions are only enabled when the server is linked to an in-memory Match Room. Direct/manual allocated servers can be terminated, but RCON actions remain disabled until there is a safe Match Room context.
 
 ## How It Works
 
@@ -35,6 +38,7 @@ Backend endpoints used:
 - `POST /matches/<match_id>/release`
 - `POST /matches/<match_id>/admin/broadcast`
 - `POST /matches/<match_id>/admin/change-map`
+- `POST /allocated-servers/<gameserver_name>/terminate`
 - `POST /allocate`
 
 Match Room state currently lives only in allocator backend memory. It is lost when the backend Pod restarts.

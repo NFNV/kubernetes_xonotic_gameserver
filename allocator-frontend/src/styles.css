@@ -519,6 +519,22 @@ button:disabled {
   font-weight: 800;
 }
 
+.admin-feedback-warning,
+.status-warning {
+  border-color: rgba(255, 177, 74, 0.24);
+  background: rgba(255, 177, 74, 0.1);
+  color: #ffd391;
+}
+
+.status-warning {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 177, 74, 0.24);
+  border-radius: 10px;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
 .live-status {
   display: grid;
   gap: 10px;
@@ -636,6 +652,47 @@ button:disabled {
   margin-bottom: 16px;
 }
 
+.debug-panel {
+  border-style: dashed;
+  border-color: rgba(126, 176, 211, 0.18);
+  background:
+    linear-gradient(180deg, rgba(14, 24, 39, 0.82), rgba(8, 13, 24, 0.88));
+}
+
+.debug-panel summary {
+  display: grid;
+  gap: 4px;
+  cursor: pointer;
+  color: #d7e7f4;
+  font-weight: 900;
+}
+
+.debug-panel summary small {
+  color: #83a2b9;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.debug-panel-body {
+  margin-top: 16px;
+}
+
+.debug-history {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(126, 176, 211, 0.12);
+}
+
+.debug-history h3 {
+  margin: 0;
+  color: #d7e7f4;
+  font-size: 1rem;
+}
+
+.infra-note {
+  margin-bottom: 14px;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -684,6 +741,20 @@ th {
 
 .muted-endpoint {
   color: #6f8799;
+}
+
+.server-name-cell {
+  display: grid;
+  gap: 3px;
+}
+
+.server-name-cell strong {
+  color: #f7fbff;
+}
+
+.server-name-cell span {
+  color: #83a2b9;
+  font-size: 0.82rem;
 }
 
 .state-badge {
@@ -740,6 +811,42 @@ th {
 .danger-button:hover:not(:disabled) {
   border-color: rgba(255, 91, 74, 0.56);
   background: rgba(255, 91, 74, 0.18);
+}
+
+.command-panel-row td {
+  padding: 0 10px 14px;
+}
+
+.command-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 177, 74, 0.22);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255, 107, 36, 0.1), transparent 13rem),
+    rgba(7, 13, 24, 0.92);
+}
+
+.command-panel h4,
+.command-panel p {
+  margin: 0;
+}
+
+.command-panel h4 {
+  color: #ffb14a;
+}
+
+.command-panel p,
+.command-panel span {
+  color: #9fb8ca;
+}
+
+.command-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .release-note {
