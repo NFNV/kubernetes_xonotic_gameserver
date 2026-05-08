@@ -361,6 +361,8 @@ button:disabled {
 
 .match-card {
   display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  align-items: start;
   gap: 14px;
   padding: 16px;
   border: 1px solid rgba(126, 176, 211, 0.18);
@@ -407,6 +409,21 @@ button:disabled {
   margin-top: 4px;
   color: #7895aa;
   font-size: 0.82rem;
+}
+
+.match-card-actions {
+  display: flex;
+  align-items: center;
+  align-self: end;
+  justify-content: flex-start;
+  min-height: 44px;
+}
+
+.match-card-actions .primary {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 0;
+  white-space: nowrap;
 }
 
 .match-details {

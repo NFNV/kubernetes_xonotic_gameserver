@@ -670,9 +670,11 @@ export default function App() {
                       </div>
                     </>
                   ) : (
-                    <button className="primary" type="button" onClick={() => void allocateMatch(match.match_id)} disabled={isAllocating || isReleased}>
-                      {isAllocating ? "Allocating..." : isReleased ? "Match Ended" : "Allocate Server"}
-                    </button>
+                    <div className="match-card-actions">
+                      <button className="primary" type="button" onClick={() => void allocateMatch(match.match_id)} disabled={isAllocating || isReleased}>
+                        {isAllocating ? "Allocating..." : isReleased ? "Match Ended" : "Allocate Server"}
+                      </button>
+                    </div>
                   )}
                   {isReleased && (
                     <p className="release-note">
