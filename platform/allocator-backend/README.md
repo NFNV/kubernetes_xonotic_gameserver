@@ -4,7 +4,7 @@ This phase adds the first backend service that allocates Xonotic game servers pr
 
 It now also includes the first in-memory Match Room layer for the admin workflow. Match Rooms are the operator-facing objects; allocated Agones `GameServer` instances are the infrastructure assigned to those rooms.
 
-Per-match game mode and max-player controls are intentionally deferred for now. The current Fleet uses already-running standby servers, so those values cannot be honestly applied at allocation time without a future RCON or per-match provisioning model. The current RCON admin-control phase supports only two whitelisted live actions for allocated rooms: broadcast a server message and change to an allowlisted map.
+Match Rooms now store the requested map and game mode before allocation. Because the Fleet uses already-running standby servers, allocation does not create a fresh preconfigured server. Instead, the backend allocates a warm server, applies the requested map/mode through whitelisted RCON, verifies the result with `getstatus`, and only then marks the room joinable. Max-player control remains deferred.
 
 ## Why This Backend Uses The Kubernetes API In-Cluster
 
@@ -25,7 +25,8 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `POST /matches`: create an in-memory Match Room
 - `GET /matches`: list in-memory Match Rooms
 - `GET /matches/<match_id>`: inspect one Match Room
-- `POST /matches/<match_id>/allocate`: allocate one Agones `GameServer` for a Match Room
+- `PATCH /matches/<match_id>`: edit requested map/mode before allocation
+- `POST /matches/<match_id>/allocate`: allocate one Agones `GameServer`, apply requested map/mode, and expose it only after verification
 - `POST /matches/<match_id>/release`: end a Match Room and delete the allocated Agones `GameServer`
 - `POST /matches/<match_id>/rcon-smoke-test`: backend-only RCON verification for an allocated Match Room
 - `POST /matches/<match_id>/admin/broadcast`: broadcast a validated message to an allocated Match Room
@@ -48,6 +49,10 @@ Current real fields:
 - `allocated_at`
 - `released_at`
 - `game_mode`
+- `requested_map`
+- `requested_game_mode`
+- `joinable`
+- `allocation_config_result`
 - allocated server address, port, GameServer name, and allocation request name
 - best-effort live status from Xonotic `getstatus`
 
@@ -55,7 +60,8 @@ Current temporary limitations:
 
 - live status is cached briefly and may be stale for a few seconds
 - status is unavailable until a room has an allocated server
-- game mode and max-player controls are deferred pending a stronger RCON/per-match provisioning design
+- map/mode configuration depends on Xonotic accepting the whitelisted RCON commands and reporting the expected values through `getstatus`
+- max-player control is deferred pending a safe verified command path
 - RCON controls are whitelisted only; there is no raw command endpoint and the frontend never receives the RCON password
 - Match Room and live status state are not persisted across backend restarts
 
@@ -77,7 +83,11 @@ The backend:
 1. creates a `GameServerAllocation` in namespace `xonotic-agones`
 2. targets `xonotic-fleet`
 3. reads back the allocation result
-4. returns the allocated `address` and `port`
+4. sends whitelisted RCON commands for requested game mode and map
+5. verifies the live map/mode with `getstatus`
+6. returns the allocated `address` and `port` only as a joinable Match Room when verification succeeds
+
+If verification fails, the Match Room is marked `allocated_needs_attention`, `joinable` remains `false`, and the endpoint should not be treated as ready for players. The room can still be released, which deletes the allocated Agones `GameServer`.
 
 ## Files
 
@@ -169,13 +179,19 @@ Create and allocate a Match Room:
 ```bash
 curl -fsS -X POST http://127.0.0.1:18080/matches \
   -H "content-type: application/json" \
-  -d '{"name":"Quarterfinal 1"}'
+  -d '{"name":"Quarterfinal 1","requested_map":"stormkeep","requested_game_mode":"dm"}'
 
 curl -fsS http://127.0.0.1:18080/matches
 
 curl -fsS http://127.0.0.1:18080/matches/<match_id>
 
-curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate
+curl -fsS -X PATCH http://127.0.0.1:18080/matches/<match_id> \
+  -H "content-type: application/json" \
+  -d '{"requested_map":"xoylent","requested_game_mode":"dm"}'
+
+curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate \
+  -H "content-type: application/json" \
+  -d '{"requested_map":"stormkeep","requested_game_mode":"dm"}'
 
 curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/rcon-smoke-test
 

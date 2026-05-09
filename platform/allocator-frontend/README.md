@@ -6,7 +6,7 @@ It is not a public user-facing site. It is a simple control panel for:
 
 - checking allocator backend health
 - creating in-memory Match Rooms
-- allocating one Xonotic server to a Match Room
+- choosing map/mode before allocating one Xonotic server to a Match Room
 - ending a Match Room by releasing its allocated server
 - viewing live map, player, score, and ping data from allocated rooms
 - broadcasting a message and changing to an allowlisted map for allocated rooms
@@ -17,7 +17,9 @@ It is not a public user-facing site. It is a simple control panel for:
 
 Match Rooms are the admin-facing objects. Allocated Agones `GameServer` instances are the infrastructure backing those rooms. `Ready` GameServers are standby/internal capacity and should not be treated as user-facing join targets.
 
-Game mode and max-player controls are intentionally deferred. The current admin controls are intentionally narrow: broadcast a message with RCON `say` and change to an allowlisted map with RCON `changelevel`. The UI does not expose raw RCON command input or the RCON password.
+The map and game mode controls run before allocation. Because the Agones Fleet is warm, the backend allocates a Ready server first, applies requested map/mode through whitelisted RCON, verifies with `getstatus`, and only then exposes the endpoint as joinable. Max-player control remains deferred.
+
+Post-allocation admin controls are intentionally narrow: broadcast a message with RCON `say` and use an allowlisted map override with RCON `changelevel`. The UI does not expose raw RCON command input or the RCON password.
 
 Allocated-server command actions are only enabled when the server is linked to an in-memory Match Room. Direct/manual allocated servers can be terminated, but RCON actions remain disabled until there is a safe Match Room context.
 
@@ -34,6 +36,7 @@ Backend endpoints used:
 - `GET /gameservers`
 - `GET /matches`
 - `POST /matches`
+- `PATCH /matches/<match_id>`
 - `POST /matches/<match_id>/allocate`
 - `POST /matches/<match_id>/release`
 - `POST /matches/<match_id>/admin/broadcast`

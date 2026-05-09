@@ -92,10 +92,11 @@ This file is the running context log for the repository. Update it over time so 
 - Match Rooms are now the admin-facing objects; allocated Agones `GameServer` instances are infrastructure backing those rooms
 - Match Room state is intentionally in-memory and disappears on backend Pod restart until a later persistence phase
 - Live player/map/score data should use read-only Xonotic `getstatus` first; avoid RCON unless a later feature truly requires command execution
-- Match Room game mode and max-player controls are intentionally deferred in the current Fleet model; map changes are now supported only as a whitelisted RCON action against already allocated rooms
+- Match Rooms now store requested map and game mode before allocation; allocation still uses a warm Fleet server, then applies requested config with whitelisted RCON and only exposes the endpoint when `getstatus` verifies it
 - `docs/rcon-admin-controls.md` captures the RCON investigation, smoke-test endpoint, and first whitelisted admin-control phase; `./scripts/up.sh` recreates namespace-scoped `xonotic-rcon` Secrets from local `XONOTIC_RCON_PASSWORD`
 - The RCON client should use DarkPlaces secure HMAC-MD4 challenge RCON first because plaintext RCON is ignored when `rcon_secure > 0` and secure TIME RCON is ignored when `rcon_secure > 1`; challenge replies may be NUL-terminated and must be stripped before signing `"<challenge> <command>"`
 - RCON admin controls must remain whitelisted backend actions only; the current frontend exposes broadcast message and allowlisted map change for allocated Match Rooms, but no raw command input and no RCON password
+- Additional RCON controls should follow the command matrix in `docs/rcon-admin-controls.md`: prioritize `restart`, then verify `endmatch`; defer kick until player IDs are parsed reliably; defer standalone game-mode and max-player controls until behavior is verified in this exact server setup
 - Match Room `live_status` should represent the last known good `getstatus` result; transient map-reload timeouts are tracked separately as status/verification errors so the admin UI does not lose map/mode/player context
 - Manual Direct Allocation is now an Advanced / Debug path; normal operator workflow is Match Rooms, and allocated-server table actions can terminate only `Allocated` GameServers or route safe commands through a linked Match Room
 - Releasing a Match Room deletes the allocated Agones `GameServer` resource and relies on Fleet/FleetAutoscaler to replenish standby capacity

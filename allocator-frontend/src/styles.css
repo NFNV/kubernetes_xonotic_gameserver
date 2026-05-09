@@ -301,7 +301,7 @@ button:disabled {
 
 .match-form {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(130px, 0.45fr) minmax(120px, 0.4fr) auto;
   gap: 12px;
   align-items: end;
   margin-bottom: 12px;
@@ -318,6 +318,7 @@ button:disabled {
 }
 
 .match-form input,
+.match-form select,
 .admin-control-row input,
 .admin-control-row select {
   width: 100%;
@@ -331,6 +332,7 @@ button:disabled {
 }
 
 .match-form input:focus,
+.match-form select:focus,
 .admin-control-row input:focus,
 .admin-control-row select:focus {
   border-color: rgba(0, 209, 255, 0.62);
@@ -426,6 +428,26 @@ button:disabled {
   white-space: nowrap;
 }
 
+.preallocation-controls {
+  display: grid;
+  align-self: end;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 177, 74, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 107, 36, 0.07);
+}
+
+.preallocation-controls .admin-control-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.preallocation-controls .primary {
+  justify-self: start;
+  width: auto;
+  white-space: nowrap;
+}
+
 .match-details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -467,6 +489,24 @@ button:disabled {
   border-radius: 14px;
   background:
     linear-gradient(90deg, rgba(0, 209, 255, 0.12), rgba(5, 12, 21, 0.72));
+}
+
+.assigned-server-warning {
+  border-color: rgba(255, 177, 74, 0.28);
+  background:
+    linear-gradient(90deg, rgba(255, 177, 74, 0.12), rgba(5, 12, 21, 0.72));
+}
+
+.assigned-server-warning span {
+  color: #ffd391;
+}
+
+.assigned-server-warning strong {
+  color: #ffd391;
+}
+
+.assigned-server-warning p {
+  color: #b8c9d8;
 }
 
 .assigned-server span {
@@ -929,6 +969,10 @@ th {
   }
 
   .admin-control-row {
+    grid-template-columns: 1fr;
+  }
+
+  .preallocation-controls .admin-control-row {
     grid-template-columns: 1fr;
   }
 

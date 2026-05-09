@@ -12,6 +12,7 @@ const EMPTY_FLEET = {
 const AUTO_REFRESH_MS = 7000;
 const HISTORY_LIMIT = 8;
 const ADMIN_MAPS = ["xoylent", "stormkeep", "implosion", "drain", "darkzone", "solarium"];
+const ADMIN_GAME_MODES = ["dm", "tdm", "duel", "ctf"];
 const BROADCAST_MAX_LENGTH = 160;
 
 async function fetchJson(path, options) {
@@ -96,12 +97,18 @@ function liveStatusLabel(liveStatus) {
   return liveStatus.ok ? `live ${liveStatus.queried_at}` : "live status unavailable";
 }
 
+function requestedConfigDiffers(match) {
+  const mapDiffers = match.requested_map && match.map && match.requested_map !== match.map;
+  const modeDiffers = match.requested_game_mode && match.game_mode && match.requested_game_mode !== match.game_mode;
+  return Boolean(mapDiffers || modeDiffers);
+}
+
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
   const [gameservers, setGameservers] = useState([]);
   const [matches, setMatches] = useState([]);
-  const [matchForm, setMatchForm] = useState({ name: "" });
+  const [matchForm, setMatchForm] = useState({ name: "", requested_map: ADMIN_MAPS[0], requested_game_mode: ADMIN_GAME_MODES[0] });
   const [latestAllocation, setLatestAllocation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -113,6 +120,7 @@ export default function App() {
   const [adminFeedback, setAdminFeedback] = useState({});
   const [broadcastForms, setBroadcastForms] = useState({});
   const [changeMapForms, setChangeMapForms] = useState({});
+  const [matchConfigForms, setMatchConfigForms] = useState({});
   const [commandPanelServerName, setCommandPanelServerName] = useState("");
   const [terminatingServers, setTerminatingServers] = useState({});
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -193,6 +201,8 @@ export default function App() {
     try {
       const payload = {
         name: matchForm.name.trim() || undefined,
+        requested_map: matchForm.requested_map,
+        requested_game_mode: matchForm.requested_game_mode,
       };
       const match = await fetchJson("/api/matches", {
         method: "POST",
@@ -200,7 +210,7 @@ export default function App() {
         body: JSON.stringify(payload),
       });
       setMatches((current) => [match, ...current]);
-      setMatchForm({ name: "" });
+      setMatchForm({ name: "", requested_map: ADMIN_MAPS[0], requested_game_mode: ADMIN_GAME_MODES[0] });
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
       setError({
@@ -212,13 +222,50 @@ export default function App() {
     }
   }
 
-  async function allocateMatch(matchId) {
+  function matchRequestedConfig(match) {
+    return {
+      requested_map: matchConfigForms[match.match_id]?.requested_map || match.requested_map || ADMIN_MAPS[0],
+      requested_game_mode: matchConfigForms[match.match_id]?.requested_game_mode || match.requested_game_mode || ADMIN_GAME_MODES[0],
+    };
+  }
+
+  function updateMatchRequestedConfig(matchId, field, value) {
+    setMatchConfigForms((current) => ({
+      ...current,
+      [matchId]: {
+        ...current[matchId],
+        [field]: value,
+      },
+    }));
+  }
+
+  async function allocateMatch(match) {
+    const matchId = match.match_id;
+    const requestedConfig = matchRequestedConfig(match);
     setAllocatingMatches((current) => ({ ...current, [matchId]: true }));
     setError(null);
 
     try {
-      const match = await fetchJson(`/api/matches/${matchId}/allocate`, { method: "POST" });
-      setMatches((current) => current.map((item) => (item.match_id === match.match_id ? match : item)));
+      const updatedMatch = await fetchJson(`/api/matches/${matchId}/allocate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestedConfig),
+      });
+      setMatches((current) => current.map((item) => (item.match_id === updatedMatch.match_id ? updatedMatch : item)));
+      if (updatedMatch.joinable) {
+        setAdminFeedback((current) => ({
+          ...current,
+          [updatedMatch.match_id]: { type: "success", message: "Server allocated and requested map/mode verified." },
+        }));
+      } else if (updatedMatch.status === "allocated_needs_attention") {
+        setAdminFeedback((current) => ({
+          ...current,
+          [updatedMatch.match_id]: {
+            type: "warning",
+            message: updatedMatch.allocation_config_result?.message || "Server allocated, but requested config was not verified.",
+          },
+        }));
+      }
       await loadDashboard({ silent: true, source: "Match allocation refresh" });
     } catch (err) {
       setError({
@@ -492,12 +539,38 @@ export default function App() {
               placeholder="Quarterfinal 1"
             />
           </label>
+          <label>
+            <span>Map</span>
+            <select
+              value={matchForm.requested_map}
+              onChange={(event) => setMatchForm((current) => ({ ...current, requested_map: event.target.value }))}
+            >
+              {ADMIN_MAPS.map((mapName) => (
+                <option key={mapName} value={mapName}>
+                  {mapName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Mode</span>
+            <select
+              value={matchForm.requested_game_mode}
+              onChange={(event) => setMatchForm((current) => ({ ...current, requested_game_mode: event.target.value }))}
+            >
+              {ADMIN_GAME_MODES.map((modeName) => (
+                <option key={modeName} value={modeName}>
+                  {modeName}
+                </option>
+              ))}
+            </select>
+          </label>
           <button className="primary" type="submit" disabled={creatingMatch || loading}>
             {creatingMatch ? "Creating..." : "Create Match Room"}
           </button>
         </form>
         <p className="deferred-note">
-          Mode and max-player controls are still deferred. Map changes now use a whitelisted RCON action against allocated rooms only.
+          Servers come from a warm Agones Fleet. Allocation picks a Ready server, applies requested map/mode through whitelisted RCON, verifies with getstatus, then exposes the endpoint.
         </p>
 
         {loading ? (
@@ -509,22 +582,26 @@ export default function App() {
             {matches.map((match) => {
               const endpoint = allocationEndpoint(match);
               const command = connectCommand(endpoint);
-              const isAllocated = Boolean(match.allocated_server);
+              const hasBackingServer = Boolean(match.allocated_server);
+              const isJoinable = match.joinable === true;
               const isAllocating = Boolean(allocatingMatches[match.match_id]) || match.status === "allocating";
+              const isConfiguring = match.status === "configuring";
               const isReleasing = Boolean(releasingMatches[match.match_id]) || match.status === "releasing";
               const isReleased = match.status === "released" || match.status === "finished";
               const liveStatus = match.live_status;
               const players = liveStatus?.players || [];
               const liveMaxPlayers = liveStatus?.max_players ?? match.live_max_players;
+              const requestedConfig = matchRequestedConfig(match);
               const broadcastValue = broadcastForms[match.match_id] || "";
               const selectedMap = changeMapForms[match.match_id] || (ADMIN_MAPS.includes(match.map) ? match.map : ADMIN_MAPS[0]);
               const isBroadcasting = Boolean(adminActions[adminActionKey(match.match_id, "broadcast")]);
               const isChangingMap = Boolean(adminActions[adminActionKey(match.match_id, "change-map")]);
               const feedback = adminFeedback[match.match_id];
+              const hasConfigWarning = requestedConfigDiffers(match);
 
               return (
                 <article
-                  className={`match-card ${isAllocated ? "match-card-allocated" : ""} ${isReleased ? "match-card-released" : ""}`}
+                  className={`match-card ${isJoinable ? "match-card-allocated" : ""} ${isReleased ? "match-card-released" : ""}`}
                   key={match.match_id}
                 >
                   <div className="match-card-header">
@@ -536,45 +613,58 @@ export default function App() {
                   </div>
                   <dl className="match-details live-config">
                     <div>
-                      <dt>Live Map</dt>
-                      <dd>{unknown(match.map)}</dd>
+                      <dt>Requested Map</dt>
+                      <dd>{unknown(match.requested_map)}</dd>
                     </div>
                     <div>
-                      <dt>Live Mode</dt>
-                      <dd>{unknown(match.game_mode)}</dd>
+                      <dt>Requested Mode</dt>
+                      <dd>{unknown(match.requested_game_mode)}</dd>
                     </div>
                     <div>
-                      <dt>Live Players</dt>
+                      <dt>Live Map / Mode</dt>
+                      <dd>{unknown(match.map)} / {unknown(match.game_mode)}</dd>
+                    </div>
+                    <div>
+                      <dt>Players</dt>
                       <dd>
                         {unknown(match.current_players)} / {unknown(liveMaxPlayers)}
                       </dd>
                     </div>
-                    <div>
-                      <dt>Created</dt>
-                      <dd>{match.created_at}</dd>
-                    </div>
                   </dl>
 
-                  {isAllocated ? (
+                  {hasBackingServer ? (
                     <>
-                      <div className="assigned-server">
-                        <span>Assigned server</span>
-                        <strong className="join-endpoint">{endpoint}</strong>
-                        <code>{command}</code>
-                        <div className="button-row">
-                          <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
-                          <CopyButton text={command} label="Command" onCopy={copyText} />
-                          <button className="danger-button" type="button" onClick={() => void releaseMatch(match)} disabled={isReleasing}>
-                            {isReleasing ? "Releasing..." : "End Match"}
-                          </button>
+                      {isJoinable ? (
+                        <div className="assigned-server">
+                          <span>Verified join target</span>
+                          <strong className="join-endpoint">{endpoint}</strong>
+                          <code>{command}</code>
+                          <div className="button-row">
+                            <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
+                            <CopyButton text={command} label="Command" onCopy={copyText} />
+                            <button className="danger-button" type="button" onClick={() => void releaseMatch(match)} disabled={isReleasing}>
+                              {isReleasing ? "Releasing..." : "End Match"}
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <div className="assigned-server assigned-server-warning">
+                          <span>Backing server allocated, not verified</span>
+                          <strong>Endpoint withheld</strong>
+                          <p>{match.allocation_config_result?.message || "Requested map/mode has not been verified yet."}</p>
+                          <div className="button-row">
+                            <button className="danger-button" type="button" onClick={() => void releaseMatch(match)} disabled={isReleasing}>
+                              {isReleasing ? "Releasing..." : "Release Server"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       <div className="admin-controls">
                         <div className="admin-controls-header">
                           <div>
-                            <h4>Admin Controls</h4>
-                            <p>Whitelisted RCON actions only. No raw command access.</p>
+                            <h4>Admin Override Controls</h4>
+                            <p>Secondary whitelisted RCON actions. Normal flow configures map/mode before exposing the endpoint.</p>
                           </div>
                         </div>
 
@@ -636,6 +726,11 @@ export default function App() {
                         </div>
                         {liveStatus?.ok ? (
                           <>
+                            {hasConfigWarning && (
+                              <p className="status-warning">
+                                Requested config differs from live status. Requested {match.requested_map}/{match.requested_game_mode}; live {unknown(match.map)}/{unknown(match.game_mode)}.
+                              </p>
+                            )}
                             {match.last_status_error && (
                               <p className="status-warning">
                                 Latest live status check failed, showing last known good status.
@@ -670,9 +765,42 @@ export default function App() {
                       </div>
                     </>
                   ) : (
-                    <div className="match-card-actions">
-                      <button className="primary" type="button" onClick={() => void allocateMatch(match.match_id)} disabled={isAllocating || isReleased}>
-                        {isAllocating ? "Allocating..." : isReleased ? "Match Ended" : "Allocate Server"}
+                    <div className="preallocation-controls">
+                      <div className="admin-control-row">
+                        <label>
+                          <span>Map before allocation</span>
+                          <select
+                            value={requestedConfig.requested_map}
+                            onChange={(event) => updateMatchRequestedConfig(match.match_id, "requested_map", event.target.value)}
+                            disabled={isAllocating || isConfiguring || isReleased}
+                          >
+                            {ADMIN_MAPS.map((mapName) => (
+                              <option key={mapName} value={mapName}>
+                                {mapName}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Mode before allocation</span>
+                          <select
+                            value={requestedConfig.requested_game_mode}
+                            onChange={(event) => updateMatchRequestedConfig(match.match_id, "requested_game_mode", event.target.value)}
+                            disabled={isAllocating || isConfiguring || isReleased}
+                          >
+                            {ADMIN_GAME_MODES.map((modeName) => (
+                              <option key={modeName} value={modeName}>
+                                {modeName}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      <p className="empty-state">
+                        Allocation will configure the warm server with RCON and verify getstatus before showing a join endpoint.
+                      </p>
+                      <button className="primary" type="button" onClick={() => void allocateMatch(match)} disabled={isAllocating || isConfiguring || isReleased}>
+                        {isAllocating || isConfiguring ? "Allocating..." : isReleased ? "Match Ended" : "Allocate Server"}
                       </button>
                     </div>
                   )}

@@ -42,6 +42,12 @@ References:
 - <https://xonotic.org/faq/>
 - <https://github-wiki-see.page/m/xonotic/xonotic/wiki/Basic-server-configuration>
 - <https://xonotic.fandom.com/wiki/Game_Server_Configuration>
+- <https://github-wiki-see.page/m/xonotic/xonotic/wiki/Commands>
+- <https://xonotic.org/doxygen/qcsrc/sv__cmd_8qc.html>
+
+Secondary, non-authoritative command syntax cross-check:
+
+- <https://legionhosting.net/kb/xonotic/xonotic-admin-commands>
 
 ## 1. Does Xonotic RCON Use The Same UDP Game Server IP:Port?
 
@@ -107,17 +113,26 @@ If the backend cannot reach the endpoint through the allocated external address 
 
 ## 4. Commands To Verify For Safe Admin Controls
 
-Verify these against a disposable allocated server before building UI controls:
+Verify these against a disposable allocated server before building any new UI controls.
 
-| Candidate command | Purpose | Safety recommendation |
-| --- | --- | --- |
-| `status` | Confirm RCON auth and inspect players/server state | Safe read command. Useful for RCON smoke tests, though `getstatus` remains better for structured telemetry. |
-| `gametype <mode>` | Set game mode | Whitelist modes such as `dm`, `tdm`, `duel`, `ctf`. Verify whether it takes effect immediately or only after map change. |
-| `changelevel <map>` | Change map | Whitelist known map names. Apply after `gametype` if mode should affect the next loaded map. |
-| `maxplayers <n>` | Set player cap | Verify accepted range and whether reducing below connected players is rejected or disruptive. Keep backend validation at `1-32` for now. |
-| `restart` | Restart current map | Useful as a controlled reset action. Could disrupt connected players, so keep it behind explicit confirmation. |
-| `endmatch` | End current match | Verify behavior. It may advance to normal map/vote flow rather than release infrastructure. Prefer the existing Agones release flow for "End Match" in the dashboard. |
-| `say <message>` | Broadcast admin message | Allow only sanitized text, length-limited, no newlines, no command chaining. |
+| Candidate | Command syntax | Status | Required validation | Expected result | Verification path | Frontend recommendation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Status | `status` | Already verified | No user input | RCON returns server/player summary | RCON response must be non-empty; compare player lines with `getstatus` where possible | Keep backend/debug only. Use `getstatus` for normal structured telemetry. |
+| Broadcast | `say <message>` | Already verified | Required string, trim whitespace, max 160 chars, reject newlines/control chars/command separators | Message appears in server chat | RCON send succeeds; optionally inspect server logs or client chat | Already exposed. Keep as structured action only. |
+| Map change | `changelevel <map>` | Already verified | Map must be in backend allowlist: `xoylent`, `stormkeep`, `implosion`, `drain`, `darkzone`, `solarium` | Server changes to requested map | Retry `getstatus` for 10-15s; expected `map` must match | Already exposed as post-allocation override and used during allocation-time config. |
+| Restart current map | `restart` | Safe to test | No free-form input; require explicit confirmation | Current level restarts, likely disconnecting/interrupting active play briefly | `getstatus` should recover on same map; server logs should show restart/reload; player count may reset or reconnect | Good next candidate. Add only with confirmation and warning. |
+| End current match | `endmatch` | Uncertain | No free-form input; require explicit confirmation | Current match ends and server advances according to normal Xonotic match/map flow | Observe RCON response/logs; `getstatus` may show intermission, next map, or same map depending config | Test after `restart`. Do not confuse with infrastructure release, which should remain Agones delete. |
+| Kick player | `kick # <player_id> <reason>` | Risky | Player ID must come from parsed `status`/`getstatus`, not free text; reason length-limited and sanitized | Target player is removed from server | `getstatus`/`status` no longer includes player; logs show kick | Defer until player IDs are parsed reliably and UI clearly targets one connected player. |
+| Game mode change | `gametype <mode>` | Already used, still setup-sensitive | Mode must be in allowlist: `dm`, `tdm`, `duel`, `ctf`; apply before map reload | Requested game type becomes active, often after map change | `getstatus` `game_mode` must match after `changelevel`/reload | Keep allocation-time only for now; expose standalone mode switch later only after repeated verification. |
+| Max players | `maxplayers <n>` | Uncertain | Integer only; proposed range `1-32`; reject values below current player count unless explicitly tested | Server player cap changes | `getstatus` `max_players` should match; logs/RCON output should not show rejection | Defer. It may be disruptive if lowered below connected players and needs exact behavior verification. |
+
+Notes:
+
+- Xonotic FAQ documents `kick # <player id> <reason>` and says the ID is visible in `status`.
+- Xonotic command docs list `restart`, `say`, `kick`, and `maxplayers`.
+- Xonotic server command Doxygen lists `gametype`, `gotomap`, and `resetmatch`; this makes `gametype` a stronger candidate than arbitrary mode commands.
+- `changelevel` is already verified in this project even though Xonotic server-command docs also mention `gotomap`. Keep `changelevel` unless a future test shows `gotomap <map>` is safer.
+- `endmatch` appears in admin-command references and restricted-command examples, but should be treated as uncertain until tested on this exact server image/config.
 
 Commands that should not be exposed in the admin UI:
 
@@ -160,6 +175,8 @@ Then verify with `getstatus`:
 - `max_players` should equal `8`
 
 If verification fails, the backend should keep the Match Room out of the "ready to join" state and either release/delete the allocated `GameServer` or mark the room as `configuration_failed` with a clear error.
+
+Max-player verification is not implemented yet. Until it is verified in this exact server setup, do not expose it in the dashboard.
 
 ## 6. Safe Backend/Frontend Design
 
@@ -218,7 +235,14 @@ Use RCON only for structured live server controls:
 - optional restart current map
 - optional broadcast message
 
-The first RCON implementation should be backend-only and allocation-time only: allocate a warm server, apply whitelisted config, verify with `getstatus`, then expose the endpoint.
+Recommended implementation order:
+
+1. Keep the current implemented controls: status smoke test, broadcast, allocation-time map/mode, post-allocation map override.
+2. Add `restart` next as a confirmed/disruptive admin action with explicit UI confirmation and `getstatus` recovery verification.
+3. Test `endmatch` after `restart`, but do not present it as server release. The dashboard's End Match/Release action should continue deleting the allocated Agones `GameServer`.
+4. Defer `kick` until backend player parsing produces stable player IDs and the UI can target a single connected player safely.
+5. Defer standalone game-mode changes until repeated tests confirm `gametype <mode>` plus reload behavior for all allowlisted modes.
+6. Defer `maxplayers <n>` until the command is verified in this exact image/config, especially behavior when reducing below the current player count.
 
 ## Implemented Smoke-Test Endpoint
 
@@ -252,6 +276,8 @@ DarkPlaces ignores plaintext RCON when `rcon_secure > 0`, and ignores secure TIM
 
 The first frontend-visible RCON controls are deliberately narrow and whitelisted.
 
+The normal Match Room allocation path now also uses RCON in a controlled way: the admin chooses requested map and mode before allocation, the backend allocates a warm Fleet server, sends whitelisted `gametype <mode>` and `changelevel <map>` commands, verifies live status with `getstatus`, and only exposes the endpoint when verification succeeds.
+
 Implemented endpoints:
 
 ```text
@@ -263,6 +289,7 @@ Safety model:
 
 - both endpoints require an existing allocated Match Room
 - neither endpoint accepts raw RCON commands
+- allocation-time map/mode configuration also uses whitelisted backend-owned RCON commands only
 - the RCON password stays in Kubernetes Secret-backed backend/server environment variables
 - the frontend never sees the RCON password
 - backend logs include action/target/protocol details, not the password
@@ -305,7 +332,8 @@ Known limitations:
 
 - command behavior depends on Xonotic accepting the chosen RCON command syntax
 - `getstatus` is best-effort and may briefly report the old map or a transient failure during a map change; the UI shows a warning and keeps the last known good status in that case
-- game mode, max players, restart, kick/ban, and arbitrary commands remain intentionally deferred
+- game mode is applied with `gametype <mode>` and verified through `getstatus`; if verification fails, the room is marked `allocated_needs_attention`
+- max players, restart, kick/ban, and arbitrary commands remain intentionally deferred
 - there is still no backend/frontend authentication in this dev phase
 
 Example success shape:

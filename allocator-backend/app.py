@@ -54,6 +54,9 @@ FINISHED_MATCH_STATUSES = {"released", "finished"}
 PLAYER_STATUS_PATTERN = re.compile(r'^(?P<score>\S+)\s+(?P<ping>\d+)(?:\s+(?P<team>\d+))?\s+"(?P<name>.*)"$')
 ADMIN_BROADCAST_MAX_LENGTH = 160
 ADMIN_ALLOWED_MAPS = ("xoylent", "stormkeep", "implosion", "drain", "darkzone", "solarium")
+ADMIN_ALLOWED_GAME_MODES = ("dm", "tdm", "duel", "ctf")
+DEFAULT_REQUESTED_MAP = os.environ.get("DEFAULT_REQUESTED_MAP", "xoylent")
+DEFAULT_REQUESTED_GAME_MODE = os.environ.get("DEFAULT_REQUESTED_GAME_MODE", "dm")
 
 RCON_PACKET_PREFIX = b"\xff\xff\xff\xff"
 
@@ -850,6 +853,39 @@ def validate_admin_map(value: Any) -> str:
     return map_name
 
 
+def validate_requested_map(value: Any) -> str:
+    if value is None or value == "":
+        value = DEFAULT_REQUESTED_MAP
+    return validate_admin_map(value)
+
+
+def validate_requested_game_mode(value: Any) -> str:
+    if value is None or value == "":
+        value = DEFAULT_REQUESTED_GAME_MODE
+
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_game_mode", "message": "requested_game_mode must be a string"}, 400)
+
+    game_mode = value.strip().lower()
+    if game_mode not in ADMIN_ALLOWED_GAME_MODES:
+        raise BackendApiError(
+            {
+                "error": "invalid_game_mode",
+                "message": f"requested_game_mode must be one of: {', '.join(ADMIN_ALLOWED_GAME_MODES)}",
+                "allowed_game_modes": list(ADMIN_ALLOWED_GAME_MODES),
+            },
+            400,
+        )
+
+    return game_mode
+
+
+def normalize_game_mode(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value.strip().lower() or None
+
+
 def rcon_quote_argument(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
@@ -898,7 +934,13 @@ def run_admin_broadcast(match_id: str, message: str) -> dict[str, Any]:
     }
 
 
-def verify_change_map_status(address: str, port: int, expected_map: str) -> dict[str, Any]:
+def verify_live_config_status(
+    address: str,
+    port: int,
+    *,
+    expected_map: str | None,
+    expected_game_mode: str | None = None,
+) -> dict[str, Any]:
     time.sleep(XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS)
     deadline = time.monotonic() + XONOTIC_RCON_CHANGE_MAP_VERIFY_TIMEOUT_SECONDS
     last_error = None
@@ -918,24 +960,39 @@ def verify_change_map_status(address: str, port: int, expected_map: str) -> dict
                     "status": live_status,
                 }
 
-            if live_status.get("map") == expected_map:
+            actual_map = live_status.get("map")
+            actual_game_mode = normalize_game_mode(live_status.get("game_mode"))
+            map_matches = expected_map is None or actual_map == expected_map
+            mode_matches = expected_game_mode is None or actual_game_mode == expected_game_mode
+
+            if map_matches and mode_matches:
                 return {
                     "ok": True,
                     "verified": True,
                     "expected_map": expected_map,
-                    "actual_map": live_status.get("map"),
+                    "actual_map": actual_map,
+                    "expected_game_mode": expected_game_mode,
+                    "actual_game_mode": actual_game_mode,
                     "live_status": live_status,
                     "error": None,
                 }
+
+            mismatch_messages = []
+            if not map_matches:
+                mismatch_messages.append(f"expected map {expected_map}, got {actual_map or 'unknown'}")
+            if not mode_matches:
+                mismatch_messages.append(f"expected mode {expected_game_mode}, got {actual_game_mode or 'unknown'}")
 
             last_error = {
                 "ok": False,
                 "source": "getstatus",
                 "queried_at": utc_now(),
-                "error": "change_map_verification_failed",
-                "message": f"expected map {expected_map}, got {live_status.get('map') or 'unknown'}",
+                "error": "live_config_verification_failed",
+                "message": "; ".join(mismatch_messages),
                 "expected_map": expected_map,
-                "actual_map": live_status.get("map"),
+                "actual_map": actual_map,
+                "expected_game_mode": expected_game_mode,
+                "actual_game_mode": actual_game_mode,
             }
 
         time.sleep(XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS)
@@ -945,18 +1002,29 @@ def verify_change_map_status(address: str, port: int, expected_map: str) -> dict
         "verified": False,
         "expected_map": expected_map,
         "actual_map": last_live_status.get("map") if last_live_status else None,
+        "expected_game_mode": expected_game_mode,
+        "actual_game_mode": normalize_game_mode(last_live_status.get("game_mode")) if last_live_status else None,
         "live_status": last_live_status,
         "error": last_error
         or {
             "ok": False,
             "source": "getstatus",
             "queried_at": utc_now(),
-            "error": "change_map_verification_failed",
+            "error": "live_config_verification_failed",
             "message": "live status verification is temporarily unavailable",
             "expected_map": expected_map,
             "actual_map": None,
+            "expected_game_mode": expected_game_mode,
+            "actual_game_mode": None,
         },
     }
+
+
+def verify_change_map_status(address: str, port: int, expected_map: str) -> dict[str, Any]:
+    verification = verify_live_config_status(address, port, expected_map=expected_map)
+    if verification.get("error"):
+        verification["error"]["error"] = "change_map_verification_failed"
+    return verification
 
 
 def run_admin_change_map(match_id: str, map_name: str) -> dict[str, Any]:
@@ -1013,6 +1081,59 @@ def run_admin_change_map(match_id: str, map_name: str) -> dict[str, Any]:
         "rcon": rcon_result,
         "change_map_verification": verification,
         "live_status": live_status,
+    }
+
+
+def configure_allocated_server(
+    allocated_server: dict[str, Any],
+    *,
+    requested_map: str,
+    requested_game_mode: str,
+) -> dict[str, Any]:
+    address = allocated_server.get("address")
+    port = allocated_server.get("port")
+    if not address or not port:
+        raise BackendApiError({"error": "missing_allocated_endpoint", "message": "allocated server address or port is missing"}, 409)
+
+    commands = []
+    mode_result = send_rcon_command(
+        address,
+        int(port),
+        f"gametype {requested_game_mode}",
+        expect_response=False,
+    )
+    commands.append(mode_result)
+
+    map_result = send_rcon_command(
+        address,
+        int(port),
+        f"changelevel {requested_map}",
+        expect_response=False,
+        preferred_protocol=mode_result.get("protocol"),
+    )
+    commands.append(map_result)
+
+    clear_status_cache(address, int(port))
+    verification = verify_live_config_status(
+        address,
+        int(port),
+        expected_map=requested_map,
+        expected_game_mode=requested_game_mode,
+    )
+
+    return {
+        "ok": verification.get("verified") is True,
+        "rcon_sent": True,
+        "verified": verification.get("verified") is True,
+        "requested_map": requested_map,
+        "requested_game_mode": requested_game_mode,
+        "commands": commands,
+        "verification": verification,
+        "error": None if verification.get("verified") else "live_config_verification_failed",
+        "message": None
+        if verification.get("verified")
+        else "Allocated server was configured, but live status did not verify the requested map/mode.",
+        "live_status": verification.get("live_status"),
     }
 
 
@@ -1276,6 +1397,14 @@ def validate_max_players(value: Any) -> int:
     return max_players
 
 
+def apply_match_config_fields(match: dict[str, Any], body: dict[str, Any]) -> None:
+    if "requested_map" in body or "map" in body:
+        match["requested_map"] = validate_requested_map(body.get("requested_map", body.get("map")))
+
+    if "requested_game_mode" in body or "game_mode" in body:
+        match["requested_game_mode"] = validate_requested_game_mode(body.get("requested_game_mode", body.get("game_mode")))
+
+
 def match_response(match: dict[str, Any]) -> dict[str, Any]:
     allocated_server = match["allocated_server"]
     live_status = match.get("live_status")
@@ -1291,6 +1420,8 @@ def match_response(match: dict[str, Any]) -> dict[str, Any]:
         "allocated_at": match["allocated_at"],
         "released_at": match.get("released_at"),
         "max_players": match["max_players"],
+        "requested_map": match.get("requested_map"),
+        "requested_game_mode": match.get("requested_game_mode"),
         "current_players": match["current_players"],
         "game_mode": match["game_mode"],
         "map": match["map"],
@@ -1298,6 +1429,8 @@ def match_response(match: dict[str, Any]) -> dict[str, Any]:
         "last_status_error": match.get("last_status_error"),
         "last_status_error_at": match.get("last_status_error_at"),
         "change_map_verification": match.get("change_map_verification"),
+        "allocation_config_result": match.get("allocation_config_result"),
+        "joinable": bool(match.get("allocated_server") and match.get("status") == "allocated"),
         "released_server": match.get("released_server"),
         "release_result": match.get("release_result"),
         "allocated_server": allocated_server,
@@ -1319,6 +1452,8 @@ def build_match(body: dict[str, Any]) -> dict[str, Any]:
         "allocated_at": None,
         "released_at": None,
         "max_players": validate_max_players(body.get("max_players")),
+        "requested_map": validate_requested_map(body.get("requested_map", body.get("map"))),
+        "requested_game_mode": validate_requested_game_mode(body.get("requested_game_mode", body.get("game_mode"))),
         "current_players": None,
         "live_max_players": None,
         "game_mode": None,
@@ -1327,6 +1462,7 @@ def build_match(body: dict[str, Any]) -> dict[str, Any]:
         "last_status_error": None,
         "last_status_error_at": None,
         "change_map_verification": None,
+        "allocation_config_result": None,
         "allocated_server": None,
         "released_server": None,
         "release_result": None,
@@ -1424,8 +1560,38 @@ def get_match(match_id: str):
     return jsonify(match_response(match_snapshot))
 
 
+@APP.patch("/matches/<match_id>")
+def update_match(match_id: str):
+    try:
+        body = parse_json_body()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
+    with MATCHES_LOCK:
+        match = MATCHES.get(match_id)
+        if not match:
+            return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
+        if match["status"] in FINISHED_MATCH_STATUSES:
+            return jsonify({"error": "match_finished", "message": f"match {match_id} has already been released"}), 409
+        if match.get("allocated_server") or match["status"] in {"allocating", "configuring"}:
+            return jsonify({"error": "match_already_allocated", "message": "requested config can only be edited before allocation"}), 409
+
+        try:
+            apply_match_config_fields(match, body)
+        except BackendApiError as exc:
+            return jsonify(exc.payload), exc.status_code
+        match_snapshot = match.copy()
+
+    return jsonify(match_response(match_snapshot))
+
+
 @APP.post("/matches/<match_id>/allocate")
 def allocate_match(match_id: str):
+    try:
+        body = parse_json_body()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
     with MATCHES_LOCK:
         match = MATCHES.get(match_id)
         if not match:
@@ -1442,7 +1608,15 @@ def allocate_match(match_id: str):
         if match["status"] == "allocating":
             return jsonify({"error": "allocation_in_progress", "message": f"match {match_id} is already allocating a server"}), 409
 
+        try:
+            apply_match_config_fields(match, body)
+        except BackendApiError as exc:
+            return jsonify(exc.payload), exc.status_code
+
+        requested_map = match["requested_map"]
+        requested_game_mode = match["requested_game_mode"]
         match["status"] = "allocating"
+        match["allocation_config_result"] = None
 
     try:
         allocation = allocate_gameserver()
@@ -1484,7 +1658,47 @@ def allocate_match(match_id: str):
         if not match["allocated_server"]:
             match["allocated_server"] = allocated_server
             match["allocated_at"] = utc_now()
+            match["status"] = "configuring"
+        match_snapshot = match.copy()
+
+    try:
+        config_result = configure_allocated_server(
+            allocated_server,
+            requested_map=requested_map,
+            requested_game_mode=requested_game_mode,
+        )
+    except BackendApiError as exc:
+        config_result = {
+            "ok": False,
+            "rcon_sent": False,
+            "verified": False,
+            "requested_map": requested_map,
+            "requested_game_mode": requested_game_mode,
+            "error": exc.payload.get("error"),
+            "message": exc.payload.get("message"),
+            "details": exc.payload,
+        }
+
+    with MATCHES_LOCK:
+        match = MATCHES.get(match_id)
+        if not match:
+            return jsonify({"error": "match_not_found", "message": f"match {match_id} was not found"}), 404
+        if match["status"] in FINISHED_MATCH_STATUSES:
+            match_snapshot = match.copy()
+            return jsonify(match_response(match_snapshot))
+
+        match["allocation_config_result"] = config_result
+        live_status = config_result.get("live_status")
+        if live_status and live_status.get("ok"):
+            apply_successful_live_status(match, live_status)
+
+        if config_result.get("verified") is True:
             match["status"] = "allocated"
+        else:
+            match["status"] = "allocated_needs_attention"
+            verification_error = (config_result.get("verification") or {}).get("error")
+            if verification_error:
+                apply_live_status_error(match, verification_error)
         match_snapshot = match.copy()
 
     return jsonify(match_response(match_snapshot))

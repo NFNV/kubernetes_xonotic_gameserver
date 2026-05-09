@@ -24,7 +24,9 @@ Match Rooms are stored only in backend process memory for now. They disappear wh
 
 For allocated rooms, the backend also sends a read-only UDP `getstatus` query to the assigned Xonotic server. That response is cached briefly and used to fill live player count, map, game mode, player names, scores, ping, and team score data when available. This does not use RCON.
 
-Per-match game mode and max-player controls are intentionally deferred. The current RCON admin-control phase supports only two whitelisted live actions for allocated rooms: broadcast a server message and change to an allowlisted map. Live status remains the source of truth for the running server.
+Map and game mode are selected on the Match Room before allocation. Because the Fleet is warm, allocation does not create a fresh preconfigured server. The backend allocates a Ready server, applies the requested map/mode through whitelisted RCON, verifies the result with `getstatus`, and only then marks the room joinable.
+
+Max-player control is still deferred. Live status remains the source of truth for the running server.
 
 Releasing a Match Room deletes the allocated Agones `GameServer` resource, removes the user-facing endpoint from the room, and lets the Fleet/FleetAutoscaler create replacement standby capacity.
 
@@ -51,7 +53,7 @@ Create a Match Room:
 ```bash
 curl -fsS -X POST http://127.0.0.1:18080/matches \
   -H "content-type: application/json" \
-  -d '{"name":"Quarterfinal 1"}'
+  -d '{"name":"Quarterfinal 1","requested_map":"stormkeep","requested_game_mode":"dm"}'
 ```
 
 List Match Rooms:
@@ -69,8 +71,12 @@ curl -fsS http://127.0.0.1:18080/matches/<match_id>
 Allocate a server for one Match Room:
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate
+curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate \
+  -H "content-type: application/json" \
+  -d '{"requested_map":"stormkeep","requested_game_mode":"dm"}'
 ```
+
+Allocation uses a warm Agones Fleet server. The backend sends `gametype <mode>` and `changelevel <map>` over RCON, verifies the live map/mode with `getstatus`, then returns the room as `joinable: true`. If verification fails, the room remains `allocated_needs_attention` and the endpoint should not be treated as ready for players.
 
 Release a Match Room:
 
@@ -108,7 +114,7 @@ curl -fsS -X POST http://127.0.0.1:18080/allocated-servers/<gameserver_name>/ter
 
 The terminate endpoint validates that the `GameServer` exists in `xonotic-agones` and is currently `Allocated` before deleting it. If the server backs an in-memory Match Room, that room is marked released. Ready/standby servers are rejected.
 
-Fields that are real now: `match_id`, `name`, `status`, `created_at`, `allocated_at`, `released_at`, assigned server endpoint data, release result data, best-effort last-known-good `live_status` from Xonotic `getstatus`, `last_status_error`, and `change_map_verification`.
+Fields that are real now: `match_id`, `name`, `status`, `created_at`, `allocated_at`, `released_at`, `requested_map`, `requested_game_mode`, assigned server endpoint data, release result data, `joinable`, `allocation_config_result`, best-effort last-known-good `live_status` from Xonotic `getstatus`, `last_status_error`, and `change_map_verification`.
 
 Fields that remain best-effort: `current_players`, `map`, player scores, and team scores. They are populated only after a server is allocated and responds to `getstatus`.
 
