@@ -43,6 +43,8 @@ This file is the running context log for the repository. Update it over time so 
 - `platform/agones/manifests/xonotic-fleetautoscaler.yaml`: current buffer autoscaler that keeps a small standby pool of `Ready` Xonotic servers
 - `platform/allocator-backend/README.md`: deployment and test flow for the first in-cluster allocator backend
 - `platform/allocator-frontend/README.md`: deployment and access flow for the small operator dashboard
+- `docs/tournament-admin-design.md`: recommended MVP tournament-management domain model, API shape, frontend screens, persistence decision, and implementation phases
+- `docs/postgres-persistence-design.md`: minimal PostgreSQL schema design for tournament, team, player, round, match, and match-room assignment persistence
 - `allocator-backend/`: Python service code and container image build context for the in-cluster allocator backend
 - `allocator-frontend/`: React admin dashboard build context and static frontend source
 - `server/README.md`: explains the dedicated server container setup, runtime assumptions, and local test needs
@@ -90,7 +92,10 @@ This file is the running context log for the repository. Update it over time so 
 - The first frontend phase should stay operator-focused and use the in-cluster allocator backend as its only API surface
 - The admin frontend should treat only `Allocated` `GameServer` instances as user-facing join targets; `Ready` servers are standby capacity
 - Match Rooms are now the admin-facing objects; allocated Agones `GameServer` instances are infrastructure backing those rooms
+- For the tournament-management phase, `Match` should become the tournament-facing record while Match Room should remain the lower-level server/session object that owns allocation, endpoint, RCON controls, live status, and release
 - Match Room state is intentionally in-memory and disappears on backend Pod restart until a later persistence phase
+- The next real tournament-management phase should add PostgreSQL for tournaments, teams, players, rounds, matches, and results rather than keeping those admin-authored records in-memory
+- PostgreSQL should persist durable admin intent and assignment snapshots, while Kubernetes/Agones remain the source of truth for live Fleet, GameServer, Pod, allocation-resource, and endpoint runtime state
 - Live player/map/score data should use read-only Xonotic `getstatus` first; avoid RCON unless a later feature truly requires command execution
 - Match Rooms now store requested map and game mode before allocation; allocation still uses a warm Fleet server, then applies requested config with whitelisted RCON and only exposes the endpoint when `getstatus` verifies it
 - `docs/rcon-admin-controls.md` captures the RCON investigation, smoke-test endpoint, and first whitelisted admin-control phase; `./scripts/up.sh` recreates namespace-scoped `xonotic-rcon` Secrets from local `XONOTIC_RCON_PASSWORD`
