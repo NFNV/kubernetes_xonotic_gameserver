@@ -5,6 +5,7 @@ This phase adds a small React admin dashboard for operators.
 It is not a public user-facing site. It is a simple control panel for:
 
 - checking allocator backend health
+- managing persisted tournaments, teams, rounds, and tournament match records
 - creating in-memory Match Rooms
 - choosing map/mode before allocating one Xonotic server to a Match Room
 - ending a Match Room by releasing its allocated server
@@ -16,6 +17,8 @@ It is not a public user-facing site. It is a simple control panel for:
 - running direct/manual allocation only from a collapsed Advanced / Debug path
 
 Match Rooms are the admin-facing objects. Allocated Agones `GameServer` instances are the infrastructure backing those rooms. `Ready` GameServers are standby/internal capacity and should not be treated as user-facing join targets.
+
+Tournament Management is the first PostgreSQL-backed frontend slice. It creates persisted tournament planning data but does not yet render brackets, advance winners, record results, or attach tournament matches directly to Match Rooms.
 
 The map and game mode controls run before allocation. Because the Agones Fleet is warm, the backend allocates a Ready server first, applies requested map/mode through whitelisted RCON, verifies with `getstatus`, and only then exposes the endpoint as joinable. Max-player control remains deferred.
 
@@ -34,6 +37,14 @@ Backend endpoints used:
 - `GET /healthz`
 - `GET /fleet-status`
 - `GET /gameservers`
+- `GET /tournaments`
+- `POST /tournaments`
+- `GET /tournaments/<tournament_id>/teams`
+- `POST /tournaments/<tournament_id>/teams`
+- `GET /tournaments/<tournament_id>/rounds`
+- `POST /tournaments/<tournament_id>/rounds`
+- `GET /tournaments/<tournament_id>/matches`
+- `POST /tournaments/<tournament_id>/matches`
 - `GET /matches`
 - `POST /matches`
 - `PATCH /matches/<match_id>`

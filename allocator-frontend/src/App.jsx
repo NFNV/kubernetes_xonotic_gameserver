@@ -103,6 +103,10 @@ function requestedConfigDiffers(match) {
   return Boolean(mapDiffers || modeDiffers);
 }
 
+function shortId(id) {
+  return id ? id.slice(0, 8) : "unknown";
+}
+
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
@@ -128,6 +132,29 @@ export default function App() {
   const [copyMessage, setCopyMessage] = useState("");
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState("");
+  const [tournaments, setTournaments] = useState([]);
+  const [selectedTournamentId, setSelectedTournamentId] = useState("");
+  const [tournamentTeams, setTournamentTeams] = useState([]);
+  const [tournamentRounds, setTournamentRounds] = useState([]);
+  const [tournamentMatches, setTournamentMatches] = useState([]);
+  const [tournamentLoading, setTournamentLoading] = useState(false);
+  const [tournamentDetailLoading, setTournamentDetailLoading] = useState(false);
+  const [tournamentError, setTournamentError] = useState(null);
+  const [creatingTournament, setCreatingTournament] = useState(false);
+  const [creatingTeam, setCreatingTeam] = useState(false);
+  const [creatingRound, setCreatingRound] = useState(false);
+  const [creatingTournamentMatch, setCreatingTournamentMatch] = useState(false);
+  const [tournamentForm, setTournamentForm] = useState({ name: "", description: "" });
+  const [teamForm, setTeamForm] = useState({ name: "", tag: "", seed: "" });
+  const [roundForm, setRoundForm] = useState({ name: "", round_order: "" });
+  const [tournamentMatchForm, setTournamentMatchForm] = useState({
+    name: "",
+    round_id: "",
+    team_a_id: "",
+    team_b_id: "",
+    requested_map: ADMIN_MAPS[0],
+    requested_game_mode: ADMIN_GAME_MODES[0],
+  });
 
   async function copyText(text, label) {
     if (!text) {
@@ -190,6 +217,194 @@ export default function App() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }
+
+  async function loadTournaments({ silent = false } = {}) {
+    if (!silent) {
+      setTournamentLoading(true);
+    }
+    setTournamentError(null);
+
+    try {
+      const response = await fetchJson("/api/tournaments");
+      const items = response.items || [];
+      setTournaments(items);
+      setSelectedTournamentId((current) => {
+        if (current && items.some((tournament) => tournament.id === current)) {
+          return current;
+        }
+        return items[0]?.id || "";
+      });
+    } catch (err) {
+      setTournamentError({
+        title: "Tournament refresh failed",
+        message: err.message,
+      });
+    } finally {
+      setTournamentLoading(false);
+    }
+  }
+
+  async function loadTournamentDetails(tournamentId, { silent = false } = {}) {
+    if (!tournamentId) {
+      setTournamentTeams([]);
+      setTournamentRounds([]);
+      setTournamentMatches([]);
+      return;
+    }
+
+    if (!silent) {
+      setTournamentDetailLoading(true);
+    }
+    setTournamentError(null);
+
+    try {
+      const [teamsResponse, roundsResponse, matchesResponse] = await Promise.all([
+        fetchJson(`/api/tournaments/${tournamentId}/teams`),
+        fetchJson(`/api/tournaments/${tournamentId}/rounds`),
+        fetchJson(`/api/tournaments/${tournamentId}/matches`),
+      ]);
+      setTournamentTeams(teamsResponse.items || []);
+      setTournamentRounds(roundsResponse.items || []);
+      setTournamentMatches(matchesResponse.items || []);
+    } catch (err) {
+      setTournamentError({
+        title: "Tournament detail refresh failed",
+        message: err.message,
+      });
+    } finally {
+      setTournamentDetailLoading(false);
+    }
+  }
+
+  async function createTournament(event) {
+    event.preventDefault();
+    setCreatingTournament(true);
+    setTournamentError(null);
+
+    try {
+      const tournament = await fetchJson("/api/tournaments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: tournamentForm.name.trim(),
+          description: tournamentForm.description.trim() || undefined,
+        }),
+      });
+      setTournamentForm({ name: "", description: "" });
+      setTournaments((current) => [tournament, ...current]);
+      setSelectedTournamentId(tournament.id);
+      setLastUpdated(new Date().toLocaleTimeString());
+    } catch (err) {
+      setTournamentError({
+        title: "Create tournament failed",
+        message: err.message,
+      });
+    } finally {
+      setCreatingTournament(false);
+    }
+  }
+
+  async function createTournamentTeam(event) {
+    event.preventDefault();
+    if (!selectedTournamentId) {
+      return;
+    }
+
+    setCreatingTeam(true);
+    setTournamentError(null);
+
+    try {
+      await fetchJson(`/api/tournaments/${selectedTournamentId}/teams`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: teamForm.name.trim(),
+          tag: teamForm.tag.trim() || undefined,
+          seed: teamForm.seed ? Number(teamForm.seed) : undefined,
+        }),
+      });
+      setTeamForm({ name: "", tag: "", seed: "" });
+      await loadTournamentDetails(selectedTournamentId, { silent: true });
+    } catch (err) {
+      setTournamentError({
+        title: "Create team failed",
+        message: err.message,
+      });
+    } finally {
+      setCreatingTeam(false);
+    }
+  }
+
+  async function createTournamentRound(event) {
+    event.preventDefault();
+    if (!selectedTournamentId) {
+      return;
+    }
+
+    setCreatingRound(true);
+    setTournamentError(null);
+
+    try {
+      await fetchJson(`/api/tournaments/${selectedTournamentId}/rounds`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: roundForm.name.trim(),
+          round_order: roundForm.round_order ? Number(roundForm.round_order) : undefined,
+        }),
+      });
+      setRoundForm({ name: "", round_order: "" });
+      await loadTournamentDetails(selectedTournamentId, { silent: true });
+    } catch (err) {
+      setTournamentError({
+        title: "Create round failed",
+        message: err.message,
+      });
+    } finally {
+      setCreatingRound(false);
+    }
+  }
+
+  async function createTournamentMatch(event) {
+    event.preventDefault();
+    if (!selectedTournamentId) {
+      return;
+    }
+
+    setCreatingTournamentMatch(true);
+    setTournamentError(null);
+
+    try {
+      await fetchJson(`/api/tournaments/${selectedTournamentId}/matches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: tournamentMatchForm.name.trim() || undefined,
+          round_id: tournamentMatchForm.round_id || undefined,
+          team_a_id: tournamentMatchForm.team_a_id || undefined,
+          team_b_id: tournamentMatchForm.team_b_id || undefined,
+          requested_map: tournamentMatchForm.requested_map,
+          requested_game_mode: tournamentMatchForm.requested_game_mode,
+        }),
+      });
+      setTournamentMatchForm({
+        name: "",
+        round_id: "",
+        team_a_id: "",
+        team_b_id: "",
+        requested_map: ADMIN_MAPS[0],
+        requested_game_mode: ADMIN_GAME_MODES[0],
+      });
+      await loadTournamentDetails(selectedTournamentId, { silent: true });
+    } catch (err) {
+      setTournamentError({
+        title: "Create tournament match failed",
+        message: err.message,
+      });
+    } finally {
+      setCreatingTournamentMatch(false);
     }
   }
 
@@ -466,7 +681,12 @@ export default function App() {
 
   useEffect(() => {
     void loadDashboard();
+    void loadTournaments();
   }, []);
+
+  useEffect(() => {
+    void loadTournamentDetails(selectedTournamentId);
+  }, [selectedTournamentId]);
 
   useEffect(() => {
     if (!autoRefresh) {
@@ -484,6 +704,9 @@ export default function App() {
   const internalServers = gameservers.filter((server) => server.state !== "Allocated");
   const latestEndpoint = allocationEndpoint(latestAllocation);
   const latestCommand = connectCommand(latestEndpoint);
+  const selectedTournament = tournaments.find((tournament) => tournament.id === selectedTournamentId) || null;
+  const teamNameById = Object.fromEntries(tournamentTeams.map((team) => [team.id, team.name]));
+  const roundNameById = Object.fromEntries(tournamentRounds.map((round) => [round.id, round.name]));
 
   return (
     <main className="page">
@@ -522,6 +745,326 @@ export default function App() {
       <section className="notice">
         Match Rooms are the admin-facing sessions. Allocated GameServers back those rooms. Ready servers remain standby/internal capacity.
         Auto-refresh checks every 7 seconds when enabled.
+      </section>
+
+      <section className="panel tournament-panel">
+        <div className="panel-header">
+          <h2>Tournament Management</h2>
+          <span className="panel-meta">{tournaments.length} persisted tournaments</span>
+        </div>
+
+        {tournamentError && (
+          <div className="inline-error">
+            <strong>{tournamentError.title}</strong>
+            <span>{tournamentError.message}</span>
+          </div>
+        )}
+
+        <form className="tournament-form" onSubmit={(event) => void createTournament(event)}>
+          <label>
+            <span>Tournament name</span>
+            <input
+              value={tournamentForm.name}
+              onChange={(event) => setTournamentForm((current) => ({ ...current, name: event.target.value }))}
+              placeholder="Spring Arena Cup"
+              required
+            />
+          </label>
+          <label>
+            <span>Description</span>
+            <input
+              value={tournamentForm.description}
+              onChange={(event) => setTournamentForm((current) => ({ ...current, description: event.target.value }))}
+              placeholder="Optional operator notes"
+            />
+          </label>
+          <button className="primary" type="submit" disabled={creatingTournament || !tournamentForm.name.trim()}>
+            {creatingTournament ? "Creating..." : "Create Tournament"}
+          </button>
+        </form>
+
+        <div className="tournament-layout">
+          <aside className="tournament-list">
+            <div className="subsection-header">
+              <h3>Tournaments</h3>
+              <button className="copy-button" type="button" onClick={() => void loadTournaments({ silent: true })} disabled={tournamentLoading}>
+                {tournamentLoading ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+            {tournamentLoading ? (
+              <p className="empty-state">Loading tournaments...</p>
+            ) : tournaments.length === 0 ? (
+              <p className="empty-state">No persisted tournaments yet.</p>
+            ) : (
+              <div className="tournament-selector-list">
+                {tournaments.map((tournament) => (
+                  <button
+                    className={`tournament-selector ${tournament.id === selectedTournamentId ? "tournament-selector-active" : ""}`}
+                    key={tournament.id}
+                    type="button"
+                    onClick={() => setSelectedTournamentId(tournament.id)}
+                  >
+                    <strong>{tournament.name}</strong>
+                    <span>{tournament.status} · {shortId(tournament.id)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </aside>
+
+          <div className="tournament-detail">
+            {!selectedTournament ? (
+              <p className="empty-state">Select or create a tournament to manage teams, rounds, and matches.</p>
+            ) : (
+              <>
+                <div className="selected-tournament-card">
+                  <div>
+                    <p className="eyebrow">Selected Tournament</p>
+                    <h3>{selectedTournament.name}</h3>
+                    <p>{selectedTournament.description || "No description yet."}</p>
+                  </div>
+                  <span className="state-badge">{selectedTournament.status}</span>
+                </div>
+
+                <p className="deferred-note">
+                  This is persisted tournament planning data. Matches here are not yet deeply linked to Match Rooms or server allocation.
+                  Brackets, result advancement, and winner automation remain manual/deferred.
+                </p>
+
+                {tournamentDetailLoading ? (
+                  <p className="empty-state">Loading tournament details...</p>
+                ) : (
+                  <>
+                    <div className="tournament-columns">
+                      <article className="data-card">
+                        <div className="subsection-header">
+                          <h3>Teams</h3>
+                          <span>{tournamentTeams.length}</span>
+                        </div>
+                        <form className="compact-form" onSubmit={(event) => void createTournamentTeam(event)}>
+                          <label>
+                            <span>Team name</span>
+                            <input
+                              value={teamForm.name}
+                              onChange={(event) => setTeamForm((current) => ({ ...current, name: event.target.value }))}
+                              placeholder="Blue Rockets"
+                              required
+                            />
+                          </label>
+                          <label>
+                            <span>Tag</span>
+                            <input
+                              value={teamForm.tag}
+                              onChange={(event) => setTeamForm((current) => ({ ...current, tag: event.target.value }))}
+                              placeholder="BLUE"
+                            />
+                          </label>
+                          <label>
+                            <span>Seed</span>
+                            <input
+                              min="1"
+                              type="number"
+                              value={teamForm.seed}
+                              onChange={(event) => setTeamForm((current) => ({ ...current, seed: event.target.value }))}
+                              placeholder="1"
+                            />
+                          </label>
+                          <button className="secondary" type="submit" disabled={creatingTeam || !teamForm.name.trim()}>
+                            {creatingTeam ? "Adding..." : "Add Team"}
+                          </button>
+                        </form>
+                        {tournamentTeams.length === 0 ? (
+                          <p className="empty-state">No teams yet.</p>
+                        ) : (
+                          <div className="record-list">
+                            {tournamentTeams.map((team) => (
+                              <div className="record-item" key={team.id}>
+                                <strong>{team.name}</strong>
+                                <span>{team.tag || "no tag"} · seed {team.seed ?? "unset"}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </article>
+
+                      <article className="data-card">
+                        <div className="subsection-header">
+                          <h3>Rounds</h3>
+                          <span>{tournamentRounds.length}</span>
+                        </div>
+                        <form className="compact-form" onSubmit={(event) => void createTournamentRound(event)}>
+                          <label>
+                            <span>Round name</span>
+                            <input
+                              value={roundForm.name}
+                              onChange={(event) => setRoundForm((current) => ({ ...current, name: event.target.value }))}
+                              placeholder="Round 1"
+                              required
+                            />
+                          </label>
+                          <label>
+                            <span>Order</span>
+                            <input
+                              min="1"
+                              type="number"
+                              value={roundForm.round_order}
+                              onChange={(event) => setRoundForm((current) => ({ ...current, round_order: event.target.value }))}
+                              placeholder="1"
+                            />
+                          </label>
+                          <button className="secondary" type="submit" disabled={creatingRound || !roundForm.name.trim()}>
+                            {creatingRound ? "Adding..." : "Add Round"}
+                          </button>
+                        </form>
+                        {tournamentRounds.length === 0 ? (
+                          <p className="empty-state">No rounds yet.</p>
+                        ) : (
+                          <div className="record-list">
+                            {tournamentRounds.map((round) => (
+                              <div className="record-item" key={round.id}>
+                                <strong>{round.name}</strong>
+                                <span>order {round.round_order} · {round.status}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </article>
+                    </div>
+
+                    <article className="data-card tournament-matches-card">
+                      <div className="subsection-header">
+                        <h3>Tournament Matches</h3>
+                        <span>{tournamentMatches.length}</span>
+                      </div>
+                      <form className="tournament-match-form" onSubmit={(event) => void createTournamentMatch(event)}>
+                        <label>
+                          <span>Match name</span>
+                          <input
+                            value={tournamentMatchForm.name}
+                            onChange={(event) => setTournamentMatchForm((current) => ({ ...current, name: event.target.value }))}
+                            placeholder="Operator label, backend name persistence deferred"
+                          />
+                        </label>
+                        <label>
+                          <span>Round</span>
+                          <select
+                            value={tournamentMatchForm.round_id}
+                            onChange={(event) => setTournamentMatchForm((current) => ({ ...current, round_id: event.target.value }))}
+                          >
+                            <option value="">Unassigned</option>
+                            {tournamentRounds.map((round) => (
+                              <option key={round.id} value={round.id}>
+                                {round.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Team A</span>
+                          <select
+                            value={tournamentMatchForm.team_a_id}
+                            onChange={(event) => setTournamentMatchForm((current) => ({ ...current, team_a_id: event.target.value }))}
+                          >
+                            <option value="">TBD</option>
+                            {tournamentTeams.map((team) => (
+                              <option key={team.id} value={team.id}>
+                                {team.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Team B</span>
+                          <select
+                            value={tournamentMatchForm.team_b_id}
+                            onChange={(event) => setTournamentMatchForm((current) => ({ ...current, team_b_id: event.target.value }))}
+                          >
+                            <option value="">TBD</option>
+                            {tournamentTeams.map((team) => (
+                              <option key={team.id} value={team.id}>
+                                {team.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Map</span>
+                          <select
+                            value={tournamentMatchForm.requested_map}
+                            onChange={(event) => setTournamentMatchForm((current) => ({ ...current, requested_map: event.target.value }))}
+                          >
+                            {ADMIN_MAPS.map((mapName) => (
+                              <option key={mapName} value={mapName}>
+                                {mapName}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Mode</span>
+                          <select
+                            value={tournamentMatchForm.requested_game_mode}
+                            onChange={(event) => setTournamentMatchForm((current) => ({ ...current, requested_game_mode: event.target.value }))}
+                          >
+                            {ADMIN_GAME_MODES.map((modeName) => (
+                              <option key={modeName} value={modeName}>
+                                {modeName}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button className="secondary" type="submit" disabled={creatingTournamentMatch}>
+                          {creatingTournamentMatch ? "Creating..." : "Create Match"}
+                        </button>
+                      </form>
+
+                      {tournamentMatches.length === 0 ? (
+                        <p className="empty-state">No tournament matches yet.</p>
+                      ) : (
+                        <div className="table-wrap">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Match</th>
+                                <th>Round</th>
+                                <th>Teams</th>
+                                <th>Status</th>
+                                <th>Winner</th>
+                                <th>Score</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {tournamentMatches.map((match) => (
+                                <tr key={match.id}>
+                                  <td>
+                                    <div className="server-name-cell">
+                                      <strong>Match {shortId(match.id)}</strong>
+                                      <span>{match.requested_map || "map unset"} / {match.requested_game_mode || "mode unset"}</span>
+                                    </div>
+                                  </td>
+                                  <td>{match.round_id ? roundNameById[match.round_id] || shortId(match.round_id) : "Unassigned"}</td>
+                                  <td>
+                                    {match.team_a_id ? teamNameById[match.team_a_id] || shortId(match.team_a_id) : "TBD"} vs{" "}
+                                    {match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "TBD"}
+                                  </td>
+                                  <td><span className="state-badge">{match.status}</span></td>
+                                  <td>{match.winner_team_id ? teamNameById[match.winner_team_id] || shortId(match.winner_team_id) : "Not recorded"}</td>
+                                  <td>
+                                    {match.team_a_score ?? "-"} / {match.team_b_score ?? "-"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </article>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
       </section>
 
       <section className="panel match-rooms-panel">
