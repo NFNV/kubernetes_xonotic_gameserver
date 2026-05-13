@@ -41,6 +41,7 @@ This file is the running context log for the repository. Update it over time so 
 - `platform/connectivity-checkpoint/README.md`: exact GHCR publish, deployment, and real-client connectivity test steps for the one-server GKE proof
 - `platform/agones/README.md`: the single-GameServer reference plus the current Fleet-and-allocation phase, including networking details
 - `platform/agones/manifests/xonotic-fleetautoscaler.yaml`: current buffer autoscaler that keeps a small standby pool of `Ready` Xonotic servers
+- `platform/postgres/`: dev/local-cluster PostgreSQL manifests for the tournament persistence MVP
 - `platform/allocator-backend/README.md`: deployment and test flow for the first in-cluster allocator backend
 - `platform/allocator-frontend/README.md`: deployment and access flow for the small operator dashboard
 - `docs/tournament-admin-design.md`: recommended MVP tournament-management domain model, API shape, frontend screens, persistence decision, and implementation phases
@@ -95,6 +96,7 @@ This file is the running context log for the repository. Update it over time so 
 - For the tournament-management phase, `Match` should become the tournament-facing record while Match Room should remain the lower-level server/session object that owns allocation, endpoint, RCON controls, live status, and release
 - Match Room state is intentionally in-memory and disappears on backend Pod restart until a later persistence phase
 - The next real tournament-management phase should add PostgreSQL for tournaments, teams, players, rounds, matches, and results rather than keeping those admin-authored records in-memory
+- The first PostgreSQL phase now persists tournament, team, player, round, and tournament match records; Match Rooms and live server telemetry remain runtime/in-memory for now
 - PostgreSQL should persist durable admin intent and assignment snapshots, while Kubernetes/Agones remain the source of truth for live Fleet, GameServer, Pod, allocation-resource, and endpoint runtime state
 - Live player/map/score data should use read-only Xonotic `getstatus` first; avoid RCON unless a later feature truly requires command execution
 - Match Rooms now store requested map and game mode before allocation; allocation still uses a warm Fleet server, then applies requested config with whitelisted RCON and only exposes the endpoint when `getstatus` verifies it

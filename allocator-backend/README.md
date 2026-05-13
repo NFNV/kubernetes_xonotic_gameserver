@@ -6,13 +6,36 @@ It is intentionally small:
 
 - Python
 - one HTTP process
-- no database
+- PostgreSQL-backed tournament CRUD
 - no auth
 - simple JSON API that can be consumed by the operator frontend
 
 The service runs inside Kubernetes and uses the Kubernetes API directly to create/read `GameServerAllocation` resources and delete allocated `GameServer` resources in `xonotic-agones`.
 
 That is the right choice for this phase because the backend already runs in-cluster and only needs the simplest possible path to allocate from the existing Agones Fleet.
+
+## Tournament Persistence
+
+This phase adds the first PostgreSQL-backed tournament foundation.
+
+Implemented now:
+
+- create/list/get tournaments
+- create/list teams for a tournament
+- create/list rounds for a tournament
+- create/list tournament matches
+- minimal startup migrations for `tournaments`, `teams`, `players`, `rounds`, and `matches`
+
+Still deferred:
+
+- bracket generation
+- automatic winner advancement
+- result recording endpoints
+- PostgreSQL persistence for Match Rooms/server assignments
+- persisted live telemetry history
+- auth and production database hardening
+
+The existing Match Room, allocation, `getstatus`, RCON, and release flow remains process-local and unchanged in this phase.
 
 ## Match Rooms
 
@@ -35,6 +58,15 @@ Releasing a Match Room deletes the allocated Agones `GameServer` resource, remov
 - `GET /healthz`
 - `GET /fleet-status`
 - `GET /gameservers`
+- `POST /tournaments`
+- `GET /tournaments`
+- `GET /tournaments/<tournament_id>`
+- `POST /tournaments/<tournament_id>/teams`
+- `GET /tournaments/<tournament_id>/teams`
+- `POST /tournaments/<tournament_id>/rounds`
+- `GET /tournaments/<tournament_id>/rounds`
+- `POST /tournaments/<tournament_id>/matches`
+- `GET /tournaments/<tournament_id>/matches`
 - `POST /matches`
 - `GET /matches`
 - `GET /matches/<match_id>`
@@ -47,6 +79,39 @@ Releasing a Match Room deletes the allocated Agones `GameServer` resource, remov
 - `POST /allocate`
 
 `POST /allocate` remains available as a direct/manual allocation test endpoint. The operator UI should prefer Match Rooms; direct allocation is an advanced/debug path.
+
+Create tournament records:
+
+```bash
+TOURNAMENT_ID="$(curl -fsS -X POST http://127.0.0.1:18080/tournaments \
+  -H "content-type: application/json" \
+  -d '{"name":"Spring Arena Cup","description":"Manual MVP tournament"}' | jq -r .id)"
+
+curl -fsS http://127.0.0.1:18080/tournaments | jq
+curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}" | jq
+```
+
+Create teams, a round, and a tournament match:
+
+```bash
+TEAM_A_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
+  -H "content-type: application/json" \
+  -d '{"name":"Blue Rockets","tag":"BLUE","seed":1}' | jq -r .id)"
+
+TEAM_B_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
+  -H "content-type: application/json" \
+  -d '{"name":"Orange Railers","tag":"ORNG","seed":2}' | jq -r .id)"
+
+ROUND_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/rounds" \
+  -H "content-type: application/json" \
+  -d '{"name":"Round 1","round_order":1}' | jq -r .id)"
+
+curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
+  -H "content-type: application/json" \
+  -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"stormkeep\",\"requested_game_mode\":\"dm\"}" | jq
+```
+
+This tournament match API does not allocate a server yet. Server allocation still uses the existing Match Room endpoints below.
 
 Create a Match Room:
 
@@ -146,3 +211,10 @@ Example successful allocation response:
 - `XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS`: defaults to `1`
 - `DEFAULT_MATCH_MAX_PLAYERS`: defaults to `8`; planning metadata only, not enforced on warm Fleet servers
 - `MAX_MATCH_PLAYERS_LIMIT`: defaults to `32`; validation limit for that metadata
+- `DATABASE_URL`: optional full PostgreSQL connection URL; overrides individual PostgreSQL settings when set
+- `POSTGRES_HOST`: PostgreSQL host when `DATABASE_URL` is not set
+- `POSTGRES_PORT`: defaults to `5432`
+- `POSTGRES_DB`: PostgreSQL database name
+- `POSTGRES_USER`: PostgreSQL username
+- `POSTGRES_PASSWORD`: PostgreSQL password
+- `POSTGRES_CONNECT_TIMEOUT_SECONDS`: defaults to `3`

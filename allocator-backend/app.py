@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
 
+import psycopg
+from psycopg.rows import dict_row
 from flask import Flask, jsonify, request
 from kubernetes import client, config
 from kubernetes.client import ApiException
@@ -57,8 +59,110 @@ ADMIN_ALLOWED_MAPS = ("xoylent", "stormkeep", "implosion", "drain", "darkzone", 
 ADMIN_ALLOWED_GAME_MODES = ("dm", "tdm", "duel", "ctf")
 DEFAULT_REQUESTED_MAP = os.environ.get("DEFAULT_REQUESTED_MAP", "xoylent")
 DEFAULT_REQUESTED_GAME_MODE = os.environ.get("DEFAULT_REQUESTED_GAME_MODE", "dm")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "")
+POSTGRES_PORT = int(os.environ.get("POSTGRES_PORT", "5432"))
+POSTGRES_DB = os.environ.get("POSTGRES_DB", "")
+POSTGRES_USER = os.environ.get("POSTGRES_USER", "")
+POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
+POSTGRES_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("POSTGRES_CONNECT_TIMEOUT_SECONDS", "3"))
 
 RCON_PACKET_PREFIX = b"\xff\xff\xff\xff"
+DB_MIGRATIONS_READY = False
+DB_MIGRATION_ERROR: str | None = None
+DB_MIGRATIONS_LOCK = Lock()
+
+TOURNAMENT_STATUSES = ("draft", "active", "finished", "cancelled")
+ROUND_STATUSES = ("created", "scheduled", "running", "finished")
+TOURNAMENT_MATCH_STATUSES = (
+    "created",
+    "scheduled",
+    "server_allocating",
+    "server_ready",
+    "running",
+    "finished",
+    "released",
+    "failed",
+)
+
+DB_MIGRATIONS = (
+    (
+        "001_tournament_core",
+        """
+        CREATE TABLE IF NOT EXISTS tournaments (
+          id uuid PRIMARY KEY,
+          name text NOT NULL,
+          slug text UNIQUE,
+          description text,
+          status text NOT NULL DEFAULT 'draft',
+          format text NOT NULL DEFAULT 'manual',
+          started_at timestamptz,
+          finished_at timestamptz,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        );
+
+        CREATE TABLE IF NOT EXISTS teams (
+          id uuid PRIMARY KEY,
+          tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+          name text NOT NULL,
+          tag text,
+          seed integer,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (tournament_id, name),
+          UNIQUE (tournament_id, seed)
+        );
+
+        CREATE TABLE IF NOT EXISTS players (
+          id uuid PRIMARY KEY,
+          team_id uuid NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+          display_name text NOT NULL,
+          handle text,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (team_id, display_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS rounds (
+          id uuid PRIMARY KEY,
+          tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+          name text NOT NULL,
+          round_order integer NOT NULL,
+          status text NOT NULL DEFAULT 'created',
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (tournament_id, round_order),
+          UNIQUE (tournament_id, name)
+        );
+
+        CREATE TABLE IF NOT EXISTS matches (
+          id uuid PRIMARY KEY,
+          tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+          round_id uuid REFERENCES rounds(id) ON DELETE SET NULL,
+          team_a_id uuid REFERENCES teams(id) ON DELETE RESTRICT,
+          team_b_id uuid REFERENCES teams(id) ON DELETE RESTRICT,
+          status text NOT NULL DEFAULT 'created',
+          scheduled_at timestamptz,
+          started_at timestamptz,
+          finished_at timestamptz,
+          winner_team_id uuid REFERENCES teams(id) ON DELETE RESTRICT,
+          team_a_score integer,
+          team_b_score integer,
+          result_notes text,
+          requested_map text,
+          requested_game_mode text,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS matches_tournament_id_idx ON matches (tournament_id);
+        CREATE INDEX IF NOT EXISTS matches_round_id_idx ON matches (round_id);
+        CREATE INDEX IF NOT EXISTS matches_status_idx ON matches (status);
+        CREATE INDEX IF NOT EXISTS matches_scheduled_at_idx ON matches (scheduled_at);
+        """,
+    ),
+)
 
 
 class BackendApiError(Exception):
@@ -70,6 +174,131 @@ class BackendApiError(Exception):
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def new_db_id() -> str:
+    return str(uuid.uuid4())
+
+
+def db_configured() -> bool:
+    return bool(DATABASE_URL or (POSTGRES_HOST and POSTGRES_DB and POSTGRES_USER))
+
+
+def db_connect():
+    if not db_configured():
+        raise BackendApiError(
+            {
+                "error": "database_not_configured",
+                "message": "PostgreSQL is not configured for tournament persistence",
+            },
+            503,
+        )
+
+    try:
+        if DATABASE_URL:
+            return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=POSTGRES_CONNECT_TIMEOUT_SECONDS)
+
+        return psycopg.connect(
+            host=POSTGRES_HOST,
+            port=POSTGRES_PORT,
+            dbname=POSTGRES_DB,
+            user=POSTGRES_USER,
+            password=POSTGRES_PASSWORD,
+            row_factory=dict_row,
+            connect_timeout=POSTGRES_CONNECT_TIMEOUT_SECONDS,
+        )
+    except psycopg.Error as exc:
+        APP.logger.error("PostgreSQL connection failed: %s", exc)
+        raise BackendApiError(
+            {
+                "error": "database_unavailable",
+                "message": "PostgreSQL is unavailable",
+                "details": str(exc),
+            },
+            503,
+        ) from exc
+
+
+def row_to_json(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    normalized = {}
+    for key, value in row.items():
+        if isinstance(value, uuid.UUID):
+            normalized[key] = str(value)
+        elif isinstance(value, datetime):
+            normalized[key] = value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def rows_to_json(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row_to_json(row) for row in rows if row is not None]
+
+
+def run_db_migrations() -> None:
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                  id text PRIMARY KEY,
+                  applied_at timestamptz NOT NULL DEFAULT now()
+                )
+                """
+            )
+
+            for migration_id, migration_sql in DB_MIGRATIONS:
+                cur.execute("SELECT id FROM schema_migrations WHERE id = %s", (migration_id,))
+                if cur.fetchone():
+                    continue
+
+                APP.logger.info("Applying database migration %s", migration_id)
+                cur.execute(migration_sql)
+                cur.execute("INSERT INTO schema_migrations (id) VALUES (%s)", (migration_id,))
+
+        conn.commit()
+
+
+def ensure_db_ready() -> None:
+    global DB_MIGRATIONS_READY, DB_MIGRATION_ERROR
+
+    if DB_MIGRATIONS_READY:
+        return
+
+    with DB_MIGRATIONS_LOCK:
+        if DB_MIGRATIONS_READY:
+            return
+
+        try:
+            run_db_migrations()
+        except BackendApiError as exc:
+            DB_MIGRATION_ERROR = exc.payload.get("message")
+            raise
+        except psycopg.Error as exc:
+            DB_MIGRATION_ERROR = str(exc)
+            APP.logger.error("Database migration failed: %s", exc)
+            raise BackendApiError(
+                {
+                    "error": "database_migration_failed",
+                    "message": "PostgreSQL migration failed",
+                    "details": str(exc),
+                },
+                503,
+            ) from exc
+
+        DB_MIGRATIONS_READY = True
+        DB_MIGRATION_ERROR = None
+
+
+def database_error_response(exc: BackendApiError) -> tuple[Any, int]:
+    return jsonify(exc.payload), exc.status_code
+
+
+def require_db() -> None:
+    ensure_db_ready()
 
 
 def parse_optional_int(value: Any) -> int | None:
@@ -102,6 +331,11 @@ def load_kubernetes_config() -> None:
 
 load_kubernetes_config()
 custom_objects_api = client.CustomObjectsApi()
+if db_configured():
+    try:
+        ensure_db_ready()
+    except BackendApiError:
+        APP.logger.warning("PostgreSQL is configured but not ready; tournament endpoints will retry migrations on demand", exc_info=True)
 
 
 def build_allocation_manifest() -> dict:
@@ -1397,6 +1631,143 @@ def validate_max_players(value: Any) -> int:
     return max_players
 
 
+def validate_db_id(value: str, field: str) -> str:
+    try:
+        return str(uuid.UUID(value))
+    except (TypeError, ValueError) as exc:
+        raise BackendApiError({"error": "invalid_id", "message": f"{field} must be a valid UUID"}, 400) from exc
+
+
+def validate_required_text(value: Any, field: str, *, max_length: int = 120) -> str:
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} is required"}, 400)
+
+    cleaned = value.strip()
+    if not cleaned:
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} is required"}, 400)
+
+    if len(cleaned) > max_length:
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be {max_length} characters or fewer"}, 400)
+
+    return cleaned
+
+
+def validate_optional_text(value: Any, field: str, *, max_length: int = 240) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be a string"}, 400)
+
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > max_length:
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be {max_length} characters or fewer"}, 400)
+    return cleaned
+
+
+def validate_optional_positive_int(value: Any, field: str) -> int | None:
+    if value is None or value == "":
+        return None
+
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be an integer"}, 400) from exc
+
+    if parsed <= 0:
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be positive"}, 400)
+
+    return parsed
+
+
+def validate_status(value: Any, field: str, allowed: tuple[str, ...], default: str) -> str:
+    if value is None or value == "":
+        return default
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_status", "message": f"{field} must be a string"}, 400)
+
+    status = value.strip().lower()
+    if status not in allowed:
+        raise BackendApiError(
+            {
+                "error": "invalid_status",
+                "message": f"{field} must be one of: {', '.join(allowed)}",
+                "allowed_statuses": list(allowed),
+            },
+            400,
+        )
+    return status
+
+
+def validate_optional_timestamp(value: Any, field: str) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be an ISO-8601 timestamp string"}, 400)
+
+    try:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be an ISO-8601 timestamp string"}, 400) from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def validate_optional_db_id(value: Any, field: str) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_id", "message": f"{field} must be a UUID string"}, 400)
+    return validate_db_id(value, field)
+
+
+def db_exception_response(exc: psycopg.Error, *, fallback_error: str, fallback_message: str) -> tuple[Any, int]:
+    APP.logger.error("PostgreSQL query failed sqlstate=%s error=%s", getattr(exc, "sqlstate", None), exc)
+    if exc.sqlstate == "23505":
+        return jsonify({"error": "database_conflict", "message": "a record with those values already exists"}), 409
+    if exc.sqlstate == "23503":
+        return jsonify({"error": "invalid_reference", "message": "referenced record was not found"}), 400
+
+    return jsonify({"error": fallback_error, "message": fallback_message, "details": str(exc)}), 500
+
+
+def fetch_tournament(cur, tournament_id: str) -> dict[str, Any]:
+    cur.execute(
+        """
+        SELECT id, name, slug, description, status, format, started_at, finished_at, created_at, updated_at
+        FROM tournaments
+        WHERE id = %s
+        """,
+        (tournament_id,),
+    )
+    tournament = cur.fetchone()
+    if not tournament:
+        raise BackendApiError({"error": "tournament_not_found", "message": f"tournament {tournament_id} was not found"}, 404)
+    return tournament
+
+
+def ensure_team_in_tournament(cur, tournament_id: str, team_id: str | None, field: str) -> None:
+    if not team_id:
+        return
+
+    cur.execute("SELECT id FROM teams WHERE id = %s AND tournament_id = %s", (team_id, tournament_id))
+    if not cur.fetchone():
+        raise BackendApiError({"error": "team_not_found", "message": f"{field} was not found in this tournament"}, 404)
+
+
+def ensure_round_in_tournament(cur, tournament_id: str, round_id: str | None) -> None:
+    if not round_id:
+        return
+
+    cur.execute("SELECT id FROM rounds WHERE id = %s AND tournament_id = %s", (round_id, tournament_id))
+    if not cur.fetchone():
+        raise BackendApiError({"error": "round_not_found", "message": "round_id was not found in this tournament"}, 404)
+
+
 def apply_match_config_fields(match: dict[str, Any], body: dict[str, Any]) -> None:
     if "requested_map" in body or "map" in body:
         match["requested_map"] = validate_requested_map(body.get("requested_map", body.get("map")))
@@ -1469,9 +1840,296 @@ def build_match(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@APP.post("/tournaments")
+def create_tournament():
+    try:
+        require_db()
+        body = parse_json_body()
+        tournament_id = new_db_id()
+        name = validate_required_text(body.get("name"), "name")
+        slug = validate_optional_text(body.get("slug"), "slug", max_length=80)
+        description = validate_optional_text(body.get("description"), "description", max_length=1000)
+        status = validate_status(body.get("status"), "status", TOURNAMENT_STATUSES, "draft")
+        tournament_format = validate_optional_text(body.get("format"), "format", max_length=40) or "manual"
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO tournaments (id, name, slug, description, status, format)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id, name, slug, description, status, format, started_at, finished_at, created_at, updated_at
+                    """,
+                    (tournament_id, name, slug, description, status, tournament_format),
+                )
+                tournament = cur.fetchone()
+            conn.commit()
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="tournament_create_failed", fallback_message="failed to create tournament")
+
+    return jsonify(row_to_json(tournament)), 201
+
+
+@APP.get("/tournaments")
+def list_tournaments():
+    try:
+        require_db()
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, name, slug, description, status, format, started_at, finished_at, created_at, updated_at
+                    FROM tournaments
+                    ORDER BY created_at DESC
+                    """
+                )
+                tournaments = cur.fetchall()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="tournament_list_failed", fallback_message="failed to list tournaments")
+
+    return jsonify({"items": rows_to_json(tournaments)})
+
+
+@APP.get("/tournaments/<tournament_id>")
+def get_tournament(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                tournament = fetch_tournament(cur, tournament_id)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="tournament_read_failed", fallback_message="failed to read tournament")
+
+    return jsonify(row_to_json(tournament))
+
+
+@APP.post("/tournaments/<tournament_id>/teams")
+def create_tournament_team(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        body = parse_json_body()
+        team_id = new_db_id()
+        name = validate_required_text(body.get("name"), "name")
+        tag = validate_optional_text(body.get("tag"), "tag", max_length=20)
+        seed = validate_optional_positive_int(body.get("seed"), "seed")
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                cur.execute(
+                    """
+                    INSERT INTO teams (id, tournament_id, name, tag, seed)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, tournament_id, name, tag, seed, created_at, updated_at
+                    """,
+                    (team_id, tournament_id, name, tag, seed),
+                )
+                team = cur.fetchone()
+            conn.commit()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="team_create_failed", fallback_message="failed to create team")
+
+    return jsonify(row_to_json(team)), 201
+
+
+@APP.get("/tournaments/<tournament_id>/teams")
+def list_tournament_teams(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                cur.execute(
+                    """
+                    SELECT id, tournament_id, name, tag, seed, created_at, updated_at
+                    FROM teams
+                    WHERE tournament_id = %s
+                    ORDER BY seed NULLS LAST, name
+                    """,
+                    (tournament_id,),
+                )
+                teams = cur.fetchall()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="team_list_failed", fallback_message="failed to list teams")
+
+    return jsonify({"items": rows_to_json(teams)})
+
+
+@APP.post("/tournaments/<tournament_id>/rounds")
+def create_tournament_round(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        body = parse_json_body()
+        round_id = new_db_id()
+        name = validate_required_text(body.get("name"), "name")
+        status = validate_status(body.get("status"), "status", ROUND_STATUSES, "created")
+        round_order = validate_optional_positive_int(body.get("round_order", body.get("order")), "round_order")
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                if round_order is None:
+                    cur.execute("SELECT COALESCE(MAX(round_order), 0) + 1 AS next_order FROM rounds WHERE tournament_id = %s", (tournament_id,))
+                    round_order = cur.fetchone()["next_order"]
+
+                cur.execute(
+                    """
+                    INSERT INTO rounds (id, tournament_id, name, round_order, status)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, tournament_id, name, round_order, status, created_at, updated_at
+                    """,
+                    (round_id, tournament_id, name, round_order, status),
+                )
+                round_row = cur.fetchone()
+            conn.commit()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="round_create_failed", fallback_message="failed to create round")
+
+    return jsonify(row_to_json(round_row)), 201
+
+
+@APP.get("/tournaments/<tournament_id>/rounds")
+def list_tournament_rounds(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                cur.execute(
+                    """
+                    SELECT id, tournament_id, name, round_order, status, created_at, updated_at
+                    FROM rounds
+                    WHERE tournament_id = %s
+                    ORDER BY round_order, created_at
+                    """,
+                    (tournament_id,),
+                )
+                rounds = cur.fetchall()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="round_list_failed", fallback_message="failed to list rounds")
+
+    return jsonify({"items": rows_to_json(rounds)})
+
+
+@APP.post("/tournaments/<tournament_id>/matches")
+def create_tournament_match(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        body = parse_json_body()
+        match_id = new_db_id()
+        round_id = validate_optional_db_id(body.get("round_id"), "round_id")
+        team_a_id = validate_optional_db_id(body.get("team_a_id"), "team_a_id")
+        team_b_id = validate_optional_db_id(body.get("team_b_id"), "team_b_id")
+        if team_a_id and team_b_id and team_a_id == team_b_id:
+            raise BackendApiError({"error": "invalid_match_teams", "message": "team_a_id and team_b_id must be different"}, 400)
+
+        status = validate_status(body.get("status"), "status", TOURNAMENT_MATCH_STATUSES, "created")
+        scheduled_at = validate_optional_timestamp(body.get("scheduled_at"), "scheduled_at")
+        requested_map = validate_requested_map(body.get("requested_map", body.get("map"))) if ("requested_map" in body or "map" in body) else None
+        requested_game_mode = (
+            validate_requested_game_mode(body.get("requested_game_mode", body.get("game_mode")))
+            if ("requested_game_mode" in body or "game_mode" in body)
+            else None
+        )
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                ensure_round_in_tournament(cur, tournament_id, round_id)
+                ensure_team_in_tournament(cur, tournament_id, team_a_id, "team_a_id")
+                ensure_team_in_tournament(cur, tournament_id, team_b_id, "team_b_id")
+                cur.execute(
+                    """
+                    INSERT INTO matches (
+                      id, tournament_id, round_id, team_a_id, team_b_id, status,
+                      scheduled_at, requested_map, requested_game_mode
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING
+                      id, tournament_id, round_id, team_a_id, team_b_id, status,
+                      scheduled_at, started_at, finished_at, winner_team_id,
+                      team_a_score, team_b_score, result_notes, requested_map,
+                      requested_game_mode, created_at, updated_at
+                    """,
+                    (match_id, tournament_id, round_id, team_a_id, team_b_id, status, scheduled_at, requested_map, requested_game_mode),
+                )
+                match_row = cur.fetchone()
+            conn.commit()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="tournament_match_create_failed", fallback_message="failed to create tournament match")
+
+    return jsonify(row_to_json(match_row)), 201
+
+
+@APP.get("/tournaments/<tournament_id>/matches")
+def list_tournament_matches(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                cur.execute(
+                    """
+                    SELECT
+                      id, tournament_id, round_id, team_a_id, team_b_id, status,
+                      scheduled_at, started_at, finished_at, winner_team_id,
+                      team_a_score, team_b_score, result_notes, requested_map,
+                      requested_game_mode, created_at, updated_at
+                    FROM matches
+                    WHERE tournament_id = %s
+                    ORDER BY scheduled_at NULLS LAST, created_at
+                    """,
+                    (tournament_id,),
+                )
+                matches = cur.fetchall()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="tournament_match_list_failed", fallback_message="failed to list tournament matches")
+
+    return jsonify({"items": rows_to_json(matches)})
+
+
 @APP.get("/healthz")
 def healthz():
-    return jsonify({"status": "ok"})
+    if db_configured() and not DB_MIGRATIONS_READY:
+        try:
+            ensure_db_ready()
+        except BackendApiError:
+            pass
+
+    db_status = "not_configured"
+    if db_configured():
+        db_status = "ok" if DB_MIGRATIONS_READY else "unavailable"
+
+    response = {"status": "ok", "database": {"configured": db_configured(), "status": db_status}}
+    if DB_MIGRATION_ERROR:
+        response["database"]["last_error"] = DB_MIGRATION_ERROR
+    return jsonify(response)
 
 
 @APP.get("/fleet-status")

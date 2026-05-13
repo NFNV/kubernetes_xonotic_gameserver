@@ -523,3 +523,30 @@ When implementation starts, do this in a narrow slice:
 3. Keep existing Match Room runtime behavior working.
 4. Add `match_rooms` persistence only after the tournament match CRUD path is stable.
 5. Keep live status and Kubernetes reconciliation simple and best-effort.
+
+## Phase 1 Implementation Status
+
+Implemented in the first persistence phase:
+
+- dev PostgreSQL manifests under `platform/postgres/`
+- backend PostgreSQL connectivity from environment variables
+- startup/on-demand migration path
+- `tournaments`
+- `teams`
+- `players`
+- `rounds`
+- `matches`
+- create/list/get tournaments
+- create/list teams for a tournament
+- create/list rounds for a tournament
+- create/list matches for a tournament
+
+Still deferred:
+
+- `match_rooms` table
+- result recording
+- bracket generation
+- automatic winner advancement
+- persisted live telemetry history
+- auth
+- production database hardening

@@ -6,6 +6,8 @@ It now also includes the first in-memory Match Room layer for the admin workflow
 
 Match Rooms now store the requested map and game mode before allocation. Because the Fleet uses already-running standby servers, allocation does not create a fresh preconfigured server. Instead, the backend allocates a warm server, applies the requested map/mode through whitelisted RCON, verifies the result with `getstatus`, and only then marks the room joinable. Max-player control remains deferred.
 
+This phase also adds PostgreSQL-backed tournament CRUD as a foundation for the future tournament admin tool. Tournament records, teams, rounds, and tournament matches are persisted; Match Rooms and live server telemetry remain in-memory/runtime-owned for now.
+
 ## Why This Backend Uses The Kubernetes API In-Cluster
 
 This backend runs as a Kubernetes Pod and only needs to create/read `GameServerAllocation` resources and delete allocated `GameServer` resources in the local cluster.
@@ -22,6 +24,15 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `GET /healthz`: simple health check
 - `GET /fleet-status`: current Fleet summary for the operator UI
 - `GET /gameservers`: current `GameServer` list for the operator UI
+- `POST /tournaments`: create a persisted tournament
+- `GET /tournaments`: list persisted tournaments
+- `GET /tournaments/<tournament_id>`: inspect one persisted tournament
+- `POST /tournaments/<tournament_id>/teams`: create a team
+- `GET /tournaments/<tournament_id>/teams`: list teams
+- `POST /tournaments/<tournament_id>/rounds`: create a round
+- `GET /tournaments/<tournament_id>/rounds`: list rounds
+- `POST /tournaments/<tournament_id>/matches`: create a tournament match record
+- `GET /tournaments/<tournament_id>/matches`: list tournament match records
 - `POST /matches`: create an in-memory Match Room
 - `GET /matches`: list in-memory Match Rooms
 - `GET /matches/<match_id>`: inspect one Match Room
@@ -37,6 +48,8 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 `POST /allocate` remains available for direct/manual debugging. Normal admin flow should use Match Rooms.
 
 Match Room state is intentionally process-local memory. It is lost when the backend Pod restarts. That keeps this phase small while still moving the project toward a tournament admin tool.
+
+Tournament state is PostgreSQL-backed. Brackets, result recording, winner advancement, auth, and persisted Match Rooms are intentionally deferred.
 
 For allocated Match Rooms, the backend queries the assigned Xonotic server with UDP `getstatus` and briefly caches the result. This provides live map, game mode, player count, player names, scores, ping, and team scores when available. It is read-only and does not use RCON.
 
@@ -127,10 +140,26 @@ For the current repo phase, `./scripts/up.sh` already deploys these manifests af
 
 Manual deployment remains:
 
-Apply the namespace and RBAC:
+Apply the namespace, PostgreSQL Secret, PostgreSQL manifests, and RBAC:
 
 ```bash
 kubectl apply -f platform/allocator-backend/manifests/namespace.yaml
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: xonotic-postgres
+  namespace: xonotic-allocator-backend
+type: Opaque
+stringData:
+  POSTGRES_DB: ${XONOTIC_POSTGRES_DB}
+  POSTGRES_USER: ${XONOTIC_POSTGRES_USER}
+  POSTGRES_PASSWORD: ${XONOTIC_POSTGRES_PASSWORD}
+EOF
+kubectl apply -f platform/postgres/manifests/pvc.yaml
+kubectl apply -f platform/postgres/manifests/service.yaml
+kubectl apply -f platform/postgres/manifests/deployment.yaml
+kubectl rollout status deployment/xonotic-postgres -n xonotic-allocator-backend
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret
@@ -172,6 +201,32 @@ Then call the API:
 ```bash
 curl -fsS http://127.0.0.1:18080/healthz
 curl -fsS -X POST http://127.0.0.1:18080/allocate
+```
+
+Create persisted tournament records:
+
+```bash
+TOURNAMENT_ID="$(curl -fsS -X POST http://127.0.0.1:18080/tournaments \
+  -H "content-type: application/json" \
+  -d '{"name":"Spring Arena Cup"}' | jq -r .id)"
+
+TEAM_A_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
+  -H "content-type: application/json" \
+  -d '{"name":"Blue Rockets","tag":"BLUE","seed":1}' | jq -r .id)"
+
+TEAM_B_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
+  -H "content-type: application/json" \
+  -d '{"name":"Orange Railers","tag":"ORNG","seed":2}' | jq -r .id)"
+
+ROUND_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/rounds" \
+  -H "content-type: application/json" \
+  -d '{"name":"Round 1","round_order":1}' | jq -r .id)"
+
+curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
+  -H "content-type: application/json" \
+  -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"stormkeep\",\"requested_game_mode\":\"dm\"}" | jq
+
+curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" | jq
 ```
 
 Create and allocate a Match Room:

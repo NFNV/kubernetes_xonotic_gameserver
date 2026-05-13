@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: xonotic-postgres
+  namespace: xonotic-allocator-backend
+spec:
+  type: ClusterIP
+  selector:
+    app: xonotic-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP

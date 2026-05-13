@@ -15,6 +15,9 @@ fi
 : "${GCP_ZONE:?GCP_ZONE must be set}"
 : "${GKE_CLUSTER_NAME:?GKE_CLUSTER_NAME must be set}"
 : "${XONOTIC_RCON_PASSWORD:?XONOTIC_RCON_PASSWORD must be set}"
+: "${XONOTIC_POSTGRES_DB:?XONOTIC_POSTGRES_DB must be set}"
+: "${XONOTIC_POSTGRES_USER:?XONOTIC_POSTGRES_USER must be set}"
+: "${XONOTIC_POSTGRES_PASSWORD:?XONOTIC_POSTGRES_PASSWORD must be set}"
 
 infra_dir="${repo_root}/infra"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
@@ -26,6 +29,9 @@ allocator_backend_deployment_manifest="${repo_root}/platform/allocator-backend/m
 allocator_backend_service_manifest="${repo_root}/platform/allocator-backend/manifests/service.yaml"
 allocator_frontend_deployment_manifest="${repo_root}/platform/allocator-frontend/manifests/deployment.yaml"
 allocator_frontend_service_manifest="${repo_root}/platform/allocator-frontend/manifests/service.yaml"
+postgres_pvc_manifest="${repo_root}/platform/postgres/manifests/pvc.yaml"
+postgres_deployment_manifest="${repo_root}/platform/postgres/manifests/deployment.yaml"
+postgres_service_manifest="${repo_root}/platform/postgres/manifests/service.yaml"
 agones_system_namespace="agones-system"
 gameserver_namespace="xonotic-agones"
 fleet_name="xonotic-fleet"
@@ -33,8 +39,13 @@ required_ready_replicas="3"
 allocator_backend_namespace="xonotic-allocator-backend"
 allocator_backend_deployment_name="xonotic-allocator-backend"
 allocator_frontend_deployment_name="xonotic-allocator-frontend"
+postgres_deployment_name="xonotic-postgres"
 rcon_secret_name="xonotic-rcon"
+postgres_secret_name="xonotic-postgres"
 rcon_password_b64="$(printf '%s' "${XONOTIC_RCON_PASSWORD}" | base64 | tr -d '\n')"
+postgres_db_b64="$(printf '%s' "${XONOTIC_POSTGRES_DB}" | base64 | tr -d '\n')"
+postgres_user_b64="$(printf '%s' "${XONOTIC_POSTGRES_USER}" | base64 | tr -d '\n')"
+postgres_password_b64="$(printf '%s' "${XONOTIC_POSTGRES_PASSWORD}" | base64 | tr -d '\n')"
 
 cd "${infra_dir}"
 
@@ -101,6 +112,22 @@ kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
+  name: ${postgres_secret_name}
+  namespace: ${allocator_backend_namespace}
+type: Opaque
+data:
+  POSTGRES_DB: ${postgres_db_b64}
+  POSTGRES_USER: ${postgres_user_b64}
+  POSTGRES_PASSWORD: ${postgres_password_b64}
+EOF
+kubectl apply -f "${postgres_pvc_manifest}"
+kubectl apply -f "${postgres_service_manifest}"
+kubectl apply -f "${postgres_deployment_manifest}"
+kubectl rollout status "deployment/${postgres_deployment_name}" -n "${allocator_backend_namespace}"
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
   name: ${rcon_secret_name}
   namespace: ${allocator_backend_namespace}
 type: Opaque
@@ -119,5 +146,7 @@ kubectl get pods -n "${agones_system_namespace}"
 kubectl get fleetautoscaler -n "${gameserver_namespace}"
 kubectl get fleet -n "${gameserver_namespace}"
 kubectl get gameserver -n "${gameserver_namespace}" -o custom-columns=NAME:.metadata.name,STATE:.status.state,ADDRESS:.status.address,PORT:.status.ports[0].port,NODE:.status.nodeName
+kubectl get deployment "${postgres_deployment_name}" -n "${allocator_backend_namespace}"
+kubectl get pvc -n "${allocator_backend_namespace}"
 kubectl get pods -n "${allocator_backend_namespace}"
 kubectl get service -n "${allocator_backend_namespace}"
