@@ -52,7 +52,7 @@ Think of the platform like a restaurant:
 - `FleetAutoscaler`: staff preparing more empty tables when too many are occupied
 - allocator backend and admin UI: the reservation desk
 
-A `Ready` server may already be running and technically reachable, but allocation does not turn it on. Allocation assigns and reserves one server for a match. The backend records that assignment as a Match Room, and the `FleetAutoscaler` replenishes standby capacity after servers become allocated.
+A `Ready` server may already be running and technically reachable, but allocation does not turn it on. Allocation assigns and reserves one server for a match. The backend can record that assignment as either a lower-level in-memory Match Room or as a persisted tournament Match server assignment, and the `FleetAutoscaler` replenishes standby capacity after servers become allocated.
 
 Repository layout:
 
@@ -105,4 +105,4 @@ Repository layout:
 
 ## Current Status
 
-This repository is past the plain Kubernetes connectivity checkpoint, the first single-`GameServer` Agones step, the first manual Fleet-plus-allocation flow, the in-cluster allocator backend, and the first operator-facing admin frontend. Terraform has been applied, the GKE Standard cluster exists, the Xonotic server image has been published to GHCR, and the current platform path includes Fleet autoscaling, backend allocation, in-memory Match Rooms, and a small React control panel for operators.
+This repository is past the plain Kubernetes connectivity checkpoint, the first single-`GameServer` Agones step, the first manual Fleet-plus-allocation flow, the in-cluster allocator backend, and the first operator-facing admin frontend. Terraform has been applied in the dev environment, the Xonotic server image has been published to GHCR, and the current platform path includes Fleet autoscaling, backend allocation, in-memory Match Rooms, PostgreSQL-backed tournament records, persisted tournament match server assignments, and a small React control panel for operators.

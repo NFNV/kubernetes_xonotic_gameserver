@@ -1051,6 +1051,10 @@ table {
   border-collapse: collapse;
 }
 
+.tournament-matches-card table {
+  min-width: 1120px;
+}
+
 th,
 td {
   text-align: left;
@@ -1095,6 +1099,21 @@ th {
 .server-name-cell {
   display: grid;
   gap: 3px;
+}
+
+.tournament-server-cell {
+  display: grid;
+  gap: 5px;
+  min-width: 220px;
+}
+
+.tournament-server-cell span {
+  color: #83a2b9;
+  font-size: 0.78rem;
+}
+
+.tournament-server-cell .button-row {
+  margin-top: 4px;
 }
 
 .server-name-cell strong {

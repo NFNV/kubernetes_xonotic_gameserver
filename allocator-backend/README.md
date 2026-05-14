@@ -24,18 +24,18 @@ Implemented now:
 - create/list teams for a tournament
 - create/list rounds for a tournament
 - create/list tournament matches
-- minimal startup migrations for `tournaments`, `teams`, `players`, `rounds`, and `matches`
+- allocate/release one persisted server assignment for a tournament match
+- minimal startup migrations for `tournaments`, `teams`, `players`, `rounds`, `matches`, and `match_server_assignments`
 
 Still deferred:
 
 - bracket generation
 - automatic winner advancement
 - result recording endpoints
-- PostgreSQL persistence for Match Rooms/server assignments
 - persisted live telemetry history
 - auth and production database hardening
 
-The existing Match Room, allocation, `getstatus`, RCON, and release flow remains process-local and unchanged in this phase.
+The existing in-memory Match Room, allocation, `getstatus`, RCON, and release flow remains process-local and unchanged in this phase. Tournament match server assignments are now persisted separately in PostgreSQL.
 
 ## Match Rooms
 
@@ -67,6 +67,9 @@ Releasing a Match Room deletes the allocated Agones `GameServer` resource, remov
 - `GET /tournaments/<tournament_id>/rounds`
 - `POST /tournaments/<tournament_id>/matches`
 - `GET /tournaments/<tournament_id>/matches`
+- `GET /tournaments/<tournament_id>/matches/<match_id>/server-assignments`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/allocate-server`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/release-server`
 - `POST /matches`
 - `GET /matches`
 - `GET /matches/<match_id>`
@@ -106,12 +109,35 @@ ROUND_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_I
   -H "content-type: application/json" \
   -d '{"name":"Round 1","round_order":1}' | jq -r .id)"
 
-curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
+MATCH_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
   -H "content-type: application/json" \
-  -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"stormkeep\",\"requested_game_mode\":\"dm\"}" | jq
+  -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"stormkeep\",\"requested_game_mode\":\"dm\"}" | jq -r .id)"
 ```
 
-This tournament match API does not allocate a server yet. Server allocation still uses the existing Match Room endpoints below.
+Allocate a persisted server assignment for that tournament match:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/${MATCH_ID}/allocate-server" | jq
+```
+
+The response includes the PostgreSQL `assignment`, assigned endpoint, and best-effort `live_status` when `getstatus` responds.
+
+Verify the active assignment is persisted on the match:
+
+```bash
+curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" | jq
+curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/${MATCH_ID}/server-assignments" | jq
+```
+
+Release the tournament match server assignment:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/${MATCH_ID}/release-server" | jq
+```
+
+Release deletes the allocated Agones `GameServer`, marks the assignment `released`, preserves assignment history, and lets Fleet/FleetAutoscaler replenish standby capacity.
+
+The lower-level Match Room API below remains available for manual/operator server sessions and RCON controls.
 
 Create a Match Room:
 

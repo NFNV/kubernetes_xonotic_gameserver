@@ -261,60 +261,57 @@ MVP simplification:
 - treat each match as having at most one current room.
 - do not model best-of series or multiple maps yet.
 
-### `match_rooms`
+### `match_server_assignments`
 
-Stores the durable server/session assignment for a match.
+Implemented as the first durable bridge between PostgreSQL tournament matches and allocated Agones `GameServer` resources.
 
-This table is not a full mirror of Agones. It stores the assignment snapshot needed for the admin dashboard to recover after backend restart.
+This table is not a full mirror of Agones. It stores the assignment snapshot needed for the admin dashboard to recover which tournament match was assigned to which server endpoint after backend restart.
 
 Fields:
 
 ```sql
 id uuid primary key
+tournament_id uuid not null references tournaments(id) on delete cascade
 match_id uuid not null references matches(id) on delete cascade
-status text not null default 'created'
-requested_map text
-requested_game_mode text
 allocated_game_server_name text
 allocation_request_name text
 address text
 port integer
-joinable boolean not null default false
-allocation_config_result jsonb
-last_status_error jsonb
-allocated_at timestamptz
-released_at timestamptz
+status text not null default 'active'
 created_at timestamptz not null default now()
+released_at timestamptz
 updated_at timestamptz not null default now()
 ```
 
 Recommended indexes:
 
 ```sql
-index on match_rooms (match_id)
-index on match_rooms (status)
+index on match_server_assignments (tournament_id)
+index on match_server_assignments (match_id)
+index on match_server_assignments (status)
 unique (allocated_game_server_name)
+unique (match_id) where status = 'active'
 ```
 
 Validation:
 
-- `status` must be one of match room states.
+- `status` is currently `active`, `released`, or `failed`.
 - `port` must be valid TCP/UDP port range when present.
-- `joinable = true` only when status is `ready`, address is present, and port is present.
 - `allocated_game_server_name` should be present after allocation succeeds.
 
 Relationships:
 
-- one match room belongs to one match
-- one match should have only one unreleased room in the MVP
+- one server assignment belongs to one tournament match
+- one tournament match has at most one active assignment
+- one tournament match can keep released assignment history
 
 Recommended MVP constraint:
 
 ```sql
-unique (match_id) where released_at is null
+unique (match_id) where status = 'active'
 ```
 
-If partial indexes feel too much for the first migration, enforce the "one active room" rule in application code and add the partial unique index later.
+The in-memory Match Room model still exists separately for lower-level/manual server workflow. `match_server_assignments` is the persisted tournament-match bridge.
 
 ## Relationship Summary
 
@@ -324,8 +321,8 @@ tournaments 1 -> many rounds
 tournaments 1 -> many matches
 teams 1 -> many players
 rounds 1 -> many matches
-matches 1 -> zero-or-one active match_rooms
-match_rooms 1 -> one Agones GameServer assignment snapshot
+matches 1 -> zero-or-one active match_server_assignments
+match_server_assignments 1 -> one Agones GameServer assignment snapshot
 ```
 
 ## What Remains Transient In Kubernetes/Agones
@@ -354,7 +351,6 @@ PostgreSQL may store references such as:
 - `port`
 - allocation timestamps
 - release timestamps
-- last allocation/configuration result
 
 But Kubernetes and Agones remain the source of truth for whether that runtime resource currently exists.
 
@@ -409,7 +405,7 @@ Create tables in this order:
 3. `players`
 4. `rounds`
 5. `matches`
-6. `match_rooms`
+6. `match_server_assignments`
 
 Add simple indexes with the first migration.
 
@@ -487,22 +483,17 @@ create table matches (
   updated_at timestamptz not null default now()
 );
 
-create table match_rooms (
+create table match_server_assignments (
   id uuid primary key,
+  tournament_id uuid not null references tournaments(id) on delete cascade,
   match_id uuid not null references matches(id) on delete cascade,
-  status text not null default 'created',
-  requested_map text,
-  requested_game_mode text,
   allocated_game_server_name text,
   allocation_request_name text,
   address text,
   port integer,
-  joinable boolean not null default false,
-  allocation_config_result jsonb,
-  last_status_error jsonb,
-  allocated_at timestamptz,
-  released_at timestamptz,
+  status text not null default 'active',
   created_at timestamptz not null default now(),
+  released_at timestamptz,
   updated_at timestamptz not null default now(),
   unique (allocated_game_server_name)
 );
@@ -510,8 +501,12 @@ create table match_rooms (
 create index matches_tournament_id_idx on matches (tournament_id);
 create index matches_round_id_idx on matches (round_id);
 create index matches_status_idx on matches (status);
-create index match_rooms_match_id_idx on match_rooms (match_id);
-create index match_rooms_status_idx on match_rooms (status);
+create index match_server_assignments_tournament_id_idx on match_server_assignments (tournament_id);
+create index match_server_assignments_match_id_idx on match_server_assignments (match_id);
+create index match_server_assignments_status_idx on match_server_assignments (status);
+create unique index match_server_assignments_one_active_idx
+  on match_server_assignments (match_id)
+  where status = 'active';
 ```
 
 ## Practical Next Implementation Step
@@ -540,10 +535,11 @@ Implemented in the first persistence phase:
 - create/list teams for a tournament
 - create/list rounds for a tournament
 - create/list matches for a tournament
+- persisted tournament match server assignments through `match_server_assignments`
+- allocate/release server endpoints for persisted tournament matches
 
 Still deferred:
 
-- `match_rooms` table
 - result recording
 - bracket generation
 - automatic winner advancement

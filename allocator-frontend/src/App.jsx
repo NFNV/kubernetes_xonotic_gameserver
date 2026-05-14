@@ -115,6 +115,14 @@ function shortId(id) {
   return id ? id.slice(0, 8) : "unknown";
 }
 
+function assignmentEndpoint(assignment) {
+  if (!assignment) {
+    return "";
+  }
+
+  return assignment.endpoint || (assignment.address && assignment.port ? `${assignment.address}:${assignment.port}` : "");
+}
+
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
@@ -152,6 +160,8 @@ export default function App() {
   const [creatingTeam, setCreatingTeam] = useState(false);
   const [creatingRound, setCreatingRound] = useState(false);
   const [creatingTournamentMatch, setCreatingTournamentMatch] = useState(false);
+  const [allocatingTournamentServers, setAllocatingTournamentServers] = useState({});
+  const [releasingTournamentServers, setReleasingTournamentServers] = useState({});
   const [tournamentForm, setTournamentForm] = useState({ name: "", description: "" });
   const [teamForm, setTeamForm] = useState({ name: "", tag: "", seed: "" });
   const [roundForm, setRoundForm] = useState({ name: "", round_order: "" });
@@ -406,6 +416,73 @@ export default function App() {
       });
     } finally {
       setCreatingTournamentMatch(false);
+    }
+  }
+
+  async function allocateTournamentMatchServer(match) {
+    if (!selectedTournamentId) {
+      return;
+    }
+
+    setAllocatingTournamentServers((current) => ({ ...current, [match.id]: true }));
+    setTournamentError(null);
+
+    try {
+      const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/allocate-server`, {
+        method: "POST",
+      });
+      const endpoint = assignmentEndpoint(result.assignment);
+      setCopyMessage(endpoint ? `Tournament match server assigned: ${endpoint}` : "Tournament match server assigned.");
+      window.setTimeout(() => setCopyMessage(""), 2400);
+      await loadTournamentDetails(selectedTournamentId, { silent: true });
+      await loadDashboard({ silent: true, source: "Tournament assignment refresh" });
+    } catch (err) {
+      setTournamentError({
+        title: "Allocate tournament server failed",
+        message: err.message,
+      });
+    } finally {
+      setAllocatingTournamentServers((current) => {
+        const next = { ...current };
+        delete next[match.id];
+        return next;
+      });
+    }
+  }
+
+  async function releaseTournamentMatchServer(match) {
+    if (!selectedTournamentId || !match.active_server_assignment) {
+      return;
+    }
+
+    const endpoint = assignmentEndpoint(match.active_server_assignment);
+    const confirmed = window.confirm(
+      `Release the persisted server assignment for Match ${shortId(match.id)}${endpoint ? ` (${endpoint})` : ""}? This deletes the allocated Agones GameServer and keeps assignment history in PostgreSQL.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setReleasingTournamentServers((current) => ({ ...current, [match.id]: true }));
+    setTournamentError(null);
+
+    try {
+      await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/release-server`, { method: "POST" });
+      setCopyMessage("Tournament match server assignment released.");
+      window.setTimeout(() => setCopyMessage(""), 2400);
+      await loadTournamentDetails(selectedTournamentId, { silent: true });
+      await loadDashboard({ silent: true, source: "Tournament release refresh" });
+    } catch (err) {
+      setTournamentError({
+        title: "Release tournament server failed",
+        message: err.message,
+      });
+    } finally {
+      setReleasingTournamentServers((current) => {
+        const next = { ...current };
+        delete next[match.id];
+        return next;
+      });
     }
   }
 
@@ -862,8 +939,8 @@ export default function App() {
                 </div>
 
                 <p className="deferred-note">
-                  This is persisted tournament planning data. Matches here are not yet deeply linked to Match Rooms or server allocation.
-                  Brackets, result advancement, and winner automation remain manual/deferred.
+                  Tournament Matches are persisted planning records. They can now hold a persisted server assignment to one allocated Agones GameServer.
+                  Match Rooms remain available below as the lower-level/manual workflow. Brackets, result advancement, and winner automation remain manual/deferred.
                 </p>
 
                 {tournamentDetailLoading ? (
@@ -1064,31 +1141,77 @@ export default function App() {
                                 <th>Round</th>
                                 <th>Teams</th>
                                 <th>Status</th>
+                                <th>Server Assignment</th>
                                 <th>Winner</th>
                                 <th>Score</th>
+                                <th>Actions</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {tournamentMatches.map((match) => (
-                                <tr key={match.id}>
-                                  <td>
-                                    <div className="server-name-cell">
-                                      <strong>Match {shortId(match.id)}</strong>
-                                      <span>{match.requested_map || "map unset"} / {match.requested_game_mode || "mode unset"}</span>
-                                    </div>
-                                  </td>
-                                  <td>{match.round_id ? roundNameById[match.round_id] || shortId(match.round_id) : "Unassigned"}</td>
-                                  <td>
-                                    {match.team_a_id ? teamNameById[match.team_a_id] || shortId(match.team_a_id) : "TBD"} vs{" "}
-                                    {match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "TBD"}
-                                  </td>
-                                  <td><span className="state-badge">{match.status}</span></td>
-                                  <td>{match.winner_team_id ? teamNameById[match.winner_team_id] || shortId(match.winner_team_id) : "Not recorded"}</td>
-                                  <td>
-                                    {match.team_a_score ?? "-"} / {match.team_b_score ?? "-"}
-                                  </td>
-                                </tr>
-                              ))}
+                              {tournamentMatches.map((match) => {
+                                const activeAssignment = match.active_server_assignment;
+                                const endpoint = assignmentEndpoint(activeAssignment);
+                                const command = connectCommand(endpoint);
+                                const isAllocatingServer = Boolean(allocatingTournamentServers[match.id]);
+                                const isReleasingServer = Boolean(releasingTournamentServers[match.id]);
+
+                                return (
+                                  <tr key={match.id}>
+                                    <td>
+                                      <div className="server-name-cell">
+                                        <strong>Match {shortId(match.id)}</strong>
+                                        <span>{match.requested_map || "map unset"} / {match.requested_game_mode || "mode unset"}</span>
+                                      </div>
+                                    </td>
+                                    <td>{match.round_id ? roundNameById[match.round_id] || shortId(match.round_id) : "Unassigned"}</td>
+                                    <td>
+                                      {match.team_a_id ? teamNameById[match.team_a_id] || shortId(match.team_a_id) : "TBD"} vs{" "}
+                                      {match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "TBD"}
+                                    </td>
+                                    <td><span className="state-badge">{match.status}</span></td>
+                                    <td>
+                                      {activeAssignment ? (
+                                        <div className="tournament-server-cell">
+                                          <strong className="join-endpoint">{endpoint || "Endpoint pending"}</strong>
+                                          <span>{activeAssignment.allocated_game_server_name}</span>
+                                          {command && <code className="connection-command">{command}</code>}
+                                          <div className="button-row">
+                                            <CopyButton text={endpoint} label="Copy endpoint" onCopy={copyText} />
+                                            <CopyButton text={command} label="Copy connect" onCopy={copyText} />
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <span className="muted-endpoint">No persisted server assignment</span>
+                                      )}
+                                    </td>
+                                    <td>{match.winner_team_id ? teamNameById[match.winner_team_id] || shortId(match.winner_team_id) : "Not recorded"}</td>
+                                    <td>
+                                      {match.team_a_score ?? "-"} / {match.team_b_score ?? "-"}
+                                    </td>
+                                    <td>
+                                      {activeAssignment ? (
+                                        <button
+                                          className="copy-button"
+                                          type="button"
+                                          onClick={() => void releaseTournamentMatchServer(match)}
+                                          disabled={isReleasingServer}
+                                        >
+                                          {isReleasingServer ? "Releasing..." : "Release Server"}
+                                        </button>
+                                      ) : (
+                                        <button
+                                          className="secondary"
+                                          type="button"
+                                          onClick={() => void allocateTournamentMatchServer(match)}
+                                          disabled={isAllocatingServer}
+                                        >
+                                          {isAllocatingServer ? "Allocating..." : "Allocate Server"}
+                                        </button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>

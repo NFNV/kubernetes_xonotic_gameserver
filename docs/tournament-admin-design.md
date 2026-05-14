@@ -249,13 +249,19 @@ POST /tournaments/<tournament_id>/matches/<match_id>/release-server
 GET /tournaments/<tournament_id>/matches/<match_id>/server-status
 ```
 
-Allocation should reuse the existing Match Room allocation flow:
+Current implementation stores a PostgreSQL-backed `match_server_assignments` row for each tournament Match server assignment.
 
-1. create or attach a Match Room for the Match
+Allocation reuses the existing Agones allocation primitives:
+
+1. verify the tournament Match exists
 2. allocate a warm Agones `GameServer`
-3. apply requested map/mode through whitelisted RCON
-4. verify with `getstatus`
+3. store `allocated_game_server_name`, allocation request name, address, port, and `active` status in PostgreSQL
+4. return the assignment and best-effort live `getstatus`
 5. mark Match `server_ready`
+
+Release deletes the allocated Agones `GameServer`, marks the assignment `released`, stores `released_at`, and preserves assignment history.
+
+The lower-level in-memory Match Room workflow remains available for manual/operator server sessions and RCON controls.
 
 ### Result Recording
 

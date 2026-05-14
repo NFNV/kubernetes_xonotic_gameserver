@@ -162,6 +162,38 @@ DB_MIGRATIONS = (
         CREATE INDEX IF NOT EXISTS matches_scheduled_at_idx ON matches (scheduled_at);
         """,
     ),
+    (
+        "002_match_server_assignments",
+        """
+        CREATE TABLE IF NOT EXISTS match_server_assignments (
+          id uuid PRIMARY KEY,
+          tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+          match_id uuid NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+          allocated_game_server_name text NOT NULL,
+          allocation_request_name text,
+          address text NOT NULL,
+          port integer NOT NULL,
+          status text NOT NULL DEFAULT 'active',
+          created_at timestamptz NOT NULL DEFAULT now(),
+          released_at timestamptz,
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (allocated_game_server_name)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS match_server_assignments_one_active_idx
+          ON match_server_assignments (match_id)
+          WHERE status = 'active';
+
+        CREATE INDEX IF NOT EXISTS match_server_assignments_tournament_id_idx
+          ON match_server_assignments (tournament_id);
+
+        CREATE INDEX IF NOT EXISTS match_server_assignments_match_id_idx
+          ON match_server_assignments (match_id);
+
+        CREATE INDEX IF NOT EXISTS match_server_assignments_status_idx
+          ON match_server_assignments (status);
+        """,
+    ),
 )
 
 
@@ -1681,6 +1713,20 @@ def validate_optional_positive_int(value: Any, field: str) -> int | None:
     return parsed
 
 
+def validate_optional_bool(value: Any, field: str) -> bool:
+    if value is None or value == "":
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "n"}:
+            return False
+    raise BackendApiError({"error": "invalid_field", "message": f"{field} must be a boolean"}, 400)
+
+
 def validate_status(value: Any, field: str, allowed: tuple[str, ...], default: str) -> str:
     if value is None or value == "":
         return default
@@ -1748,6 +1794,86 @@ def fetch_tournament(cur, tournament_id: str) -> dict[str, Any]:
     if not tournament:
         raise BackendApiError({"error": "tournament_not_found", "message": f"tournament {tournament_id} was not found"}, 404)
     return tournament
+
+
+def fetch_tournament_match(cur, tournament_id: str, match_id: str) -> dict[str, Any]:
+    cur.execute(
+        """
+        SELECT
+          id, tournament_id, round_id, team_a_id, team_b_id, status,
+          scheduled_at, started_at, finished_at, winner_team_id,
+          team_a_score, team_b_score, result_notes, requested_map,
+          requested_game_mode, created_at, updated_at
+        FROM matches
+        WHERE id = %s AND tournament_id = %s
+        """,
+        (match_id, tournament_id),
+    )
+    match = cur.fetchone()
+    if not match:
+        raise BackendApiError({"error": "match_not_found", "message": f"match {match_id} was not found in this tournament"}, 404)
+    return match
+
+
+def fetch_active_server_assignment(cur, tournament_id: str, match_id: str) -> dict[str, Any] | None:
+    cur.execute(
+        """
+        SELECT
+          id, tournament_id, match_id, allocated_game_server_name,
+          allocation_request_name, address, port, status, created_at,
+          released_at, updated_at
+        FROM match_server_assignments
+        WHERE tournament_id = %s AND match_id = %s AND status = 'active'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (tournament_id, match_id),
+    )
+    return cur.fetchone()
+
+
+def assignment_response(assignment: dict[str, Any], *, include_live_status: bool = True) -> dict[str, Any]:
+    response = row_to_json(assignment) or {}
+    address = assignment.get("address")
+    port = assignment.get("port")
+    response["endpoint"] = f"{address}:{port}" if address and port else None
+
+    if include_live_status and address and port:
+        response["live_status"] = get_cached_xonotic_status(address, int(port))
+
+    return response
+
+
+def attach_active_assignments_to_matches(cur, matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not matches:
+        return []
+
+    match_ids = [match["id"] for match in matches]
+    placeholders = ", ".join(["%s"] * len(match_ids))
+    cur.execute(
+        f"""
+        SELECT
+          id, tournament_id, match_id, allocated_game_server_name,
+          allocation_request_name, address, port, status, created_at,
+          released_at, updated_at
+        FROM match_server_assignments
+        WHERE status = 'active' AND match_id IN ({placeholders})
+        ORDER BY created_at DESC
+        """,
+        match_ids,
+    )
+    assignment_by_match_id: dict[str, dict[str, Any]] = {}
+    for assignment in cur.fetchall():
+        assignment_by_match_id.setdefault(str(assignment["match_id"]), assignment)
+
+    enriched = []
+    for match in matches:
+        match_json = row_to_json(match) or {}
+        active_assignment = assignment_by_match_id.get(str(match["id"]))
+        match_json["active_server_assignment"] = assignment_response(active_assignment, include_live_status=False) if active_assignment else None
+        enriched.append(match_json)
+
+    return enriched
 
 
 def ensure_team_in_tournament(cur, tournament_id: str, team_id: str | None, field: str) -> None:
@@ -2106,12 +2232,258 @@ def list_tournament_matches(tournament_id: str):
                     (tournament_id,),
                 )
                 matches = cur.fetchall()
+                enriched_matches = attach_active_assignments_to_matches(cur, matches)
     except BackendApiError as exc:
         return jsonify(exc.payload), exc.status_code
     except psycopg.Error as exc:
         return db_exception_response(exc, fallback_error="tournament_match_list_failed", fallback_message="failed to list tournament matches")
 
-    return jsonify({"items": rows_to_json(matches)})
+    return jsonify({"items": enriched_matches})
+
+
+@APP.get("/tournaments/<tournament_id>/matches/<match_id>/server-assignments")
+def list_tournament_match_server_assignments(tournament_id: str, match_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        match_id = validate_db_id(match_id, "match_id")
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                fetch_tournament_match(cur, tournament_id, match_id)
+                cur.execute(
+                    """
+                    SELECT
+                      id, tournament_id, match_id, allocated_game_server_name,
+                      allocation_request_name, address, port, status, created_at,
+                      released_at, updated_at
+                    FROM match_server_assignments
+                    WHERE tournament_id = %s AND match_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (tournament_id, match_id),
+                )
+                assignments = cur.fetchall()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(
+            exc,
+            fallback_error="server_assignment_list_failed",
+            fallback_message="failed to list tournament match server assignments",
+        )
+
+    return jsonify({"items": [assignment_response(assignment, include_live_status=False) for assignment in assignments]})
+
+
+@APP.post("/tournaments/<tournament_id>/matches/<match_id>/allocate-server")
+def allocate_tournament_match_server(tournament_id: str, match_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        match_id = validate_db_id(match_id, "match_id")
+        body = parse_json_body()
+        force_replace = validate_optional_bool(body.get("force_replace"), "force_replace")
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                match = fetch_tournament_match(cur, tournament_id, match_id)
+                active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
+
+                if active_assignment and not force_replace:
+                    return jsonify(
+                        {
+                            "reused_existing_assignment": True,
+                            "match": row_to_json(match),
+                            "assignment": assignment_response(active_assignment),
+                        }
+                    )
+
+                if active_assignment and force_replace:
+                    release_result = delete_gameserver(active_assignment["allocated_game_server_name"])
+                    cur.execute(
+                        """
+                        UPDATE match_server_assignments
+                        SET status = 'released', released_at = now(), updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (active_assignment["id"],),
+                    )
+                    clear_status_cache(active_assignment.get("address"), active_assignment.get("port"))
+                    APP.logger.info(
+                        "Force-released existing tournament match server assignment id=%s match_id=%s release_result=%s",
+                        active_assignment["id"],
+                        match_id,
+                        release_result,
+                    )
+
+                cur.execute(
+                    """
+                    UPDATE matches
+                    SET status = 'server_allocating', updated_at = now()
+                    WHERE id = %s AND tournament_id = %s
+                    """,
+                    (match_id, tournament_id),
+                )
+            conn.commit()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(
+            exc,
+            fallback_error="server_assignment_prepare_failed",
+            fallback_message="failed to prepare tournament match server assignment",
+        )
+
+    allocation = None
+    try:
+        allocation = allocate_gameserver()
+        assignment_id = new_db_id()
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                match = fetch_tournament_match(cur, tournament_id, match_id)
+                active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
+                if active_assignment:
+                    delete_gameserver(allocation["allocated_game_server_name"])
+                    return jsonify(
+                        {
+                            "reused_existing_assignment": True,
+                            "message": "another active assignment was created while this allocation was in progress",
+                            "match": row_to_json(match),
+                            "assignment": assignment_response(active_assignment),
+                        }
+                    ), 409
+
+                cur.execute(
+                    """
+                    INSERT INTO match_server_assignments (
+                      id, tournament_id, match_id, allocated_game_server_name,
+                      allocation_request_name, address, port, status
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'active')
+                    RETURNING
+                      id, tournament_id, match_id, allocated_game_server_name,
+                      allocation_request_name, address, port, status, created_at,
+                      released_at, updated_at
+                    """,
+                    (
+                        assignment_id,
+                        tournament_id,
+                        match_id,
+                        allocation["allocated_game_server_name"],
+                        allocation.get("allocation_request_name"),
+                        allocation["address"],
+                        allocation["port"],
+                    ),
+                )
+                assignment = cur.fetchone()
+                cur.execute(
+                    """
+                    UPDATE matches
+                    SET status = 'server_ready', updated_at = now()
+                    WHERE id = %s AND tournament_id = %s
+                    RETURNING
+                      id, tournament_id, round_id, team_a_id, team_b_id, status,
+                      scheduled_at, started_at, finished_at, winner_team_id,
+                      team_a_score, team_b_score, result_notes, requested_map,
+                      requested_game_mode, created_at, updated_at
+                    """,
+                    (match_id, tournament_id),
+                )
+                match = cur.fetchone()
+            conn.commit()
+    except BackendApiError as exc:
+        if allocation:
+            try:
+                delete_gameserver(allocation["allocated_game_server_name"])
+            except BackendApiError:
+                APP.logger.warning("allocated GameServer cleanup failed after tournament assignment error", exc_info=True)
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        if allocation:
+            try:
+                delete_gameserver(allocation["allocated_game_server_name"])
+            except BackendApiError:
+                APP.logger.warning("allocated GameServer cleanup failed after tournament assignment DB error", exc_info=True)
+        return db_exception_response(
+            exc,
+            fallback_error="server_assignment_create_failed",
+            fallback_message="failed to store tournament match server assignment",
+        )
+
+    return jsonify({"match": row_to_json(match), "assignment": assignment_response(assignment)}), 201
+
+
+@APP.post("/tournaments/<tournament_id>/matches/<match_id>/release-server")
+def release_tournament_match_server(tournament_id: str, match_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        match_id = validate_db_id(match_id, "match_id")
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                fetch_tournament_match(cur, tournament_id, match_id)
+                active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
+                if not active_assignment:
+                    raise BackendApiError(
+                        {
+                            "error": "server_assignment_not_found",
+                            "message": f"match {match_id} does not have an active server assignment",
+                        },
+                        404,
+                    )
+
+        release_result = delete_gameserver(active_assignment["allocated_game_server_name"])
+        clear_status_cache(active_assignment.get("address"), active_assignment.get("port"))
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE match_server_assignments
+                    SET status = 'released', released_at = now(), updated_at = now()
+                    WHERE id = %s
+                    RETURNING
+                      id, tournament_id, match_id, allocated_game_server_name,
+                      allocation_request_name, address, port, status, created_at,
+                      released_at, updated_at
+                    """,
+                    (active_assignment["id"],),
+                )
+                assignment = cur.fetchone()
+                cur.execute(
+                    """
+                    UPDATE matches
+                    SET status = 'released', finished_at = COALESCE(finished_at, now()), updated_at = now()
+                    WHERE id = %s AND tournament_id = %s
+                    RETURNING
+                      id, tournament_id, round_id, team_a_id, team_b_id, status,
+                      scheduled_at, started_at, finished_at, winner_team_id,
+                      team_a_score, team_b_score, result_notes, requested_map,
+                      requested_game_mode, created_at, updated_at
+                    """,
+                    (match_id, tournament_id),
+                )
+                match = cur.fetchone()
+            conn.commit()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(
+            exc,
+            fallback_error="server_assignment_release_failed",
+            fallback_message="failed to release tournament match server assignment",
+        )
+
+    return jsonify({"match": row_to_json(match), "assignment": assignment_response(assignment, include_live_status=False), "release_result": release_result})
 
 
 @APP.get("/healthz")

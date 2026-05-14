@@ -14,6 +14,7 @@ It is intentionally narrow:
 
 - backend health status
 - Tournament Management for persisted tournaments, teams, rounds, and tournament matches
+- persisted server assignment controls for tournament matches
 - Match Room creation
 - pre-allocation map/mode selection
 - Match Room allocation and release
@@ -34,7 +35,7 @@ Manual Direct Allocation is hidden under Advanced / Debug and should only be use
 
 Allocated Servers are infrastructure allocations. The table can terminate an `Allocated` GameServer directly; Fleet/FleetAutoscaler should replenish capacity afterward. The Commands panel routes safe actions through a linked Match Room when available and keeps direct/manual allocations disabled for RCON actions.
 
-The Tournament Management section is the first UI over PostgreSQL-backed tournament APIs. It lets operators create/select tournaments, add teams, add rounds, and create simple tournament match records. These persisted tournament matches are planning records only in this phase; they are not yet deeply linked to Match Rooms or server allocation.
+The Tournament Management section is the first UI over PostgreSQL-backed tournament APIs. It lets operators create/select tournaments, add teams, add rounds, and create simple tournament match records. Tournament matches can now allocate and release a persisted server assignment that links the match to one allocated Agones `GameServer`.
 
 Current tournament limitations:
 
@@ -42,7 +43,7 @@ Current tournament limitations:
 - no automatic winner advancement
 - no result recording UI yet
 - match names are not persisted by the backend schema yet; the UI displays match IDs
-- tournament matches do not allocate/release servers directly yet
+- tournament match RCON controls are still handled through the lower-level Match Room workflow for now
 
 ## Backend Endpoints Used
 
@@ -57,6 +58,9 @@ Current tournament limitations:
 - `POST /tournaments/<tournament_id>/rounds`
 - `GET /tournaments/<tournament_id>/matches`
 - `POST /tournaments/<tournament_id>/matches`
+- `GET /tournaments/<tournament_id>/matches/<match_id>/server-assignments`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/allocate-server`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/release-server`
 - `GET /matches`
 - `POST /matches`
 - `POST /matches/<match_id>/allocate`

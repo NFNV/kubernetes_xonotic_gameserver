@@ -4,9 +4,9 @@ This file is the running context log for the repository. Update it over time so 
 
 ## Current State
 
-- Stage: Phase 5 in-memory Match Rooms MVP
-- Status: Terraform has been applied successfully, the GKE Standard cluster exists, `kubectl` access works, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and the single-GameServer Agones phase have worked, the Fleet plus manual `GameServerAllocation` path exists, the in-cluster allocator backend exists, the FleetAutoscaler standby buffer exists, the operator-facing frontend exists, the backend/frontend now model in-memory Match Rooms above raw Agones allocations, allocated rooms expose best-effort live Xonotic `getstatus` telemetry, rooms can be released by deleting the allocated Agones `GameServer`, and the first whitelisted RCON admin controls support broadcast message plus allowlisted map change
-- Goal: validate the first tournament-admin-shaped workflow where operators create Match Rooms and assign one allocated Xonotic server to each room, without adding auth, persistence, player accounts, brackets, or real matchmaking
+- Stage: Tournament match server assignment persistence
+- Status: Terraform has been applied successfully, the GKE Standard cluster exists when infra is up, `kubectl` access works when credentials/cluster are available, the Xonotic server image has been published to GHCR, the plain Kubernetes connectivity checkpoint and Agones phases have worked, the Fleet plus `GameServerAllocation` path exists, the allocator backend/frontend exist, the FleetAutoscaler standby buffer exists, in-memory Match Rooms manage manual Agones-backed server sessions, allocated rooms expose live Xonotic `getstatus` telemetry, rooms can be released by deleting allocated Agones `GameServer` resources, whitelisted RCON controls support broadcast plus allowlisted map change, PostgreSQL-backed tournament CRUD exists, and tournament matches can now persist server assignment history that links them to allocated Agones `GameServer` endpoints
+- Goal: bridge persisted tournament Matches to live Agones server assignments while preserving the proven lower-level Match Room allocation/RCON/release workflow
 
 ## Locked-In Context
 
@@ -96,8 +96,8 @@ This file is the running context log for the repository. Update it over time so 
 - For the tournament-management phase, `Match` should become the tournament-facing record while Match Room should remain the lower-level server/session object that owns allocation, endpoint, RCON controls, live status, and release
 - Match Room state is intentionally in-memory and disappears on backend Pod restart until a later persistence phase
 - The next real tournament-management phase should add PostgreSQL for tournaments, teams, players, rounds, matches, and results rather than keeping those admin-authored records in-memory
-- The first PostgreSQL phase now persists tournament, team, player, round, and tournament match records; Match Rooms and live server telemetry remain runtime/in-memory for now
-- The frontend now has a basic Tournament Management section for persisted tournaments, teams, rounds, and tournament match records; it intentionally does not render brackets, advance winners, record results, or attach tournament matches directly to Match Rooms yet
+- The first PostgreSQL phase now persists tournament, team, player, round, tournament match records, and tournament match server assignment history; Match Rooms and live server telemetry remain runtime/in-memory for now
+- The frontend now has a basic Tournament Management section for persisted tournaments, teams, rounds, tournament match records, and persisted match server assignment controls; it intentionally does not render brackets, advance winners, or record results yet
 - PostgreSQL should persist durable admin intent and assignment snapshots, while Kubernetes/Agones remain the source of truth for live Fleet, GameServer, Pod, allocation-resource, and endpoint runtime state
 - Live player/map/score data should use read-only Xonotic `getstatus` first; avoid RCON unless a later feature truly requires command execution
 - Match Rooms now store requested map and game mode before allocation; allocation still uses a warm Fleet server, then applies requested config with whitelisted RCON and only exposes the endpoint when `getstatus` verifies it
@@ -108,6 +108,7 @@ This file is the running context log for the repository. Update it over time so 
 - Match Room `live_status` should represent the last known good `getstatus` result; transient map-reload timeouts are tracked separately as status/verification errors so the admin UI does not lose map/mode/player context
 - Manual Direct Allocation is now an Advanced / Debug path; normal operator workflow is Match Rooms, and allocated-server table actions can terminate only `Allocated` GameServers or route safe commands through a linked Match Room
 - Releasing a Match Room deletes the allocated Agones `GameServer` resource and relies on Fleet/FleetAutoscaler to replenish standby capacity
+- Persisted tournament Match server assignment uses `match_server_assignments`: one active assignment per match, historical released rows preserved, and Agones/Kubernetes remain the source of truth for whether the runtime `GameServer` currently exists
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
 - Reliability for this phase means every allocated server endpoint must be joinable, not just that some allocations succeed
