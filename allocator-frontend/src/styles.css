@@ -1112,6 +1112,18 @@ th {
   font-size: 0.78rem;
 }
 
+.tournament-server-cell-warning {
+  padding: 8px;
+  border: 1px solid rgba(255, 177, 74, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 177, 74, 0.08);
+}
+
+.tournament-server-cell-warning .join-endpoint,
+.tournament-server-cell-warning span {
+  color: #ffd391;
+}
+
 .tournament-server-cell .button-row {
   margin-top: 4px;
 }

@@ -2383,20 +2383,8 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                     ),
                 )
                 assignment = cur.fetchone()
-                cur.execute(
-                    """
-                    UPDATE matches
-                    SET status = 'server_ready', updated_at = now()
-                    WHERE id = %s AND tournament_id = %s
-                    RETURNING
-                      id, tournament_id, round_id, team_a_id, team_b_id, status,
-                      scheduled_at, started_at, finished_at, winner_team_id,
-                      team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, created_at, updated_at
-                    """,
-                    (match_id, tournament_id),
-                )
-                match = cur.fetchone()
+                requested_map = match.get("requested_map") or DEFAULT_REQUESTED_MAP
+                requested_game_mode = match.get("requested_game_mode") or DEFAULT_REQUESTED_GAME_MODE
             conn.commit()
     except BackendApiError as exc:
         if allocation:
@@ -2417,7 +2405,67 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
             fallback_message="failed to store tournament match server assignment",
         )
 
-    return jsonify({"match": row_to_json(match), "assignment": assignment_response(assignment)}), 201
+    try:
+        config_result = configure_allocated_server(
+            {
+                "allocated_game_server_name": allocation["allocated_game_server_name"],
+                "address": allocation["address"],
+                "port": allocation["port"],
+            },
+            requested_map=requested_map,
+            requested_game_mode=requested_game_mode,
+        )
+    except BackendApiError as exc:
+        config_result = {
+            "ok": False,
+            "rcon_sent": False,
+            "verified": False,
+            "requested_map": requested_map,
+            "requested_game_mode": requested_game_mode,
+            "error": exc.payload.get("error", "server_configuration_failed"),
+            "message": exc.payload.get("message", "server assignment was persisted, but configuration failed"),
+            "details": exc.payload,
+            "live_status": get_cached_xonotic_status(allocation.get("address"), allocation.get("port")),
+        }
+
+    next_status = "server_ready" if config_result.get("verified") else "failed"
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE matches
+                    SET status = %s, updated_at = now()
+                    WHERE id = %s AND tournament_id = %s
+                    RETURNING
+                      id, tournament_id, round_id, team_a_id, team_b_id, status,
+                      scheduled_at, started_at, finished_at, winner_team_id,
+                      team_a_score, team_b_score, result_notes, requested_map,
+                      requested_game_mode, created_at, updated_at
+                    """,
+                    (next_status, match_id, tournament_id),
+                )
+                match = cur.fetchone()
+                assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
+            conn.commit()
+    except psycopg.Error as exc:
+        return db_exception_response(
+            exc,
+            fallback_error="server_assignment_status_update_failed",
+            fallback_message="server assignment was stored, but match status update failed",
+        )
+
+    response_status = 201 if config_result.get("verified") else 202
+    return jsonify(
+        {
+            "match": row_to_json(match),
+            "assignment": assignment_response(assignment),
+            "configuration": config_result,
+            "warning": None
+            if config_result.get("verified")
+            else "server assignment was persisted, but requested map/mode verification failed",
+        }
+    ), response_status
 
 
 @APP.post("/tournaments/<tournament_id>/matches/<match_id>/release-server")

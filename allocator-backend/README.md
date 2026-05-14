@@ -120,7 +120,7 @@ Allocate a persisted server assignment for that tournament match:
 curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/${MATCH_ID}/allocate-server" | jq
 ```
 
-The response includes the PostgreSQL `assignment`, assigned endpoint, and best-effort `live_status` when `getstatus` responds.
+The response includes the PostgreSQL `assignment`, assigned endpoint, and configuration result. The backend allocates a warm Agones server, applies the match `requested_map` and `requested_game_mode` through the same whitelisted RCON configuration helper used by Match Rooms, and verifies with `getstatus`. The match is marked `server_ready` only when verification succeeds. If verification fails, the assignment remains persisted but the match is marked `failed` and the response includes a warning.
 
 Verify the active assignment is persisted on the match:
 

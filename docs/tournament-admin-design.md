@@ -256,8 +256,11 @@ Allocation reuses the existing Agones allocation primitives:
 1. verify the tournament Match exists
 2. allocate a warm Agones `GameServer`
 3. store `allocated_game_server_name`, allocation request name, address, port, and `active` status in PostgreSQL
-4. return the assignment and best-effort live `getstatus`
-5. mark Match `server_ready`
+4. apply requested map/mode through the existing whitelisted RCON configuration helper
+5. verify with `getstatus`
+6. mark Match `server_ready` only when verification succeeds
+
+If configuration or verification fails, the assignment remains persisted for operator cleanup, but the Match is marked `failed` rather than `server_ready`.
 
 Release deletes the allocated Agones `GameServer`, marks the assignment `released`, stores `released_at`, and preserves assignment history.
 

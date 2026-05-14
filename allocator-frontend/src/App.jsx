@@ -1154,6 +1154,7 @@ export default function App() {
                                 const command = connectCommand(endpoint);
                                 const isAllocatingServer = Boolean(allocatingTournamentServers[match.id]);
                                 const isReleasingServer = Boolean(releasingTournamentServers[match.id]);
+                                const assignmentVerified = match.status === "server_ready";
 
                                 return (
                                   <tr key={match.id}>
@@ -1171,9 +1172,10 @@ export default function App() {
                                     <td><span className="state-badge">{match.status}</span></td>
                                     <td>
                                       {activeAssignment ? (
-                                        <div className="tournament-server-cell">
+                                        <div className={`tournament-server-cell ${assignmentVerified ? "" : "tournament-server-cell-warning"}`}>
                                           <strong className="join-endpoint">{endpoint || "Endpoint pending"}</strong>
                                           <span>{activeAssignment.allocated_game_server_name}</span>
+                                          {!assignmentVerified && <span>Config not verified; do not treat as ready.</span>}
                                           {command && <code className="connection-command">{command}</code>}
                                           <div className="button-row">
                                             <CopyButton text={endpoint} label="Copy endpoint" onCopy={copyText} />
