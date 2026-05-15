@@ -563,6 +563,13 @@ button:disabled {
   white-space: nowrap;
 }
 
+.tournament-match-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .tournament-match-form .deferred-note {
   grid-column: 1 / -1;
   margin: 0;
@@ -1154,6 +1161,17 @@ th {
   display: grid;
   gap: 10px;
   min-width: 260px;
+}
+
+.active-server-note {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 177, 74, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 177, 74, 0.08);
+  color: #ffd391;
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 .result-form {

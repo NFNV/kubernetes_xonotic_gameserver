@@ -517,8 +517,18 @@ export default function App() {
     }
   }
 
-  async function createTournamentMatch(event) {
-    event.preventDefault();
+  function tournamentMatchPayload() {
+    return {
+      name: tournamentMatchForm.name.trim() || undefined,
+      round_id: tournamentMatchForm.round_id || undefined,
+      team_a_id: tournamentMatchForm.team_a_id || undefined,
+      team_b_id: tournamentMatchForm.team_b_id || undefined,
+      requested_map: tournamentMatchForm.requested_map,
+      requested_game_mode: tournamentMatchForm.requested_game_mode,
+    };
+  }
+
+  async function createTournamentMatch({ allocate = false } = {}) {
     if (!selectedTournamentId) {
       return;
     }
@@ -527,23 +537,29 @@ export default function App() {
     setTournamentError(null);
 
     try {
-      await fetchJson(`/api/tournaments/${selectedTournamentId}/matches`, {
+      const match = await fetchJson(`/api/tournaments/${selectedTournamentId}/matches`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: tournamentMatchForm.name.trim() || undefined,
-          round_id: tournamentMatchForm.round_id || undefined,
-          team_a_id: tournamentMatchForm.team_a_id || undefined,
-          team_b_id: tournamentMatchForm.team_b_id || undefined,
-          requested_map: tournamentMatchForm.requested_map,
-          requested_game_mode: tournamentMatchForm.requested_game_mode,
-        }),
+        body: JSON.stringify(tournamentMatchPayload()),
       });
+      let endpoint = "";
+      if (allocate) {
+        const allocationResult = await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/allocate-server`, {
+          method: "POST",
+        });
+        endpoint = assignmentEndpoint(allocationResult.assignment);
+        if (allocationResult.warning || allocationResult.configuration?.verified === false) {
+          throw new Error(allocationResult.warning || allocationResult.configuration?.message || "Server allocation finished, but requested map/mode verification failed.");
+        }
+      }
       setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions));
       await loadTournamentDetails(selectedTournamentId, { silent: true });
+      await loadDashboard({ silent: true, source: "Tournament match refresh" });
+      setCopyMessage(allocate && endpoint ? `Tournament match created and server assigned: ${endpoint}` : "Tournament match created.");
+      window.setTimeout(() => setCopyMessage(""), 2400);
     } catch (err) {
       setTournamentError({
-        title: "Create tournament match failed",
+        title: allocate ? "Create and allocate tournament match failed" : "Create tournament match failed",
         message: err.message,
       });
     } finally {
@@ -1245,7 +1261,10 @@ export default function App() {
                         <h3>Tournament Matches</h3>
                         <span>{tournamentMatches.length}</span>
                       </div>
-                      <form className="tournament-match-form" onSubmit={(event) => void createTournamentMatch(event)}>
+                      <form className="tournament-match-form" onSubmit={(event) => {
+                        event.preventDefault();
+                        void createTournamentMatch();
+                      }}>
                         <label>
                           <span>Match name</span>
                           <input
@@ -1322,9 +1341,19 @@ export default function App() {
                             ))}
                           </select>
                         </label>
-                        <button className="secondary" type="submit" disabled={creatingTournamentMatch}>
-                          {creatingTournamentMatch ? "Creating..." : "Create Match"}
-                        </button>
+                        <div className="tournament-match-actions">
+                          <button className="secondary" type="submit" disabled={creatingTournamentMatch}>
+                            {creatingTournamentMatch ? "Working..." : "Create Match"}
+                          </button>
+                          <button
+                            className="primary"
+                            type="button"
+                            onClick={() => void createTournamentMatch({ allocate: true })}
+                            disabled={creatingTournamentMatch}
+                          >
+                            {creatingTournamentMatch ? "Working..." : "Create & Allocate Server"}
+                          </button>
+                        </div>
                         <p className="deferred-note">{gameConfigOptions.note || "Only verified map/mode combinations are available."}</p>
                       </form>
 
@@ -1399,14 +1428,19 @@ export default function App() {
                                     <td>
                                       <div className="tournament-actions">
                                         {activeAssignment ? (
-                                          <button
-                                            className="copy-button"
-                                            type="button"
-                                            onClick={() => void releaseTournamentMatchServer(match)}
-                                            disabled={isReleasingServer}
-                                          >
-                                            {isReleasingServer ? "Releasing..." : "Release Server"}
-                                          </button>
+                                          <>
+                                            {match.status === "finished" && (
+                                              <span className="active-server-note">Result recorded. Server is still active.</span>
+                                            )}
+                                            <button
+                                              className="copy-button"
+                                              type="button"
+                                              onClick={() => void releaseTournamentMatchServer(match)}
+                                              disabled={isReleasingServer}
+                                            >
+                                              {isReleasingServer ? "Releasing..." : "Release Server"}
+                                            </button>
+                                          </>
                                         ) : (
                                           <button
                                             className="secondary"
@@ -1475,7 +1509,7 @@ export default function App() {
                                               !resultForm.winner_team_id
                                             }
                                           >
-                                            {isRecordingResult ? "Saving..." : match.status === "finished" ? "Update Result" : "Record Result"}
+                                            {isRecordingResult ? "Saving..." : match.status === "finished" ? "Update Result" : "Finish Match"}
                                           </button>
                                           {!canRecordResult && <span className="muted-endpoint">Assign both teams before recording a result.</span>}
                                         </form>
