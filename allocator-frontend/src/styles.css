@@ -340,7 +340,10 @@ button:disabled {
 .tournament-match-form input,
 .tournament-match-form select,
 .admin-control-row input,
-.admin-control-row select {
+.admin-control-row select,
+.result-form input,
+.result-form select,
+.result-form textarea {
   width: 100%;
   border: 1px solid rgba(126, 176, 211, 0.18);
   border-radius: 12px;
@@ -359,7 +362,10 @@ button:disabled {
 .tournament-match-form input:focus,
 .tournament-match-form select:focus,
 .admin-control-row input:focus,
-.admin-control-row select:focus {
+.admin-control-row select:focus,
+.result-form input:focus,
+.result-form select:focus,
+.result-form textarea:focus {
   border-color: rgba(0, 209, 255, 0.62);
   box-shadow: 0 0 0 3px rgba(0, 209, 255, 0.12);
 }
@@ -1131,6 +1137,61 @@ th {
 
 .tournament-server-cell .button-row {
   margin-top: 4px;
+}
+
+.score-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 90px;
+}
+
+.score-cell small {
+  color: #83a2b9;
+  line-height: 1.35;
+}
+
+.tournament-actions {
+  display: grid;
+  gap: 10px;
+  min-width: 260px;
+}
+
+.result-form {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(126, 176, 211, 0.14);
+  border-radius: 14px;
+  background: rgba(6, 10, 19, 0.36);
+}
+
+.result-form label {
+  display: grid;
+  gap: 5px;
+  color: #8fa8bc;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.result-form input,
+.result-form select,
+.result-form textarea {
+  padding: 9px 10px;
+  border-radius: 10px;
+  font-size: 0.86rem;
+}
+
+.result-form textarea {
+  min-height: 62px;
+  resize: vertical;
+}
+
+.result-score-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .server-name-cell strong {

@@ -39,11 +39,12 @@ Allocated Servers are infrastructure allocations. The table can terminate an `Al
 
 The Tournament Management section is the first UI over PostgreSQL-backed tournament APIs. It lets operators create/select tournaments, add teams, add rounds, and create simple tournament match records. Tournament matches can now allocate and release a persisted server assignment that links the match to one allocated Agones `GameServer`.
 
+Tournament matches also support manual result recording: operators enter Team A score, Team B score, a winner, and optional notes. Saving a result marks the persisted match `finished`. Server release remains a separate operator action.
+
 Current tournament limitations:
 
 - no bracket visualization
 - no automatic winner advancement
-- no result recording UI yet
 - match names are not persisted by the backend schema yet; the UI displays match IDs
 - tournament match RCON controls are still handled through the lower-level Match Room workflow for now
 
@@ -61,6 +62,7 @@ Current tournament limitations:
 - `POST /tournaments/<tournament_id>/rounds`
 - `GET /tournaments/<tournament_id>/matches`
 - `POST /tournaments/<tournament_id>/matches`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/result`
 - `GET /tournaments/<tournament_id>/matches/<match_id>/server-assignments`
 - `POST /tournaments/<tournament_id>/matches/<match_id>/allocate-server`
 - `POST /tournaments/<tournament_id>/matches/<match_id>/release-server`

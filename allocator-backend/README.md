@@ -24,6 +24,7 @@ Implemented now:
 - create/list teams for a tournament
 - create/list rounds for a tournament
 - create/list tournament matches
+- record tournament match results and mark matches finished
 - allocate/release one persisted server assignment for a tournament match
 - minimal startup migrations for `tournaments`, `teams`, `players`, `rounds`, `matches`, and `match_server_assignments`
 
@@ -31,7 +32,6 @@ Still deferred:
 
 - bracket generation
 - automatic winner advancement
-- result recording endpoints
 - persisted live telemetry history
 - auth and production database hardening
 
@@ -79,6 +79,7 @@ Selectable combinations are only combinations verified in this project by applyi
 - `GET /tournaments/<tournament_id>/rounds`
 - `POST /tournaments/<tournament_id>/matches`
 - `GET /tournaments/<tournament_id>/matches`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/result`
 - `GET /tournaments/<tournament_id>/matches/<match_id>/server-assignments`
 - `POST /tournaments/<tournament_id>/matches/<match_id>/allocate-server`
 - `POST /tournaments/<tournament_id>/matches/<match_id>/release-server`
@@ -170,6 +171,16 @@ curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/$
 ```
 
 Release deletes the allocated Agones `GameServer`, marks the assignment `released`, preserves assignment history, and lets Fleet/FleetAutoscaler replenish standby capacity.
+
+Record and finish the tournament match result:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/${MATCH_ID}/result" \
+  -H "content-type: application/json" \
+  -d "{\"team_a_score\":12,\"team_b_score\":8,\"winner_team_id\":\"${TEAM_A_ID}\",\"result_notes\":\"Manual result after referee confirmation\"}" | jq
+```
+
+Result recording validates non-negative scores and requires the winner to be either `team_a_id` or `team_b_id`. It marks the match `finished`, but it does not auto-advance brackets and does not release the allocated server. Use `release-server` separately when the operator is ready to clean up the backing Agones `GameServer`.
 
 The lower-level Match Room API below remains available for manual/operator server sessions and RCON controls.
 

@@ -538,10 +538,10 @@ Implemented in the first persistence phase:
 - create/list matches for a tournament
 - persisted tournament match server assignments through `match_server_assignments`
 - allocate/release server endpoints for persisted tournament matches
+- manual tournament match result recording that persists scores, winner, notes, and `finished` status
 
 Still deferred:
 
-- result recording
 - bracket generation
 - automatic winner advancement
 - persisted live telemetry history

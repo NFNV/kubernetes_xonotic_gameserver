@@ -1832,6 +1832,20 @@ def validate_optional_positive_int(value: Any, field: str) -> int | None:
     return parsed
 
 
+def validate_non_negative_int(value: Any, field: str) -> int:
+    if isinstance(value, bool):
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be a non-negative integer"}, 400)
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+    else:
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be a non-negative integer"}, 400)
+    if parsed < 0:
+        raise BackendApiError({"error": "invalid_field", "message": f"{field} must be a non-negative integer"}, 400)
+    return parsed
+
+
 def validate_optional_bool(value: Any, field: str) -> bool:
     if value is None or value == "":
         return False
@@ -2002,6 +2016,22 @@ def ensure_team_in_tournament(cur, tournament_id: str, team_id: str | None, fiel
     cur.execute("SELECT id FROM teams WHERE id = %s AND tournament_id = %s", (team_id, tournament_id))
     if not cur.fetchone():
         raise BackendApiError({"error": "team_not_found", "message": f"{field} was not found in this tournament"}, 404)
+
+
+def validate_match_winner(match: dict[str, Any], winner_team_id: str) -> str:
+    winner_team_id = validate_db_id(winner_team_id, "winner_team_id")
+    valid_winner_ids = [team_id for team_id in (match.get("team_a_id"), match.get("team_b_id")) if team_id]
+    if winner_team_id not in valid_winner_ids:
+        raise BackendApiError(
+            {
+                "error": "invalid_winner_team",
+                "message": "winner_team_id must be either team_a_id or team_b_id for this match",
+                "team_a_id": match.get("team_a_id"),
+                "team_b_id": match.get("team_b_id"),
+            },
+            400,
+        )
+    return winner_team_id
 
 
 def ensure_round_in_tournament(cur, tournament_id: str, round_id: str | None) -> None:
@@ -2365,6 +2395,59 @@ def list_tournament_matches(tournament_id: str):
         return db_exception_response(exc, fallback_error="tournament_match_list_failed", fallback_message="failed to list tournament matches")
 
     return jsonify({"items": enriched_matches})
+
+
+@APP.post("/tournaments/<tournament_id>/matches/<match_id>/result")
+def record_tournament_match_result(tournament_id: str, match_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        match_id = validate_db_id(match_id, "match_id")
+        body = parse_json_body()
+        team_a_score = validate_non_negative_int(body.get("team_a_score"), "team_a_score")
+        team_b_score = validate_non_negative_int(body.get("team_b_score"), "team_b_score")
+        result_notes = validate_optional_text(body.get("result_notes"), "result_notes", max_length=1000)
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                match = fetch_tournament_match(cur, tournament_id, match_id)
+                winner_team_id = validate_match_winner(match, body.get("winner_team_id"))
+                cur.execute(
+                    """
+                    UPDATE matches
+                    SET
+                      team_a_score = %s,
+                      team_b_score = %s,
+                      winner_team_id = %s,
+                      result_notes = %s,
+                      status = 'finished',
+                      finished_at = now(),
+                      updated_at = now()
+                    WHERE id = %s AND tournament_id = %s
+                    RETURNING
+                      id, tournament_id, round_id, team_a_id, team_b_id, status,
+                      scheduled_at, started_at, finished_at, winner_team_id,
+                      team_a_score, team_b_score, result_notes, requested_map,
+                      requested_game_mode, created_at, updated_at
+                    """,
+                    (team_a_score, team_b_score, winner_team_id, result_notes, match_id, tournament_id),
+                )
+                updated_match = cur.fetchone()
+                active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
+            conn.commit()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(
+            exc,
+            fallback_error="tournament_match_result_failed",
+            fallback_message="failed to record tournament match result",
+        )
+
+    response = row_to_json(updated_match)
+    response["active_server_assignment"] = assignment_response(active_assignment) if active_assignment else None
+    return jsonify(response)
 
 
 @APP.get("/tournaments/<tournament_id>/matches/<match_id>/server-assignments")

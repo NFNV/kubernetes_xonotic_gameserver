@@ -273,7 +273,6 @@ The lower-level in-memory Match Room workflow remains available for manual/opera
 
 ```text
 POST /tournaments/<tournament_id>/matches/<match_id>/result
-PATCH /tournaments/<tournament_id>/matches/<match_id>/result
 ```
 
 Request shape:
@@ -283,7 +282,7 @@ Request shape:
   "winner_team_id": "team_abc",
   "team_a_score": 12,
   "team_b_score": 8,
-  "notes": "Manual result after referee confirmation"
+  "result_notes": "Manual result after referee confirmation"
 }
 ```
 
@@ -293,6 +292,7 @@ MVP behavior:
 - record scores manually
 - mark match `finished`
 - do not auto-advance winners yet
+- keep server release as a separate operator action
 
 ## Frontend Screens And Components
 
