@@ -2019,19 +2019,31 @@ def ensure_team_in_tournament(cur, tournament_id: str, team_id: str | None, fiel
 
 
 def validate_match_winner(match: dict[str, Any], winner_team_id: str) -> str:
-    winner_team_id = validate_db_id(winner_team_id, "winner_team_id")
-    valid_winner_ids = [team_id for team_id in (match.get("team_a_id"), match.get("team_b_id")) if team_id]
-    if winner_team_id not in valid_winner_ids:
+    normalized_winner_team_id = validate_db_id(winner_team_id, "winner_team_id")
+    normalized_team_a_id = str(match["team_a_id"]) if match.get("team_a_id") else None
+    normalized_team_b_id = str(match["team_b_id"]) if match.get("team_b_id") else None
+    valid_winner_ids = [team_id for team_id in (normalized_team_a_id, normalized_team_b_id) if team_id]
+    if normalized_winner_team_id not in valid_winner_ids:
+        APP.logger.warning(
+            "Invalid tournament match winner tournament_id=%s match_id=%s winner_team_id=%s team_a_id=%s team_b_id=%s",
+            match.get("tournament_id"),
+            match.get("id"),
+            normalized_winner_team_id,
+            normalized_team_a_id,
+            normalized_team_b_id,
+        )
         raise BackendApiError(
             {
                 "error": "invalid_winner_team",
                 "message": "winner_team_id must be either team_a_id or team_b_id for this match",
-                "team_a_id": match.get("team_a_id"),
-                "team_b_id": match.get("team_b_id"),
+                "winner_team_id": normalized_winner_team_id,
+                "team_a_id": normalized_team_a_id,
+                "team_b_id": normalized_team_b_id,
+                "valid_winner_team_ids": valid_winner_ids,
             },
             400,
         )
-    return winner_team_id
+    return normalized_winner_team_id
 
 
 def ensure_round_in_tournament(cur, tournament_id: str, round_id: str | None) -> None:
