@@ -12,15 +12,50 @@ const EMPTY_FLEET = {
 const AUTO_REFRESH_MS = 7000;
 const HISTORY_LIMIT = 8;
 const ADMIN_MAPS = ["xoylent", "stormkeep", "implosion", "drain", "darkzone", "solarium"];
-const ADMIN_GAME_MODES = ["dm", "tdm", "duel", "ctf"];
 const BROADCAST_MAX_LENGTH = 160;
-const EMPTY_TOURNAMENT_MATCH_FORM = {
-  name: "",
-  round_id: "",
-  team_a_id: "",
-  team_b_id: "",
-  requested_map: ADMIN_MAPS[0],
-  requested_game_mode: ADMIN_GAME_MODES[0],
+const FALLBACK_GAME_CONFIG_OPTIONS = {
+  default: {
+    requested_game_mode: "dm",
+    requested_map: "xoylent",
+  },
+  supported_modes: ["dm", "tdm"],
+  valid_maps_by_mode: {
+    dm: ["xoylent", "stormkeep", "solarium"],
+    tdm: ["stormkeep"],
+  },
+  modes: [
+    {
+      mode: "dm",
+      label: "Deathmatch",
+      selectable: true,
+      verified_maps: ["xoylent", "stormkeep", "solarium"],
+      experimental_maps: ["drain", "darkzone", "implosion"],
+    },
+    {
+      mode: "tdm",
+      label: "Team Deathmatch",
+      selectable: true,
+      verified_maps: ["stormkeep"],
+      experimental_maps: [],
+    },
+    {
+      mode: "ctf",
+      label: "Capture The Flag",
+      selectable: false,
+      verified_maps: [],
+      experimental_maps: ["drain"],
+      disabled_reason: "deferred until CTF map/mode combinations are verified",
+    },
+    {
+      mode: "duel",
+      label: "Duel",
+      selectable: false,
+      verified_maps: [],
+      experimental_maps: ["implosion"],
+      disabled_reason: "deferred until duel allocation/config verification is reliable",
+    },
+  ],
+  note: "Only verified map/mode combinations are selectable by default.",
 };
 
 async function fetchJson(path, options) {
@@ -123,12 +158,56 @@ function assignmentEndpoint(assignment) {
   return assignment.endpoint || (assignment.address && assignment.port ? `${assignment.address}:${assignment.port}` : "");
 }
 
+function selectableGameModes(gameConfigOptions) {
+  return (gameConfigOptions.modes || []).filter((mode) => mode.selectable);
+}
+
+function defaultGameConfig(gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
+  return gameConfigOptions.default || FALLBACK_GAME_CONFIG_OPTIONS.default;
+}
+
+function validMapsForMode(gameConfigOptions, modeName) {
+  return gameConfigOptions.valid_maps_by_mode?.[modeName] || [];
+}
+
+function normalizeGameConfig(values, gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
+  const fallback = defaultGameConfig(gameConfigOptions);
+  const mode = validMapsForMode(gameConfigOptions, values?.requested_game_mode).length > 0
+    ? values.requested_game_mode
+    : fallback.requested_game_mode;
+  const maps = validMapsForMode(gameConfigOptions, mode);
+  const map = maps.includes(values?.requested_map) ? values.requested_map : maps[0] || fallback.requested_map;
+
+  return {
+    requested_game_mode: mode,
+    requested_map: map,
+  };
+}
+
+function emptyMatchRoomForm(gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
+  return {
+    name: "",
+    ...normalizeGameConfig({}, gameConfigOptions),
+  };
+}
+
+function emptyTournamentMatchForm(gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
+  return {
+    name: "",
+    round_id: "",
+    team_a_id: "",
+    team_b_id: "",
+    ...normalizeGameConfig({}, gameConfigOptions),
+  };
+}
+
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
   const [gameservers, setGameservers] = useState([]);
   const [matches, setMatches] = useState([]);
-  const [matchForm, setMatchForm] = useState({ name: "", requested_map: ADMIN_MAPS[0], requested_game_mode: ADMIN_GAME_MODES[0] });
+  const [gameConfigOptions, setGameConfigOptions] = useState(FALLBACK_GAME_CONFIG_OPTIONS);
+  const [matchForm, setMatchForm] = useState(emptyMatchRoomForm());
   const [latestAllocation, setLatestAllocation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -165,7 +244,7 @@ export default function App() {
   const [tournamentForm, setTournamentForm] = useState({ name: "", description: "" });
   const [teamForm, setTeamForm] = useState({ name: "", tag: "", seed: "" });
   const [roundForm, setRoundForm] = useState({ name: "", round_order: "" });
-  const [tournamentMatchForm, setTournamentMatchForm] = useState(EMPTY_TOURNAMENT_MATCH_FORM);
+  const [tournamentMatchForm, setTournamentMatchForm] = useState(emptyTournamentMatchForm());
 
   async function copyText(text, label) {
     if (!text) {
@@ -195,6 +274,57 @@ export default function App() {
     }
 
     window.setTimeout(() => setCopyMessage(""), 1800);
+  }
+
+  function modeOptions() {
+    return selectableGameModes(gameConfigOptions);
+  }
+
+  function mapsForSelectedMode(modeName) {
+    return validMapsForMode(gameConfigOptions, modeName);
+  }
+
+  function setMatchRoomMode(modeName) {
+    setMatchForm((current) => ({
+      ...current,
+      ...normalizeGameConfig({ ...current, requested_game_mode: modeName }, gameConfigOptions),
+    }));
+  }
+
+  function setTournamentMatchMode(modeName) {
+    setTournamentMatchForm((current) => ({
+      ...current,
+      ...normalizeGameConfig({ ...current, requested_game_mode: modeName }, gameConfigOptions),
+    }));
+  }
+
+  async function loadGameConfigOptions() {
+    try {
+      const options = await fetchJson("/api/game-config/options");
+      setGameConfigOptions(options);
+      setMatchForm((current) => ({
+        ...current,
+        ...normalizeGameConfig(current, options),
+      }));
+      setTournamentMatchForm((current) => ({
+        ...current,
+        ...normalizeGameConfig(current, options),
+      }));
+      setMatchConfigForms((current) => Object.fromEntries(
+        Object.entries(current).map(([matchId, config]) => [
+          matchId,
+          {
+            ...config,
+            ...normalizeGameConfig(config, options),
+          },
+        ])
+      ));
+    } catch (err) {
+      setError({
+        title: "Game config options failed",
+        message: err.message,
+      });
+    }
   }
 
   async function loadDashboard({ silent = false, source = "Refresh" } = {}) {
@@ -311,7 +441,7 @@ export default function App() {
       setTournamentMatches([]);
       setTeamForm({ name: "", tag: "", seed: "" });
       setRoundForm({ name: "", round_order: "" });
-      setTournamentMatchForm(EMPTY_TOURNAMENT_MATCH_FORM);
+      setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions));
       await loadTournamentDetails(tournament.id, { silent: true });
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
@@ -407,7 +537,7 @@ export default function App() {
           requested_game_mode: tournamentMatchForm.requested_game_mode,
         }),
       });
-      setTournamentMatchForm(EMPTY_TOURNAMENT_MATCH_FORM);
+      setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions));
       await loadTournamentDetails(selectedTournamentId, { silent: true });
     } catch (err) {
       setTournamentError({
@@ -503,7 +633,7 @@ export default function App() {
         body: JSON.stringify(payload),
       });
       setMatches((current) => [match, ...current]);
-      setMatchForm({ name: "", requested_map: ADMIN_MAPS[0], requested_game_mode: ADMIN_GAME_MODES[0] });
+      setMatchForm(emptyMatchRoomForm(gameConfigOptions));
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
       setError({
@@ -516,10 +646,10 @@ export default function App() {
   }
 
   function matchRequestedConfig(match) {
-    return {
-      requested_map: matchConfigForms[match.match_id]?.requested_map || match.requested_map || ADMIN_MAPS[0],
-      requested_game_mode: matchConfigForms[match.match_id]?.requested_game_mode || match.requested_game_mode || ADMIN_GAME_MODES[0],
-    };
+    return normalizeGameConfig({
+      requested_map: matchConfigForms[match.match_id]?.requested_map || match.requested_map || defaultGameConfig(gameConfigOptions).requested_map,
+      requested_game_mode: matchConfigForms[match.match_id]?.requested_game_mode || match.requested_game_mode || defaultGameConfig(gameConfigOptions).requested_game_mode,
+    }, gameConfigOptions);
   }
 
   function updateMatchRequestedConfig(matchId, field, value) {
@@ -527,7 +657,9 @@ export default function App() {
       ...current,
       [matchId]: {
         ...current[matchId],
-        [field]: value,
+        ...(field === "requested_game_mode"
+          ? normalizeGameConfig({ ...current[matchId], requested_game_mode: value }, gameConfigOptions)
+          : { [field]: value }),
       },
     }));
   }
@@ -758,6 +890,7 @@ export default function App() {
   }
 
   useEffect(() => {
+    void loadGameConfigOptions();
     void loadDashboard();
     void loadTournaments();
   }, []);
@@ -765,7 +898,7 @@ export default function App() {
   useEffect(() => {
     setTeamForm({ name: "", tag: "", seed: "" });
     setRoundForm({ name: "", round_order: "" });
-    setTournamentMatchForm(EMPTY_TOURNAMENT_MATCH_FORM);
+    setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions));
     void loadTournamentDetails(selectedTournamentId);
   }, [selectedTournamentId]);
 
@@ -1100,27 +1233,27 @@ export default function App() {
                           </select>
                         </label>
                         <label>
-                          <span>Map</span>
+                          <span>Mode</span>
                           <select
-                            value={tournamentMatchForm.requested_map}
-                            onChange={(event) => setTournamentMatchForm((current) => ({ ...current, requested_map: event.target.value }))}
+                            value={tournamentMatchForm.requested_game_mode}
+                            onChange={(event) => setTournamentMatchMode(event.target.value)}
                           >
-                            {ADMIN_MAPS.map((mapName) => (
-                              <option key={mapName} value={mapName}>
-                                {mapName}
+                            {modeOptions().map((mode) => (
+                              <option key={mode.mode} value={mode.mode}>
+                                {mode.label}
                               </option>
                             ))}
                           </select>
                         </label>
                         <label>
-                          <span>Mode</span>
+                          <span>Map</span>
                           <select
-                            value={tournamentMatchForm.requested_game_mode}
-                            onChange={(event) => setTournamentMatchForm((current) => ({ ...current, requested_game_mode: event.target.value }))}
+                            value={tournamentMatchForm.requested_map}
+                            onChange={(event) => setTournamentMatchForm((current) => ({ ...current, requested_map: event.target.value }))}
                           >
-                            {ADMIN_GAME_MODES.map((modeName) => (
-                              <option key={modeName} value={modeName}>
-                                {modeName}
+                            {mapsForSelectedMode(tournamentMatchForm.requested_game_mode).map((mapName) => (
+                              <option key={mapName} value={mapName}>
+                                {mapName}
                               </option>
                             ))}
                           </select>
@@ -1128,6 +1261,7 @@ export default function App() {
                         <button className="secondary" type="submit" disabled={creatingTournamentMatch}>
                           {creatingTournamentMatch ? "Creating..." : "Create Match"}
                         </button>
+                        <p className="deferred-note">{gameConfigOptions.note || "Only verified map/mode combinations are available."}</p>
                       </form>
 
                       {tournamentMatches.length === 0 ? (
@@ -1243,27 +1377,27 @@ export default function App() {
             />
           </label>
           <label>
-            <span>Map</span>
+            <span>Mode</span>
             <select
-              value={matchForm.requested_map}
-              onChange={(event) => setMatchForm((current) => ({ ...current, requested_map: event.target.value }))}
+              value={matchForm.requested_game_mode}
+              onChange={(event) => setMatchRoomMode(event.target.value)}
             >
-              {ADMIN_MAPS.map((mapName) => (
-                <option key={mapName} value={mapName}>
-                  {mapName}
+              {modeOptions().map((mode) => (
+                <option key={mode.mode} value={mode.mode}>
+                  {mode.label}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            <span>Mode</span>
+            <span>Map</span>
             <select
-              value={matchForm.requested_game_mode}
-              onChange={(event) => setMatchForm((current) => ({ ...current, requested_game_mode: event.target.value }))}
+              value={matchForm.requested_map}
+              onChange={(event) => setMatchForm((current) => ({ ...current, requested_map: event.target.value }))}
             >
-              {ADMIN_GAME_MODES.map((modeName) => (
-                <option key={modeName} value={modeName}>
-                  {modeName}
+              {mapsForSelectedMode(matchForm.requested_game_mode).map((mapName) => (
+                <option key={mapName} value={mapName}>
+                  {mapName}
                 </option>
               ))}
             </select>
@@ -1274,6 +1408,7 @@ export default function App() {
         </form>
         <p className="deferred-note">
           Servers come from a warm Agones Fleet. Allocation picks a Ready server, applies requested map/mode through whitelisted RCON, verifies with getstatus, then exposes the endpoint.
+          {" "}Only verified map/mode combinations are available.
         </p>
 
         {loading ? (
@@ -1471,29 +1606,29 @@ export default function App() {
                     <div className="preallocation-controls">
                       <div className="admin-control-row">
                         <label>
-                          <span>Map before allocation</span>
-                          <select
-                            value={requestedConfig.requested_map}
-                            onChange={(event) => updateMatchRequestedConfig(match.match_id, "requested_map", event.target.value)}
-                            disabled={isAllocating || isConfiguring || isReleased}
-                          >
-                            {ADMIN_MAPS.map((mapName) => (
-                              <option key={mapName} value={mapName}>
-                                {mapName}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
                           <span>Mode before allocation</span>
                           <select
                             value={requestedConfig.requested_game_mode}
                             onChange={(event) => updateMatchRequestedConfig(match.match_id, "requested_game_mode", event.target.value)}
                             disabled={isAllocating || isConfiguring || isReleased}
                           >
-                            {ADMIN_GAME_MODES.map((modeName) => (
-                              <option key={modeName} value={modeName}>
-                                {modeName}
+                            {modeOptions().map((mode) => (
+                              <option key={mode.mode} value={mode.mode}>
+                                {mode.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Map before allocation</span>
+                          <select
+                            value={requestedConfig.requested_map}
+                            onChange={(event) => updateMatchRequestedConfig(match.match_id, "requested_map", event.target.value)}
+                            disabled={isAllocating || isConfiguring || isReleased}
+                          >
+                            {mapsForSelectedMode(requestedConfig.requested_game_mode).map((mapName) => (
+                              <option key={mapName} value={mapName}>
+                                {mapName}
                               </option>
                             ))}
                           </select>
@@ -1501,6 +1636,7 @@ export default function App() {
                       </div>
                       <p className="empty-state">
                         Allocation will configure the warm server with RCON and verify getstatus before showing a join endpoint.
+                        {" "}Only verified map/mode combinations are available.
                       </p>
                       <button className="primary" type="button" onClick={() => void allocateMatch(match)} disabled={isAllocating || isConfiguring || isReleased}>
                         {isAllocating || isConfiguring ? "Allocating..." : isReleased ? "Match Ended" : "Allocate Server"}

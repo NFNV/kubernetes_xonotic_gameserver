@@ -29,6 +29,8 @@ Match Rooms are the primary admin-facing objects. Allocated `GameServer` instanc
 
 Map and game mode are selected before allocation. The backend still uses a warm Agones Fleet, so it allocates an already-running server, configures it through whitelisted RCON, verifies with `getstatus`, and only then exposes a join endpoint. Max-player control remains deferred.
 
+The mode selector drives the map selector from `GET /game-config/options`. Only verified combinations are shown in normal create/allocation flows: `dm` on `xoylent`, `stormkeep`, or `solarium`, and `tdm` on `stormkeep`. `ctf` and `duel` remain hidden from normal selection until they are verified in this cluster flow.
+
 Post-allocation admin controls are intentionally narrow: broadcast a message with RCON `say` and use an allowlisted map override with RCON `changelevel`. The UI does not expose raw RCON command input or the RCON password.
 
 Manual Direct Allocation is hidden under Advanced / Debug and should only be used for lower-level allocator testing.
@@ -48,6 +50,7 @@ Current tournament limitations:
 ## Backend Endpoints Used
 
 - `GET /healthz`
+- `GET /game-config/options`
 - `GET /fleet-status`
 - `GET /gameservers`
 - `GET /tournaments`

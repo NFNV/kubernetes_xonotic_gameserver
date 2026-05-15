@@ -53,9 +53,21 @@ Max-player control is still deferred. Live status remains the source of truth fo
 
 Releasing a Match Room deletes the allocated Agones `GameServer` resource, removes the user-facing endpoint from the room, and lets the Fleet/FleetAutoscaler create replacement standby capacity.
 
+## Map/Mode Compatibility
+
+Map/mode selection is intentionally conservative. The backend owns a central compatibility matrix and exposes it through `GET /game-config/options` for the frontend.
+
+Selectable combinations are only combinations verified in this project by applying RCON config and confirming the result with `getstatus`:
+
+- `dm`: `xoylent`, `stormkeep`, `solarium`
+- `tdm`: `stormkeep`
+
+`ctf` and `duel` are listed as deferred/experimental, but are not selectable for normal Match Room or tournament match allocation yet. Invalid combinations are rejected before a match is created or before any Agones allocation is attempted.
+
 ## API
 
 - `GET /healthz`
+- `GET /game-config/options`
 - `GET /fleet-status`
 - `GET /gameservers`
 - `POST /tournaments`
@@ -112,6 +124,28 @@ ROUND_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_I
 MATCH_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
   -H "content-type: application/json" \
   -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"stormkeep\",\"requested_game_mode\":\"dm\"}" | jq -r .id)"
+```
+
+Check selectable game config and validation behavior:
+
+```bash
+curl -fsS http://127.0.0.1:18080/game-config/options | jq
+
+curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
+  -H "content-type: application/json" \
+  -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"xoylent\",\"requested_game_mode\":\"dm\"}" | jq
+
+curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
+  -H "content-type: application/json" \
+  -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"stormkeep\",\"requested_game_mode\":\"tdm\"}" | jq
+
+curl -i -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
+  -H "content-type: application/json" \
+  -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"drain\",\"requested_game_mode\":\"ctf\"}"
+
+curl -i -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
+  -H "content-type: application/json" \
+  -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"solarium\",\"requested_game_mode\":\"tdm\"}"
 ```
 
 Allocate a persisted server assignment for that tournament match:

@@ -55,10 +55,38 @@ MAX_MATCH_PLAYERS_LIMIT = int(os.environ.get("MAX_MATCH_PLAYERS_LIMIT", "32"))
 FINISHED_MATCH_STATUSES = {"released", "finished"}
 PLAYER_STATUS_PATTERN = re.compile(r'^(?P<score>\S+)\s+(?P<ping>\d+)(?:\s+(?P<team>\d+))?\s+"(?P<name>.*)"$')
 ADMIN_BROADCAST_MAX_LENGTH = 160
-ADMIN_ALLOWED_MAPS = ("xoylent", "stormkeep", "implosion", "drain", "darkzone", "solarium")
-ADMIN_ALLOWED_GAME_MODES = ("dm", "tdm", "duel", "ctf")
 DEFAULT_REQUESTED_MAP = os.environ.get("DEFAULT_REQUESTED_MAP", "xoylent")
 DEFAULT_REQUESTED_GAME_MODE = os.environ.get("DEFAULT_REQUESTED_GAME_MODE", "dm")
+GAME_CONFIG_OPTIONS = {
+    "dm": {
+        "label": "Deathmatch",
+        "selectable": True,
+        "verified_maps": ("xoylent", "stormkeep", "solarium"),
+        "experimental_maps": ("drain", "darkzone", "implosion"),
+    },
+    "tdm": {
+        "label": "Team Deathmatch",
+        "selectable": True,
+        "verified_maps": ("stormkeep",),
+        "experimental_maps": (),
+    },
+    "ctf": {
+        "label": "Capture The Flag",
+        "selectable": False,
+        "disabled_reason": "deferred until CTF map/mode combinations are verified",
+        "verified_maps": (),
+        "experimental_maps": ("drain",),
+    },
+    "duel": {
+        "label": "Duel",
+        "selectable": False,
+        "disabled_reason": "deferred until duel allocation/config verification is reliable",
+        "verified_maps": (),
+        "experimental_maps": ("implosion",),
+    },
+}
+ADMIN_ALLOWED_MAPS = tuple(sorted({map_name for config in GAME_CONFIG_OPTIONS.values() for map_name in config["verified_maps"] + config["experimental_maps"]}))
+ADMIN_ALLOWED_GAME_MODES = tuple(GAME_CONFIG_OPTIONS.keys())
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "")
 POSTGRES_PORT = int(os.environ.get("POSTGRES_PORT", "5432"))
@@ -1125,7 +1153,7 @@ def validate_requested_map(value: Any) -> str:
     return validate_admin_map(value)
 
 
-def validate_requested_game_mode(value: Any) -> str:
+def validate_requested_game_mode(value: Any, *, require_selectable: bool = True) -> str:
     if value is None or value == "":
         value = DEFAULT_REQUESTED_GAME_MODE
 
@@ -1133,7 +1161,8 @@ def validate_requested_game_mode(value: Any) -> str:
         raise BackendApiError({"error": "invalid_game_mode", "message": "requested_game_mode must be a string"}, 400)
 
     game_mode = value.strip().lower()
-    if game_mode not in ADMIN_ALLOWED_GAME_MODES:
+    mode_config = GAME_CONFIG_OPTIONS.get(game_mode)
+    if not mode_config:
         raise BackendApiError(
             {
                 "error": "invalid_game_mode",
@@ -1143,7 +1172,97 @@ def validate_requested_game_mode(value: Any) -> str:
             400,
         )
 
+    if require_selectable and not mode_config.get("selectable"):
+        raise BackendApiError(
+            {
+                "error": "unsupported_game_mode",
+                "message": f"{game_mode} is not available for normal match allocation yet",
+                "requested_game_mode": game_mode,
+                "supported_modes": supported_game_modes(),
+                "valid_maps": verified_maps_for_mode(game_mode),
+                "experimental_maps": list(mode_config.get("experimental_maps", ())),
+                "disabled_reason": mode_config.get("disabled_reason"),
+            },
+            400,
+        )
+
     return game_mode
+
+
+def supported_game_modes() -> list[str]:
+    return [mode for mode, config in GAME_CONFIG_OPTIONS.items() if config.get("selectable")]
+
+
+def verified_maps_for_mode(game_mode: str) -> list[str]:
+    return list(GAME_CONFIG_OPTIONS.get(game_mode, {}).get("verified_maps", ()))
+
+
+def default_verified_game_config() -> tuple[str, str]:
+    configured_mode = DEFAULT_REQUESTED_GAME_MODE.strip().lower()
+    configured_map = DEFAULT_REQUESTED_MAP.strip().lower()
+    mode_config = GAME_CONFIG_OPTIONS.get(configured_mode)
+    if mode_config and mode_config.get("selectable") and configured_map in mode_config["verified_maps"]:
+        return configured_mode, configured_map
+
+    for mode, config in GAME_CONFIG_OPTIONS.items():
+        if config.get("selectable") and config["verified_maps"]:
+            return mode, config["verified_maps"][0]
+
+    raise RuntimeError("no verified game configuration is available")
+
+
+def validate_requested_game_config(map_value: Any, mode_value: Any) -> tuple[str, str]:
+    default_mode, default_map = default_verified_game_config()
+    game_mode = validate_requested_game_mode(mode_value if mode_value not in (None, "") else default_mode)
+    map_name = validate_requested_map(map_value if map_value not in (None, "") else default_map)
+    valid_maps = verified_maps_for_mode(game_mode)
+
+    if map_name not in valid_maps:
+        raise BackendApiError(
+            {
+                "error": "invalid_map_mode_combination",
+                "message": f"{map_name} is not a verified map for {game_mode}",
+                "requested_map": map_name,
+                "requested_game_mode": game_mode,
+                "valid_maps": valid_maps,
+                "supported_modes": supported_game_modes(),
+            },
+            400,
+        )
+
+    return map_name, game_mode
+
+
+def game_config_options_response() -> dict[str, Any]:
+    default_mode, default_map = default_verified_game_config()
+    modes = []
+    valid_maps_by_mode = {}
+
+    for mode, config in GAME_CONFIG_OPTIONS.items():
+        maps = list(config["verified_maps"])
+        if config.get("selectable"):
+            valid_maps_by_mode[mode] = maps
+        modes.append(
+            {
+                "mode": mode,
+                "label": config["label"],
+                "selectable": bool(config.get("selectable")),
+                "verified_maps": maps,
+                "experimental_maps": list(config.get("experimental_maps", ())),
+                "disabled_reason": config.get("disabled_reason"),
+            }
+        )
+
+    return {
+        "default": {
+            "requested_game_mode": default_mode,
+            "requested_map": default_map,
+        },
+        "supported_modes": supported_game_modes(),
+        "valid_maps_by_mode": valid_maps_by_mode,
+        "modes": modes,
+        "note": "Only verified map/mode combinations are selectable by default.",
+    }
 
 
 def normalize_game_mode(value: Any) -> str | None:
@@ -1895,11 +2014,16 @@ def ensure_round_in_tournament(cur, tournament_id: str, round_id: str | None) ->
 
 
 def apply_match_config_fields(match: dict[str, Any], body: dict[str, Any]) -> None:
-    if "requested_map" in body or "map" in body:
-        match["requested_map"] = validate_requested_map(body.get("requested_map", body.get("map")))
+    has_map = "requested_map" in body or "map" in body
+    has_mode = "requested_game_mode" in body or "game_mode" in body
 
-    if "requested_game_mode" in body or "game_mode" in body:
-        match["requested_game_mode"] = validate_requested_game_mode(body.get("requested_game_mode", body.get("game_mode")))
+    if has_map or has_mode:
+        requested_map, requested_game_mode = validate_requested_game_config(
+            body.get("requested_map", body.get("map", match.get("requested_map"))),
+            body.get("requested_game_mode", body.get("game_mode", match.get("requested_game_mode"))),
+        )
+        match["requested_map"] = requested_map
+        match["requested_game_mode"] = requested_game_mode
 
 
 def match_response(match: dict[str, Any]) -> dict[str, Any]:
@@ -1940,6 +2064,10 @@ def build_match(body: dict[str, Any]) -> dict[str, Any]:
     name = str(body.get("name") or f"Match {len(MATCHES) + 1}").strip()
     if not name:
         name = f"Match {len(MATCHES) + 1}"
+    requested_map, requested_game_mode = validate_requested_game_config(
+        body.get("requested_map", body.get("map")),
+        body.get("requested_game_mode", body.get("game_mode")),
+    )
 
     return {
         "match_id": match_id,
@@ -1949,8 +2077,8 @@ def build_match(body: dict[str, Any]) -> dict[str, Any]:
         "allocated_at": None,
         "released_at": None,
         "max_players": validate_max_players(body.get("max_players")),
-        "requested_map": validate_requested_map(body.get("requested_map", body.get("map"))),
-        "requested_game_mode": validate_requested_game_mode(body.get("requested_game_mode", body.get("game_mode"))),
+        "requested_map": requested_map,
+        "requested_game_mode": requested_game_mode,
         "current_players": None,
         "live_max_players": None,
         "game_mode": None,
@@ -2172,11 +2300,9 @@ def create_tournament_match(tournament_id: str):
 
         status = validate_status(body.get("status"), "status", TOURNAMENT_MATCH_STATUSES, "created")
         scheduled_at = validate_optional_timestamp(body.get("scheduled_at"), "scheduled_at")
-        requested_map = validate_requested_map(body.get("requested_map", body.get("map"))) if ("requested_map" in body or "map" in body) else None
-        requested_game_mode = (
-            validate_requested_game_mode(body.get("requested_game_mode", body.get("game_mode")))
-            if ("requested_game_mode" in body or "game_mode" in body)
-            else None
+        requested_map, requested_game_mode = validate_requested_game_config(
+            body.get("requested_map", body.get("map")),
+            body.get("requested_game_mode", body.get("game_mode")),
         )
 
         with db_connect() as conn:
@@ -2293,6 +2419,10 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
             with conn.cursor() as cur:
                 fetch_tournament(cur, tournament_id)
                 match = fetch_tournament_match(cur, tournament_id, match_id)
+                requested_map, requested_game_mode = validate_requested_game_config(
+                    match.get("requested_map"),
+                    match.get("requested_game_mode"),
+                )
                 active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
 
                 if active_assignment and not force_replace:
@@ -2383,8 +2513,6 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                     ),
                 )
                 assignment = cur.fetchone()
-                requested_map = match.get("requested_map") or DEFAULT_REQUESTED_MAP
-                requested_game_mode = match.get("requested_game_mode") or DEFAULT_REQUESTED_GAME_MODE
             conn.commit()
     except BackendApiError as exc:
         if allocation:
@@ -2550,6 +2678,11 @@ def healthz():
     if DB_MIGRATION_ERROR:
         response["database"]["last_error"] = DB_MIGRATION_ERROR
     return jsonify(response)
+
+
+@APP.get("/game-config/options")
+def game_config_options():
+    return jsonify(game_config_options_response())
 
 
 @APP.get("/fleet-status")

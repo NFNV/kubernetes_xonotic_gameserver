@@ -126,6 +126,7 @@ MVP behavior:
 - allocate/release one server through an attached Match Room
 - record winner manually
 - keep live server telemetry visible while running
+- validate requested map/mode against a conservative compatibility matrix before allocation
 
 ### Match Room / Allocated Server
 
@@ -261,6 +262,8 @@ Allocation reuses the existing Agones allocation primitives:
 6. mark Match `server_ready` only when verification succeeds
 
 If configuration or verification fails, the assignment remains persisted for operator cleanup, but the Match is marked `failed` rather than `server_ready`.
+
+Map/mode compatibility is deliberately conservative. The current verified combinations are `dm/xoylent`, `dm/stormkeep`, `dm/solarium`, and `tdm/stormkeep`. `ctf` and `duel` are kept out of normal allocation until they are verified by applying whitelisted RCON config and confirming the expected map/mode with `getstatus`.
 
 Release deletes the allocated Agones `GameServer`, marks the assignment `released`, stores `released_at`, and preserves assignment history.
 

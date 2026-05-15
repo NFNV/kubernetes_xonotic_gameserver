@@ -110,6 +110,7 @@ This file is the running context log for the repository. Update it over time so 
 - Releasing a Match Room deletes the allocated Agones `GameServer` resource and relies on Fleet/FleetAutoscaler to replenish standby capacity
 - Persisted tournament Match server assignment uses `match_server_assignments`: one active assignment per match, historical released rows preserved, and Agones/Kubernetes remain the source of truth for whether the runtime `GameServer` currently exists
 - Tournament Match server allocation must apply requested map/mode through the existing whitelisted RCON configuration helper and verify with `getstatus`; matches only become `server_ready` after verification, while failed verification preserves the active assignment for operator cleanup
+- Requested map/mode selection is now backed by a conservative compatibility matrix exposed through `GET /game-config/options`; normal allocation only allows verified combinations (`dm/xoylent`, `dm/stormkeep`, `dm/solarium`, `tdm/stormkeep`) and keeps `ctf`/`duel` deferred until verified
 - The local `up.sh` operator path should track the current Agones phase rather than automatically redeploying the old plain checkpoint
 - The local operator path should treat the allocator backend as part of the current baseline, not an optional manual follow-up
 - Reliability for this phase means every allocated server endpoint must be joinable, not just that some allocations succeed

@@ -246,8 +246,9 @@ Validation:
 - `team_a_id` and `team_b_id` must be different when both are present.
 - `winner_team_id`, when present, must equal `team_a_id` or `team_b_id`.
 - scores are optional, non-negative integers.
-- `requested_map` must be one of the backend allowlisted maps when present.
-- `requested_game_mode` must be one of the backend allowlisted modes when present.
+- `requested_map` and `requested_game_mode` must be a backend-verified compatible combination when present.
+- current verified combinations are `dm/xoylent`, `dm/stormkeep`, `dm/solarium`, and `tdm/stormkeep`.
+- `ctf` and `duel` are intentionally deferred until RCON config plus `getstatus` verification succeeds for specific maps.
 
 Relationships:
 
