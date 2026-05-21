@@ -186,10 +186,14 @@ function tournamentMatchHasResult(match) {
     && Boolean(match.winner_team_id);
 }
 
-function tournamentMatchCanRecordResult(match) {
-  return Boolean(match.team_a_id && match.team_b_id)
+function tournamentMatchCanShowResultForm(match) {
+  return !tournamentMatchHasResult(match)
     && !TERMINAL_TOURNAMENT_MATCH_STATUSES.has(match.status)
     && match.status !== "server_allocating";
+}
+
+function tournamentMatchCanRecordResult(match) {
+  return tournamentMatchCanShowResultForm(match) && Boolean(match.team_a_id && match.team_b_id);
 }
 
 function tournamentMatchCanAllocateServer(match) {
@@ -857,6 +861,10 @@ export default function App() {
     return `${matchId}:${action}`;
   }
 
+  function tournamentAdminId(matchId) {
+    return `tournament:${matchId}`;
+  }
+
   function setAdminActionLoading(matchId, action, isBusy) {
     setAdminActions((current) => {
       const next = { ...current };
@@ -868,6 +876,88 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  async function broadcastToTournamentMatch(match) {
+    if (!selectedTournamentId) {
+      return;
+    }
+
+    const adminId = tournamentAdminId(match.id);
+    const message = (broadcastForms[adminId] || "").trim();
+    if (!message) {
+      setTournamentError({
+        title: "Tournament broadcast failed",
+        message: "Enter a message before sending a broadcast.",
+      });
+      return;
+    }
+
+    setAdminActionLoading(adminId, "broadcast", true);
+    setTournamentError(null);
+
+    try {
+      const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/admin/broadcast`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      if (result.match) {
+        setTournamentMatches((current) => current.map((item) => (item.id === result.match.id ? result.match : item)));
+      }
+      setBroadcastForms((current) => ({ ...current, [adminId]: "" }));
+      setAdminFeedback((current) => ({
+        ...current,
+        [adminId]: { type: "success", message: `Broadcast sent: "${result.message}"` },
+      }));
+    } catch (err) {
+      setTournamentError({
+        title: "Tournament broadcast failed",
+        message: err.message,
+      });
+    } finally {
+      setAdminActionLoading(adminId, "broadcast", false);
+    }
+  }
+
+  async function changeTournamentMatchMap(match) {
+    if (!selectedTournamentId) {
+      return;
+    }
+
+    const adminId = tournamentAdminId(match.id);
+    const map = changeMapForms[adminId] || (ADMIN_MAPS.includes(match.requested_map) ? match.requested_map : ADMIN_MAPS[0]);
+
+    setAdminActionLoading(adminId, "change-map", true);
+    setTournamentError(null);
+
+    try {
+      const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/admin/change-map`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ map }),
+      });
+      if (result.match) {
+        setTournamentMatches((current) => current.map((item) => (item.id === result.match.id ? result.match : item)));
+      }
+      setAdminFeedback((current) => ({
+        ...current,
+        [adminId]: {
+          type: result.verified ? "success" : "warning",
+          message: result.verified
+            ? `Map change verified: ${result.map}`
+            : result.message || "Map change command sent, but live status verification is temporarily unavailable.",
+        },
+      }));
+      await loadDashboard({ silent: true, source: "Tournament map change refresh" });
+    } catch (err) {
+      setTournamentError({
+        title: "Tournament map change failed",
+        message: err.message,
+      });
+    } finally {
+      setAdminActionLoading(adminId, "change-map", false);
+    }
   }
 
   async function broadcastToMatch(match) {
@@ -1431,8 +1521,15 @@ export default function App() {
                                 const teamBName = match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "Team B";
                                 const winnerName = match.winner_team_id ? teamNameById[match.winner_team_id] || `Team ${shortId(match.winner_team_id)}` : "";
                                 const hasRecordedResult = tournamentMatchHasResult(match);
+                                const canShowResultForm = tournamentMatchCanShowResultForm(match);
                                 const canRecordResult = tournamentMatchCanRecordResult(match);
                                 const canAllocateServer = tournamentMatchCanAllocateServer(match);
+                                const adminId = tournamentAdminId(match.id);
+                                const broadcastValue = broadcastForms[adminId] || "";
+                                const selectedMap = changeMapForms[adminId] || (ADMIN_MAPS.includes(match.requested_map) ? match.requested_map : ADMIN_MAPS[0]);
+                                const isBroadcasting = Boolean(adminActions[adminActionKey(adminId, "broadcast")]);
+                                const isChangingMap = Boolean(adminActions[adminActionKey(adminId, "change-map")]);
+                                const feedback = adminFeedback[adminId];
                                 const resultActionMessage = hasRecordedResult
                                   ? "Result recorded."
                                   : TERMINAL_TOURNAMENT_MATCH_STATUSES.has(status)
@@ -1506,13 +1603,64 @@ export default function App() {
                                               <span className="active-server-note">Result recorded. Server still active.</span>
                                             )}
                                             <button
-                                              className="copy-button"
+                                              className="danger-button"
                                               type="button"
                                               onClick={() => void releaseTournamentMatchServer(match)}
                                               disabled={isReleasingServer}
                                             >
                                               {isReleasingServer ? "Releasing..." : "Release Server"}
                                             </button>
+                                            <div className="tournament-admin-controls">
+                                              <div className="tournament-admin-controls-header">
+                                                <h4>Admin Controls</h4>
+                                                <span>Whitelisted RCON only</span>
+                                              </div>
+                                              <form className="tournament-admin-row" onSubmit={(event) => {
+                                                event.preventDefault();
+                                                void broadcastToTournamentMatch(match);
+                                              }}>
+                                                <label>
+                                                  <span>Broadcast</span>
+                                                  <input
+                                                    id={`tournament-broadcast-${match.id}`}
+                                                    value={broadcastValue}
+                                                    maxLength={BROADCAST_MAX_LENGTH}
+                                                    onChange={(event) => setBroadcastForms((current) => ({ ...current, [adminId]: event.target.value }))}
+                                                    placeholder="Match starts in 2 minutes"
+                                                  />
+                                                </label>
+                                                <button className="secondary" type="submit" disabled={isBroadcasting || !broadcastValue.trim()}>
+                                                  {isBroadcasting ? "Sending..." : "Send"}
+                                                </button>
+                                              </form>
+                                              <form className="tournament-admin-row" onSubmit={(event) => {
+                                                event.preventDefault();
+                                                void changeTournamentMatchMap(match);
+                                              }}>
+                                                <label>
+                                                  <span>Map</span>
+                                                  <select
+                                                    id={`tournament-change-map-${match.id}`}
+                                                    value={selectedMap}
+                                                    onChange={(event) => setChangeMapForms((current) => ({ ...current, [adminId]: event.target.value }))}
+                                                  >
+                                                    {ADMIN_MAPS.map((mapName) => (
+                                                      <option key={mapName} value={mapName}>
+                                                        {mapName}
+                                                      </option>
+                                                    ))}
+                                                  </select>
+                                                </label>
+                                                <button className="secondary" type="submit" disabled={isChangingMap}>
+                                                  {isChangingMap ? "Changing..." : "Change"}
+                                                </button>
+                                              </form>
+                                              {feedback && (
+                                                <p className={`admin-feedback ${feedback.type === "warning" ? "admin-feedback-warning" : ""}`}>
+                                                  {feedback.message || feedback}
+                                                </p>
+                                              )}
+                                            </div>
                                           </>
                                         ) : canAllocateServer ? (
                                           <button
@@ -1527,7 +1675,7 @@ export default function App() {
                                           <span className="muted-endpoint">{isReleased ? "Server assignment released." : "Server allocation unavailable."}</span>
                                         )}
 
-                                        {canRecordResult ? (
+                                        {canShowResultForm ? (
                                           <form className="result-form" onSubmit={(event) => {
                                             event.preventDefault();
                                             void recordTournamentMatchResult(match);
@@ -1540,7 +1688,7 @@ export default function App() {
                                                   type="number"
                                                   value={resultForm.team_a_score}
                                                   onChange={(event) => updateTournamentResultForm(match.id, "team_a_score", event.target.value)}
-                                                  disabled={isRecordingResult}
+                                                  disabled={!canRecordResult || isRecordingResult}
                                                 />
                                               </label>
                                               <label>
@@ -1550,7 +1698,7 @@ export default function App() {
                                                   type="number"
                                                   value={resultForm.team_b_score}
                                                   onChange={(event) => updateTournamentResultForm(match.id, "team_b_score", event.target.value)}
-                                                  disabled={isRecordingResult}
+                                                  disabled={!canRecordResult || isRecordingResult}
                                                 />
                                               </label>
                                             </div>
@@ -1559,7 +1707,7 @@ export default function App() {
                                               <select
                                                 value={resultForm.winner_team_id}
                                                 onChange={(event) => updateTournamentResultForm(match.id, "winner_team_id", event.target.value)}
-                                                disabled={isRecordingResult}
+                                                disabled={!canRecordResult || isRecordingResult}
                                               >
                                                 {match.team_a_id && <option value={match.team_a_id}>{teamAName}</option>}
                                                 {match.team_b_id && <option value={match.team_b_id}>{teamBName}</option>}
@@ -1571,13 +1719,14 @@ export default function App() {
                                                 value={resultForm.result_notes}
                                                 onChange={(event) => updateTournamentResultForm(match.id, "result_notes", event.target.value)}
                                                 placeholder="Optional result notes"
-                                                disabled={isRecordingResult}
+                                                disabled={!canRecordResult || isRecordingResult}
                                               />
                                             </label>
                                             <button
                                               className="secondary"
                                               type="submit"
                                               disabled={
+                                                !canRecordResult ||
                                                 isRecordingResult ||
                                                 resultForm.team_a_score === "" ||
                                                 resultForm.team_b_score === "" ||
@@ -1586,6 +1735,7 @@ export default function App() {
                                             >
                                               {isRecordingResult ? "Saving..." : "Record Result"}
                                             </button>
+                                            {!canRecordResult && <span className="muted-endpoint">Assign both teams before recording a result.</span>}
                                           </form>
                                         ) : (
                                           <span className="muted-endpoint">{resultActionMessage}</span>

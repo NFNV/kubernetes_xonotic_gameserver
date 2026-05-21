@@ -83,6 +83,8 @@ Selectable combinations are only combinations verified in this project by applyi
 - `GET /tournaments/<tournament_id>/matches/<match_id>/server-assignments`
 - `POST /tournaments/<tournament_id>/matches/<match_id>/allocate-server`
 - `POST /tournaments/<tournament_id>/matches/<match_id>/release-server`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/admin/broadcast`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/admin/change-map`
 - `POST /matches`
 - `GET /matches`
 - `GET /matches/<match_id>`
@@ -163,6 +165,20 @@ Verify the active assignment is persisted on the match:
 curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" | jq
 curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/${MATCH_ID}/server-assignments" | jq
 ```
+
+Send a whitelisted admin control to the active tournament match assignment:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/${MATCH_ID}/admin/broadcast" \
+  -H "content-type: application/json" \
+  -d '{"message":"Match starts in 2 minutes"}' | jq
+
+curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/${MATCH_ID}/admin/change-map" \
+  -H "content-type: application/json" \
+  -d '{"map":"stormkeep"}' | jq
+```
+
+Tournament match admin controls only target the active persisted assignment and use the same allowlisted RCON actions as Match Rooms.
 
 Release the tournament match server assignment:
 

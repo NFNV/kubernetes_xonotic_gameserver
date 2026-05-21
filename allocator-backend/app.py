@@ -1319,6 +1319,62 @@ def run_admin_broadcast(match_id: str, message: str) -> dict[str, Any]:
     }
 
 
+def active_tournament_assignment_snapshot(tournament_id: str, match_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    require_db()
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            fetch_tournament(cur, tournament_id)
+            match = fetch_tournament_match(cur, tournament_id, match_id)
+            active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
+            if not active_assignment:
+                raise BackendApiError(
+                    {
+                        "error": "server_assignment_not_found",
+                        "message": f"match {match_id} does not have an active server assignment",
+                    },
+                    404,
+                )
+
+    return match, active_assignment
+
+
+def tournament_assignment_target(assignment: dict[str, Any]) -> tuple[str, int, dict[str, Any]]:
+    address = assignment.get("address")
+    port = assignment.get("port")
+    if not address or not port:
+        raise BackendApiError({"error": "missing_allocated_endpoint", "message": "active server assignment address or port is missing"}, 409)
+
+    return address, int(port), {
+        "address": address,
+        "port": int(port),
+        "allocated_game_server_name": assignment.get("allocated_game_server_name"),
+        "assignment_id": str(assignment.get("id")) if assignment.get("id") else None,
+    }
+
+
+def run_tournament_admin_broadcast(tournament_id: str, match_id: str, message: str) -> dict[str, Any]:
+    match, assignment = active_tournament_assignment_snapshot(tournament_id, match_id)
+    address, port, target = tournament_assignment_target(assignment)
+    rcon_result = send_rcon_command(
+        address,
+        port,
+        f"say {rcon_quote_argument(message)}",
+        expect_response=False,
+    )
+
+    response_match = row_to_json(match)
+    response_match["active_server_assignment"] = assignment_response(assignment, include_live_status=False)
+    return {
+        "ok": True,
+        "action": "broadcast",
+        "message": message,
+        "match": response_match,
+        "assignment": response_match["active_server_assignment"],
+        "target": target,
+        "rcon": rcon_result,
+    }
+
+
 def verify_live_config_status(
     address: str,
     port: int,
@@ -1463,6 +1519,41 @@ def run_admin_change_map(match_id: str, map_name: str) -> dict[str, Any]:
             "port": port,
             "allocated_game_server_name": allocated_server.get("allocated_game_server_name"),
         },
+        "rcon": rcon_result,
+        "change_map_verification": verification,
+        "live_status": live_status,
+    }
+
+
+def run_tournament_admin_change_map(tournament_id: str, match_id: str, map_name: str) -> dict[str, Any]:
+    match, assignment = active_tournament_assignment_snapshot(tournament_id, match_id)
+    address, port, target = tournament_assignment_target(assignment)
+    rcon_result = send_rcon_command(
+        address,
+        port,
+        f"changelevel {map_name}",
+        expect_response=False,
+    )
+
+    clear_status_cache(address, port)
+    verification = verify_change_map_status(address, port, map_name)
+    live_status = verification.get("live_status")
+
+    response_match = row_to_json(match)
+    response_match["active_server_assignment"] = assignment_response(assignment, include_live_status=False)
+    return {
+        "ok": verification.get("verified") is True,
+        "action": "change_map",
+        "map": map_name,
+        "rcon_sent": True,
+        "verified": verification.get("verified") is True,
+        "error": None if verification.get("verified") else "change_map_verification_failed",
+        "message": None
+        if verification.get("verified")
+        else "Map change command sent, but live status verification is temporarily unavailable.",
+        "match": response_match,
+        "assignment": response_match["active_server_assignment"],
+        "target": target,
         "rcon": rcon_result,
         "change_map_verification": verification,
         "live_status": live_status,
@@ -2755,6 +2846,46 @@ def release_tournament_match_server(tournament_id: str, match_id: str):
         )
 
     return jsonify({"match": row_to_json(match), "assignment": assignment_response(assignment, include_live_status=False), "release_result": release_result})
+
+
+@APP.post("/tournaments/<tournament_id>/matches/<match_id>/admin/broadcast")
+def tournament_match_admin_broadcast(tournament_id: str, match_id: str):
+    try:
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        match_id = validate_db_id(match_id, "match_id")
+        body = parse_json_body()
+        message = validate_admin_broadcast_message(body.get("message"))
+        result = run_tournament_admin_broadcast(tournament_id, match_id, message)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(
+            exc,
+            fallback_error="tournament_match_broadcast_failed",
+            fallback_message="failed to send tournament match broadcast",
+        )
+
+    return jsonify(result)
+
+
+@APP.post("/tournaments/<tournament_id>/matches/<match_id>/admin/change-map")
+def tournament_match_admin_change_map(tournament_id: str, match_id: str):
+    try:
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        match_id = validate_db_id(match_id, "match_id")
+        body = parse_json_body()
+        map_name = validate_admin_map(body.get("map"))
+        result = run_tournament_admin_change_map(tournament_id, match_id, map_name)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(
+            exc,
+            fallback_error="tournament_match_change_map_failed",
+            fallback_message="failed to change tournament match map",
+        )
+
+    return jsonify(result)
 
 
 @APP.get("/healthz")

@@ -19,7 +19,7 @@ It is intentionally narrow:
 - pre-allocation map/mode selection
 - Match Room allocation and release
 - live player/map/score status for allocated Match Rooms
-- whitelisted admin controls for allocated Match Rooms: broadcast message and change map
+- whitelisted admin controls for allocated Match Rooms and active tournament match assignments: broadcast message and change map
 - allocated-server infrastructure controls: command panel and terminate
 - Fleet summary
 - current `GameServer` list
@@ -46,7 +46,7 @@ Current tournament limitations:
 - no bracket visualization
 - no automatic winner advancement
 - match names are not persisted by the backend schema yet; the UI displays match IDs
-- tournament match RCON controls are still handled through the lower-level Match Room workflow for now
+- tournament match admin controls are limited to whitelisted broadcast and allowlisted map change while an active server assignment exists
 
 ## Backend Endpoints Used
 
@@ -66,6 +66,8 @@ Current tournament limitations:
 - `GET /tournaments/<tournament_id>/matches/<match_id>/server-assignments`
 - `POST /tournaments/<tournament_id>/matches/<match_id>/allocate-server`
 - `POST /tournaments/<tournament_id>/matches/<match_id>/release-server`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/admin/broadcast`
+- `POST /tournaments/<tournament_id>/matches/<match_id>/admin/change-map`
 - `GET /matches`
 - `POST /matches`
 - `POST /matches/<match_id>/allocate`
