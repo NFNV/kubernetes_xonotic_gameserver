@@ -1146,10 +1146,61 @@ th {
   margin-top: 4px;
 }
 
+.tournament-server-cell-released {
+  padding: 8px;
+  border: 1px solid rgba(126, 176, 211, 0.12);
+  border-radius: 12px;
+  background: rgba(126, 176, 211, 0.05);
+}
+
+.tournament-server-cell-released strong,
+.tournament-server-cell-released span {
+  color: #6f8799;
+}
+
+.tournament-match-row-released td {
+  color: #98adbd;
+  background: rgba(126, 176, 211, 0.025);
+}
+
+.winner-cell {
+  display: grid;
+  gap: 3px;
+  min-width: 110px;
+}
+
+.winner-cell strong {
+  color: #f7fbff;
+}
+
+.winner-cell span {
+  color: #83a2b9;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
 .score-cell {
   display: grid;
   gap: 4px;
   min-width: 90px;
+}
+
+.score-cell-final {
+  min-width: 150px;
+}
+
+.score-cell-final > span:first-child {
+  color: #74ffd5;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.score-cell-final strong {
+  color: #f7fbff;
+  font-size: 1.25rem;
+  line-height: 1;
 }
 
 .score-cell small {
@@ -1238,6 +1289,44 @@ th {
   border-color: rgba(0, 209, 255, 0.36);
   background: rgba(0, 209, 255, 0.14);
   color: #8cefff;
+}
+
+.state-badge-created {
+  border-color: rgba(126, 176, 211, 0.24);
+  background: rgba(126, 176, 211, 0.1);
+  color: #c1d7e8;
+}
+
+.state-badge-server_ready {
+  border-color: rgba(0, 209, 255, 0.34);
+  background: rgba(0, 209, 255, 0.14);
+  color: #8cefff;
+}
+
+.state-badge-finished {
+  border-color: rgba(0, 255, 180, 0.3);
+  background: rgba(0, 255, 180, 0.12);
+  color: #74ffd5;
+}
+
+.state-badge-released {
+  border-color: rgba(126, 176, 211, 0.16);
+  background: rgba(126, 176, 211, 0.06);
+  color: #91a9ba;
+}
+
+.state-badge-failed {
+  border-color: rgba(255, 91, 74, 0.34);
+  background: rgba(255, 91, 74, 0.14);
+  color: #ff9a8d;
+}
+
+.state-badge-server_allocating,
+.state-badge-scheduled,
+.state-badge-running {
+  border-color: rgba(255, 177, 74, 0.28);
+  background: rgba(255, 177, 74, 0.1);
+  color: #ffd391;
 }
 
 .button-row,

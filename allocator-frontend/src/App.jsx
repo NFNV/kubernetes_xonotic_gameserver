@@ -158,6 +158,46 @@ function assignmentEndpoint(assignment) {
   return assignment.endpoint || (assignment.address && assignment.port ? `${assignment.address}:${assignment.port}` : "");
 }
 
+const TOURNAMENT_MATCH_STATUS_LABELS = {
+  created: "Created",
+  scheduled: "Scheduled",
+  server_allocating: "Allocating",
+  server_ready: "Server Ready",
+  running: "Running",
+  finished: "Finished",
+  released: "Released",
+  failed: "Failed",
+};
+
+const TERMINAL_TOURNAMENT_MATCH_STATUSES = new Set(["finished", "released"]);
+
+function tournamentMatchStatusLabel(status) {
+  return TOURNAMENT_MATCH_STATUS_LABELS[status] || status || "Unknown";
+}
+
+function tournamentMatchStatusClass(status) {
+  const normalizedStatus = (status || "unknown").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+  return `state-badge state-badge-${normalizedStatus}`;
+}
+
+function tournamentMatchHasResult(match) {
+  return match.team_a_score !== null && match.team_a_score !== undefined
+    && match.team_b_score !== null && match.team_b_score !== undefined
+    && Boolean(match.winner_team_id);
+}
+
+function tournamentMatchCanRecordResult(match) {
+  return Boolean(match.team_a_id && match.team_b_id)
+    && !TERMINAL_TOURNAMENT_MATCH_STATUSES.has(match.status)
+    && match.status !== "server_allocating";
+}
+
+function tournamentMatchCanAllocateServer(match) {
+  return !match.active_server_assignment
+    && !TERMINAL_TOURNAMENT_MATCH_STATUSES.has(match.status)
+    && match.status !== "server_allocating";
+}
+
 function selectableGameModes(gameConfigOptions) {
   return (gameConfigOptions.modes || []).filter((mode) => mode.selectable);
 }
@@ -1379,17 +1419,28 @@ export default function App() {
                                 const activeAssignment = match.active_server_assignment;
                                 const endpoint = assignmentEndpoint(activeAssignment);
                                 const command = connectCommand(endpoint);
+                                const status = match.status || "created";
+                                const isFinished = status === "finished";
+                                const isReleased = status === "released";
                                 const isAllocatingServer = Boolean(allocatingTournamentServers[match.id]);
                                 const isReleasingServer = Boolean(releasingTournamentServers[match.id]);
                                 const isRecordingResult = Boolean(recordingTournamentResults[match.id]);
-                                const assignmentVerified = match.status !== "failed";
+                                const assignmentVerified = status !== "failed";
                                 const resultForm = tournamentResultForm(match);
                                 const teamAName = match.team_a_id ? teamNameById[match.team_a_id] || shortId(match.team_a_id) : "Team A";
                                 const teamBName = match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "Team B";
-                                const canRecordResult = Boolean(match.team_a_id && match.team_b_id);
+                                const winnerName = match.winner_team_id ? teamNameById[match.winner_team_id] || `Team ${shortId(match.winner_team_id)}` : "";
+                                const hasRecordedResult = tournamentMatchHasResult(match);
+                                const canRecordResult = tournamentMatchCanRecordResult(match);
+                                const canAllocateServer = tournamentMatchCanAllocateServer(match);
+                                const resultActionMessage = hasRecordedResult
+                                  ? "Result recorded."
+                                  : TERMINAL_TOURNAMENT_MATCH_STATUSES.has(status)
+                                    ? "No result recorded."
+                                    : "Assign both teams before recording a result.";
 
                                 return (
-                                  <tr key={match.id}>
+                                  <tr className={isReleased ? "tournament-match-row-released" : ""} key={match.id}>
                                     <td>
                                       <div className="server-name-cell">
                                         <strong>Match {shortId(match.id)}</strong>
@@ -1401,7 +1452,7 @@ export default function App() {
                                       {match.team_a_id ? teamAName : "TBD"} vs{" "}
                                       {match.team_b_id ? teamBName : "TBD"}
                                     </td>
-                                    <td><span className="state-badge">{match.status}</span></td>
+                                    <td><span className={tournamentMatchStatusClass(status)}>{tournamentMatchStatusLabel(status)}</span></td>
                                     <td>
                                       {activeAssignment ? (
                                         <div className={`tournament-server-cell ${assignmentVerified ? "" : "tournament-server-cell-warning"}`}>
@@ -1414,14 +1465,36 @@ export default function App() {
                                             <CopyButton text={command} label="Copy connect" onCopy={copyText} />
                                           </div>
                                         </div>
+                                      ) : isReleased ? (
+                                        <div className="tournament-server-cell tournament-server-cell-released">
+                                          <strong>Server released</strong>
+                                          <span>Endpoint hidden after release.</span>
+                                        </div>
                                       ) : (
-                                        <span className="muted-endpoint">No persisted server assignment</span>
+                                        <span className="muted-endpoint">No active server assignment</span>
                                       )}
                                     </td>
-                                    <td>{match.winner_team_id ? teamNameById[match.winner_team_id] || shortId(match.winner_team_id) : "Not recorded"}</td>
                                     <td>
-                                      <div className="score-cell">
-                                        <span>{match.team_a_score ?? "-"} / {match.team_b_score ?? "-"}</span>
+                                      {winnerName ? (
+                                        <div className="winner-cell">
+                                          <strong>{winnerName}</strong>
+                                          {!teamNameById[match.winner_team_id] && <span>{match.winner_team_id}</span>}
+                                        </div>
+                                      ) : (
+                                        <span className="muted-endpoint">Not recorded</span>
+                                      )}
+                                    </td>
+                                    <td>
+                                      <div className={`score-cell ${hasRecordedResult ? "score-cell-final" : ""}`}>
+                                        {hasRecordedResult ? (
+                                          <>
+                                            <span>Final</span>
+                                            <strong>{match.team_a_score} - {match.team_b_score}</strong>
+                                            <small>{teamAName} vs {teamBName}</small>
+                                          </>
+                                        ) : (
+                                          <span className="muted-endpoint">Not recorded</span>
+                                        )}
                                         {match.result_notes && <small>{match.result_notes}</small>}
                                       </div>
                                     </td>
@@ -1429,8 +1502,8 @@ export default function App() {
                                       <div className="tournament-actions">
                                         {activeAssignment ? (
                                           <>
-                                            {match.status === "finished" && (
-                                              <span className="active-server-note">Result recorded. Server is still active.</span>
+                                            {isFinished && (
+                                              <span className="active-server-note">Result recorded. Server still active.</span>
                                             )}
                                             <button
                                               className="copy-button"
@@ -1441,7 +1514,7 @@ export default function App() {
                                               {isReleasingServer ? "Releasing..." : "Release Server"}
                                             </button>
                                           </>
-                                        ) : (
+                                        ) : canAllocateServer ? (
                                           <button
                                             className="secondary"
                                             type="button"
@@ -1450,69 +1523,73 @@ export default function App() {
                                           >
                                             {isAllocatingServer ? "Allocating..." : "Allocate Server"}
                                           </button>
+                                        ) : (
+                                          <span className="muted-endpoint">{isReleased ? "Server assignment released." : "Server allocation unavailable."}</span>
                                         )}
 
-                                        <form className="result-form" onSubmit={(event) => {
-                                          event.preventDefault();
-                                          void recordTournamentMatchResult(match);
-                                        }}>
-                                          <div className="result-score-row">
+                                        {canRecordResult ? (
+                                          <form className="result-form" onSubmit={(event) => {
+                                            event.preventDefault();
+                                            void recordTournamentMatchResult(match);
+                                          }}>
+                                            <div className="result-score-row">
+                                              <label>
+                                                <span>{teamAName}</span>
+                                                <input
+                                                  min="0"
+                                                  type="number"
+                                                  value={resultForm.team_a_score}
+                                                  onChange={(event) => updateTournamentResultForm(match.id, "team_a_score", event.target.value)}
+                                                  disabled={isRecordingResult}
+                                                />
+                                              </label>
+                                              <label>
+                                                <span>{teamBName}</span>
+                                                <input
+                                                  min="0"
+                                                  type="number"
+                                                  value={resultForm.team_b_score}
+                                                  onChange={(event) => updateTournamentResultForm(match.id, "team_b_score", event.target.value)}
+                                                  disabled={isRecordingResult}
+                                                />
+                                              </label>
+                                            </div>
                                             <label>
-                                              <span>{teamAName}</span>
-                                              <input
-                                                min="0"
-                                                type="number"
-                                                value={resultForm.team_a_score}
-                                                onChange={(event) => updateTournamentResultForm(match.id, "team_a_score", event.target.value)}
-                                                disabled={!canRecordResult || isRecordingResult}
-                                              />
+                                              <span>Winner</span>
+                                              <select
+                                                value={resultForm.winner_team_id}
+                                                onChange={(event) => updateTournamentResultForm(match.id, "winner_team_id", event.target.value)}
+                                                disabled={isRecordingResult}
+                                              >
+                                                {match.team_a_id && <option value={match.team_a_id}>{teamAName}</option>}
+                                                {match.team_b_id && <option value={match.team_b_id}>{teamBName}</option>}
+                                              </select>
                                             </label>
                                             <label>
-                                              <span>{teamBName}</span>
-                                              <input
-                                                min="0"
-                                                type="number"
-                                                value={resultForm.team_b_score}
-                                                onChange={(event) => updateTournamentResultForm(match.id, "team_b_score", event.target.value)}
-                                                disabled={!canRecordResult || isRecordingResult}
+                                              <span>Notes</span>
+                                              <textarea
+                                                value={resultForm.result_notes}
+                                                onChange={(event) => updateTournamentResultForm(match.id, "result_notes", event.target.value)}
+                                                placeholder="Optional result notes"
+                                                disabled={isRecordingResult}
                                               />
                                             </label>
-                                          </div>
-                                          <label>
-                                            <span>Winner</span>
-                                            <select
-                                              value={resultForm.winner_team_id}
-                                              onChange={(event) => updateTournamentResultForm(match.id, "winner_team_id", event.target.value)}
-                                              disabled={!canRecordResult || isRecordingResult}
+                                            <button
+                                              className="secondary"
+                                              type="submit"
+                                              disabled={
+                                                isRecordingResult ||
+                                                resultForm.team_a_score === "" ||
+                                                resultForm.team_b_score === "" ||
+                                                !resultForm.winner_team_id
+                                              }
                                             >
-                                              {match.team_a_id && <option value={match.team_a_id}>{teamAName}</option>}
-                                              {match.team_b_id && <option value={match.team_b_id}>{teamBName}</option>}
-                                            </select>
-                                          </label>
-                                          <label>
-                                            <span>Notes</span>
-                                            <textarea
-                                              value={resultForm.result_notes}
-                                              onChange={(event) => updateTournamentResultForm(match.id, "result_notes", event.target.value)}
-                                              placeholder="Optional result notes"
-                                              disabled={!canRecordResult || isRecordingResult}
-                                            />
-                                          </label>
-                                          <button
-                                            className="secondary"
-                                            type="submit"
-                                            disabled={
-                                              !canRecordResult ||
-                                              isRecordingResult ||
-                                              resultForm.team_a_score === "" ||
-                                              resultForm.team_b_score === "" ||
-                                              !resultForm.winner_team_id
-                                            }
-                                          >
-                                            {isRecordingResult ? "Saving..." : match.status === "finished" ? "Update Result" : "Finish Match"}
-                                          </button>
-                                          {!canRecordResult && <span className="muted-endpoint">Assign both teams before recording a result.</span>}
-                                        </form>
+                                              {isRecordingResult ? "Saving..." : "Record Result"}
+                                            </button>
+                                          </form>
+                                        ) : (
+                                          <span className="muted-endpoint">{resultActionMessage}</span>
+                                        )}
                                       </div>
                                     </td>
                                   </tr>
