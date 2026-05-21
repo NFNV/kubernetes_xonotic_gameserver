@@ -569,10 +569,22 @@ button:disabled {
 }
 
 .tournament-match-actions {
+  grid-column: 3 / -1;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  justify-content: flex-start;
+  justify-self: start;
+}
+
+.tournament-match-actions .primary,
+.tournament-match-actions .secondary {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
+  min-height: 40px;
+  padding: 10px 14px;
 }
 
 .tournament-match-form .deferred-note {
