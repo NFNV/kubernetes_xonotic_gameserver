@@ -109,6 +109,26 @@ GAME_CONFIG_OPTIONS = {
 }
 ADMIN_ALLOWED_MAPS = tuple(sorted({map_name for config in GAME_CONFIG_OPTIONS.values() for map_name in config["verified_maps"] + config["experimental_maps"]}))
 ADMIN_ALLOWED_GAME_MODES = tuple(GAME_CONFIG_OPTIONS.keys())
+GAME_MODE_ALIASES = {
+    "deathmatch": "dm",
+    "dm": "dm",
+    "ffa": "dm",
+    "free for all": "dm",
+    "team deathmatch": "tdm",
+    "tdm": "tdm",
+    "capture the flag": "ctf",
+    "ctf": "ctf",
+    "duel": "duel",
+    "duels": "duel",
+    "clan arena": "ca",
+    "clanarena": "ca",
+    "ca": "ca",
+    "domination": "dom",
+    "dom": "dom",
+    "key hunt": "kh",
+    "keyhunt": "kh",
+    "kh": "kh",
+}
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "")
 POSTGRES_PORT = int(os.environ.get("POSTGRES_PORT", "5432"))
@@ -1320,7 +1340,13 @@ def game_config_options_response() -> dict[str, Any]:
 def normalize_game_mode(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
-    return value.strip().lower() or None
+
+    normalized = re.sub(r"[\s_-]+", " ", value.strip().lower()).strip()
+    if not normalized:
+        return None
+
+    without_g_prefix = normalized[2:] if normalized.startswith("g ") else normalized
+    return GAME_MODE_ALIASES.get(normalized) or GAME_MODE_ALIASES.get(without_g_prefix) or without_g_prefix
 
 
 def rcon_quote_argument(value: str) -> str:
@@ -1648,18 +1674,30 @@ def configure_allocated_server(
         expected_map=requested_map,
         expected_game_mode=requested_game_mode,
     )
+    verified = verification.get("verified") is True
+    failure_reason = None
+    if not verified:
+        verification_error = verification.get("error")
+        if isinstance(verification_error, dict):
+            failure_reason = verification_error.get("message")
+        failure_reason = failure_reason or "Allocated server was configured, but live status did not verify the requested map/mode."
 
     return {
-        "ok": verification.get("verified") is True,
+        "ok": verified,
         "rcon_sent": True,
-        "verified": verification.get("verified") is True,
+        "verified": verified,
         "requested_map": requested_map,
         "requested_game_mode": requested_game_mode,
+        "expected_map": verification.get("expected_map"),
+        "actual_map": verification.get("actual_map"),
+        "expected_game_mode": verification.get("expected_game_mode"),
+        "actual_game_mode": verification.get("actual_game_mode"),
         "commands": commands,
         "verification": verification,
-        "error": None if verification.get("verified") else "live_config_verification_failed",
+        "error": None if verified else "live_config_verification_failed",
+        "failure_reason": failure_reason,
         "message": None
-        if verification.get("verified")
+        if verified
         else "Allocated server was configured, but live status did not verify the requested map/mode.",
         "live_status": verification.get("live_status"),
     }

@@ -134,17 +134,44 @@ echo "${allocation_json}" | jq '{
   match_id: .match.id,
   match_status: .match.status,
   endpoint: .assignment.endpoint,
-  verified: .configuration.verified,
-  expected_map: .configuration.expected_map,
-  actual_map: .configuration.actual_map,
-  expected_game_mode: .configuration.expected_game_mode,
-  actual_game_mode: .configuration.actual_game_mode,
+  requested_map: .configuration.requested_map,
+  requested_game_mode: .configuration.requested_game_mode,
+  verified: (.configuration.verified == true),
+  expected_map: (
+    .configuration.expected_map
+    // .configuration.verification.expected_map
+    // .configuration.requested_map
+  ),
+  actual_map: (
+    .configuration.actual_map
+    // .configuration.verification.actual_map
+    // .configuration.live_status.map
+    // .configuration.verification.live_status.map
+  ),
+  expected_game_mode: (
+    .configuration.expected_game_mode
+    // .configuration.verification.expected_game_mode
+    // .configuration.requested_game_mode
+  ),
+  actual_game_mode: (
+    .configuration.actual_game_mode
+    // .configuration.verification.actual_game_mode
+    // .configuration.live_status.game_mode
+    // .configuration.verification.live_status.game_mode
+  ),
+  failure_reason: (
+    .configuration.failure_reason
+    // .configuration.verification.error.message
+    // .configuration.message
+    // .warning
+  ),
   warning: .warning
 }'
 
 verified="$(jq -r '.configuration.verified == true' <<<"${allocation_json}")"
-actual_map="$(jq -r '.configuration.actual_map // ""' <<<"${allocation_json}")"
-actual_mode="$(jq -r '.configuration.actual_game_mode // ""' <<<"${allocation_json}")"
+actual_map="$(jq -r '.configuration.actual_map // .configuration.verification.actual_map // .configuration.live_status.map // .configuration.verification.live_status.map // ""' <<<"${allocation_json}")"
+actual_mode="$(jq -r '.configuration.actual_game_mode // .configuration.verification.actual_game_mode // .configuration.live_status.game_mode // .configuration.verification.live_status.game_mode // ""' <<<"${allocation_json}")"
+failure_reason="$(jq -r '.configuration.failure_reason // .configuration.verification.error.message // .configuration.message // .warning // "live config verification failed"' <<<"${allocation_json}")"
 
 if [[ "${keep_server}" != "1" ]]; then
   echo "Releasing verification server assignment..."
@@ -155,7 +182,10 @@ fi
 
 if [[ "${verified}" == "true" && "${actual_map}" == "${map_name}" && "${actual_mode}" == "${mode}" ]]; then
   echo "VERIFIED ${mode}/${map_name}"
+elif [[ "${verified}" == "true" ]]; then
+  echo "FAILED ${mode}/${map_name}: backend marked verification true, but parsed live status was mode=${actual_mode:-unknown} map=${actual_map:-unknown}" >&2
+  exit 1
 else
-  echo "FAILED ${mode}/${map_name}: getstatus reported mode=${actual_mode:-unknown} map=${actual_map:-unknown}" >&2
+  echo "FAILED ${mode}/${map_name}: ${failure_reason}; getstatus reported mode=${actual_mode:-unknown} map=${actual_map:-unknown}" >&2
   exit 1
 fi
