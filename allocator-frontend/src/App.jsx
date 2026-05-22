@@ -13,6 +13,7 @@ const AUTO_REFRESH_MS = 7000;
 const HISTORY_LIMIT = 8;
 const ADMIN_MAPS = ["xoylent", "stormkeep", "implosion", "drain", "darkzone", "solarium"];
 const BROADCAST_MAX_LENGTH = 160;
+const VERIFIED_CONFIG_NOTE = "Only verified map/mode combinations are shown.";
 const FALLBACK_GAME_CONFIG_OPTIONS = {
   default: {
     requested_game_mode: "dm",
@@ -80,7 +81,7 @@ const FALLBACK_GAME_CONFIG_OPTIONS = {
     },
   ],
   experimental_probe_enabled: false,
-  note: "Only verified map/mode combinations are selectable by default.",
+  note: VERIFIED_CONFIG_NOTE,
 };
 
 async function fetchJson(path, options) {
@@ -228,7 +229,31 @@ function tournamentMatchCanAllocateServer(match) {
 }
 
 function selectableGameModes(gameConfigOptions) {
-  return (gameConfigOptions.modes || []).filter((mode) => mode.selectable);
+  const validMapsByMode = gameConfigOptions.valid_maps_by_mode || {};
+  const modesByName = new Map();
+
+  (gameConfigOptions.modes || []).forEach((mode) => {
+    const verifiedMaps = validMapsByMode[mode.mode] || mode.verified_maps || [];
+    if (mode.selectable && verifiedMaps.length > 0) {
+      modesByName.set(mode.mode, {
+        ...mode,
+        verified_maps: verifiedMaps,
+      });
+    }
+  });
+
+  Object.entries(validMapsByMode).forEach(([modeName, maps]) => {
+    if (maps.length > 0 && !modesByName.has(modeName)) {
+      modesByName.set(modeName, {
+        mode: modeName,
+        label: modeName,
+        selectable: true,
+        verified_maps: maps,
+      });
+    }
+  });
+
+  return Array.from(modesByName.values());
 }
 
 function defaultGameConfig(gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
@@ -236,14 +261,20 @@ function defaultGameConfig(gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
 }
 
 function validMapsForMode(gameConfigOptions, modeName) {
-  return gameConfigOptions.valid_maps_by_mode?.[modeName] || [];
+  if (!modeName) {
+    return [];
+  }
+
+  const mode = selectableGameModes(gameConfigOptions).find((candidate) => candidate.mode === modeName);
+  return mode ? mode.verified_maps : [];
 }
 
 function normalizeGameConfig(values, gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
   const fallback = defaultGameConfig(gameConfigOptions);
+  const firstMode = selectableGameModes(gameConfigOptions)[0];
   const mode = validMapsForMode(gameConfigOptions, values?.requested_game_mode).length > 0
     ? values.requested_game_mode
-    : fallback.requested_game_mode;
+    : firstMode?.mode || fallback.requested_game_mode;
   const maps = validMapsForMode(gameConfigOptions, mode);
   const map = maps.includes(values?.requested_map) ? values.requested_map : maps[0] || fallback.requested_map;
 
@@ -1509,7 +1540,7 @@ export default function App() {
                             {creatingTournamentMatch ? "Working..." : "Create & Allocate Server"}
                           </button>
                         </div>
-                        <p className="deferred-note">{gameConfigOptions.note || "Only verified map/mode combinations are available."}</p>
+                        <p className="deferred-note">{VERIFIED_CONFIG_NOTE}</p>
                       </form>
 
                       {tournamentMatches.length === 0 ? (
@@ -1830,7 +1861,7 @@ export default function App() {
         </form>
         <p className="deferred-note">
           Servers come from a warm Agones Fleet. Allocation picks a Ready server, applies requested map/mode through whitelisted RCON, verifies with getstatus, then exposes the endpoint.
-          {" "}Only verified map/mode combinations are available.
+          {" "}{VERIFIED_CONFIG_NOTE}
         </p>
 
         {loading ? (
@@ -2058,7 +2089,7 @@ export default function App() {
                       </div>
                       <p className="empty-state">
                         Allocation will configure the warm server with RCON and verify getstatus before showing a join endpoint.
-                        {" "}Only verified map/mode combinations are available.
+                        {" "}{VERIFIED_CONFIG_NOTE}
                       </p>
                       <button className="primary" type="button" onClick={() => void allocateMatch(match)} disabled={isAllocating || isConfiguring || isReleased}>
                         {isAllocating || isConfiguring ? "Allocating..." : isReleased ? "Match Ended" : "Allocate Server"}
