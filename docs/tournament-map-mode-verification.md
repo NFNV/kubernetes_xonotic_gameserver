@@ -33,6 +33,20 @@ These are the only combinations selectable in normal match creation:
 | --- | --- |
 | `dm` | `xoylent`, `stormkeep`, `solarium` |
 | `tdm` | `stormkeep` |
+| `ctf` | `runningmanctf` |
+| `duel` | `xoylent` |
+| `ca` | `stormkeep`, `xoylent` |
+
+## Verified Results
+
+These pairs have passed the tournament allocation probe against the deployed image and are promoted to normal selection:
+
+| Mode | Map | Result |
+| --- | --- | --- |
+| `ca` | `stormkeep` | `VERIFIED ca/stormkeep` |
+| `ca` | `xoylent` | `VERIFIED ca/xoylent` |
+| `duel` | `xoylent` | `VERIFIED duel/xoylent` |
+| `ctf` | `runningmanctf` | `VERIFIED ctf/runningmanctf` |
 
 ## Experimental Candidates
 
@@ -42,9 +56,9 @@ These candidates come from upstream Xonotic mapinfo metadata and must still be v
 | --- | --- |
 | `dm` | `drain`, `darkzone`, `runningman`, `warfare` |
 | `tdm` | `xoylent`, `solarium`, `darkzone`, `implosion`, `runningman`, `silentsiege` |
-| `ctf` | `catharsis`, `courtfun`, `dance`, `go`, `implosion`, `runningmanctf`, `space-elevator`, `vorix` |
-| `duel` | `darkzone`, `fuse`, `stormkeep`, `warfare`, `xoylent` |
-| `ca` | `darkzone`, `implosion`, `runningman`, `solarium`, `stormkeep`, `xoylent` |
+| `ctf` | `catharsis`, `courtfun`, `dance`, `go`, `implosion`, `space-elevator`, `vorix` |
+| `duel` | `darkzone`, `fuse`, `stormkeep`, `warfare` |
+| `ca` | `darkzone`, `implosion`, `runningman`, `solarium` |
 | `dom` | `afterslime`, `geoplanetary`, `glowplant`, `implosion`, `runningmanctf`, `stormkeep` |
 | `kh` | `implosion`, `runningman`, `runningmanctf`, `solarium`, `stormkeep` |
 
