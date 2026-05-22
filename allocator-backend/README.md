@@ -62,7 +62,9 @@ Selectable combinations are only combinations verified in this project by applyi
 - `dm`: `xoylent`, `stormkeep`, `solarium`
 - `tdm`: `stormkeep`
 
-`ctf` and `duel` are listed as deferred/experimental, but are not selectable for normal Match Room or tournament match allocation yet. Invalid combinations are rejected before a match is created or before any Agones allocation is attempted.
+`ctf`, `duel`, `ca`, `dom`, and `kh` are listed as deferred/experimental, but are not selectable for normal Match Room or tournament match allocation yet. Invalid combinations are rejected before a match is created or before any Agones allocation is attempted.
+
+Use `docs/tournament-map-mode-verification.md` and `scripts/verify-tournament-map-mode.sh` to prove a candidate pair through the tournament allocation flow before promotion. Experimental probes require the backend to be temporarily deployed with `XONOTIC_ENABLE_EXPERIMENTAL_GAME_CONFIG=1`; default runtime validation still accepts only verified combinations.
 
 ## API
 
@@ -296,6 +298,7 @@ Example successful allocation response:
 - `XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS`: defaults to `1`
 - `XONOTIC_RCON_CHANGE_MAP_VERIFY_TIMEOUT_SECONDS`: defaults to `12`
 - `XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS`: defaults to `1`
+- `XONOTIC_ENABLE_EXPERIMENTAL_GAME_CONFIG`: defaults to `0`; set to `1` only during controlled map/mode verification probes
 - `DEFAULT_MATCH_MAX_PLAYERS`: defaults to `8`; planning metadata only, not enforced on warm Fleet servers
 - `MAX_MATCH_PLAYERS_LIMIT`: defaults to `32`; validation limit for that metadata
 - `DATABASE_URL`: optional full PostgreSQL connection URL; overrides individual PostgreSQL settings when set

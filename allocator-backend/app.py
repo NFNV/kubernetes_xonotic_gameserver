@@ -57,32 +57,54 @@ PLAYER_STATUS_PATTERN = re.compile(r'^(?P<score>\S+)\s+(?P<ping>\d+)(?:\s+(?P<te
 ADMIN_BROADCAST_MAX_LENGTH = 160
 DEFAULT_REQUESTED_MAP = os.environ.get("DEFAULT_REQUESTED_MAP", "xoylent")
 DEFAULT_REQUESTED_GAME_MODE = os.environ.get("DEFAULT_REQUESTED_GAME_MODE", "dm")
+XONOTIC_ENABLE_EXPERIMENTAL_GAME_CONFIG = os.environ.get("XONOTIC_ENABLE_EXPERIMENTAL_GAME_CONFIG", "0") == "1"
 GAME_CONFIG_OPTIONS = {
     "dm": {
         "label": "Deathmatch",
         "selectable": True,
         "verified_maps": ("xoylent", "stormkeep", "solarium"),
-        "experimental_maps": ("drain", "darkzone", "implosion"),
+        "experimental_maps": ("drain", "darkzone", "runningman", "warfare"),
     },
     "tdm": {
         "label": "Team Deathmatch",
         "selectable": True,
         "verified_maps": ("stormkeep",),
-        "experimental_maps": (),
+        "experimental_maps": ("xoylent", "solarium", "darkzone", "implosion", "runningman", "silentsiege"),
     },
     "ctf": {
         "label": "Capture The Flag",
         "selectable": False,
         "disabled_reason": "deferred until CTF map/mode combinations are verified",
         "verified_maps": (),
-        "experimental_maps": ("drain",),
+        "experimental_maps": ("catharsis", "courtfun", "dance", "go", "implosion", "runningmanctf", "space-elevator", "vorix"),
     },
     "duel": {
         "label": "Duel",
         "selectable": False,
         "disabled_reason": "deferred until duel allocation/config verification is reliable",
         "verified_maps": (),
-        "experimental_maps": ("implosion",),
+        "experimental_maps": ("darkzone", "fuse", "stormkeep", "warfare", "xoylent"),
+    },
+    "ca": {
+        "label": "Clan Arena",
+        "selectable": False,
+        "disabled_reason": "deferred until Clan Arena map/mode combinations are verified",
+        "verified_maps": (),
+        "experimental_maps": ("darkzone", "implosion", "runningman", "solarium", "stormkeep", "xoylent"),
+    },
+    "dom": {
+        "label": "Domination",
+        "selectable": False,
+        "disabled_reason": "deferred until Domination map/mode combinations are verified",
+        "verified_maps": (),
+        "experimental_maps": ("afterslime", "geoplanetary", "glowplant", "implosion", "runningmanctf", "stormkeep"),
+    },
+    "kh": {
+        "label": "Key Hunt",
+        "selectable": False,
+        "disabled_reason": "deferred until Key Hunt map/mode combinations are verified",
+        "verified_maps": (),
+        "experimental_maps": ("implosion", "runningman", "runningmanctf", "solarium", "stormkeep"),
     },
 }
 ADMIN_ALLOWED_MAPS = tuple(sorted({map_name for config in GAME_CONFIG_OPTIONS.values() for map_name in config["verified_maps"] + config["experimental_maps"]}))
@@ -1197,6 +1219,17 @@ def verified_maps_for_mode(game_mode: str) -> list[str]:
     return list(GAME_CONFIG_OPTIONS.get(game_mode, {}).get("verified_maps", ()))
 
 
+def experimental_maps_for_mode(game_mode: str) -> list[str]:
+    return list(GAME_CONFIG_OPTIONS.get(game_mode, {}).get("experimental_maps", ()))
+
+
+def candidate_maps_for_mode(game_mode: str, *, allow_experimental: bool = False) -> list[str]:
+    maps = verified_maps_for_mode(game_mode)
+    if allow_experimental:
+        maps = [*maps, *experimental_maps_for_mode(game_mode)]
+    return maps
+
+
 def default_verified_game_config() -> tuple[str, str]:
     configured_mode = DEFAULT_REQUESTED_GAME_MODE.strip().lower()
     configured_map = DEFAULT_REQUESTED_MAP.strip().lower()
@@ -1211,20 +1244,38 @@ def default_verified_game_config() -> tuple[str, str]:
     raise RuntimeError("no verified game configuration is available")
 
 
-def validate_requested_game_config(map_value: Any, mode_value: Any) -> tuple[str, str]:
+def experimental_game_config_allowed(body: dict[str, Any]) -> bool:
+    requested = validate_optional_bool(
+        body.get("allow_experimental_game_config", body.get("verification_probe")),
+        "allow_experimental_game_config",
+    )
+    if requested and not XONOTIC_ENABLE_EXPERIMENTAL_GAME_CONFIG:
+        raise BackendApiError(
+            {
+                "error": "experimental_game_config_disabled",
+                "message": "experimental map/mode probes require XONOTIC_ENABLE_EXPERIMENTAL_GAME_CONFIG=1",
+            },
+            403,
+        )
+    return requested
+
+
+def validate_requested_game_config(map_value: Any, mode_value: Any, *, allow_experimental: bool = False) -> tuple[str, str]:
     default_mode, default_map = default_verified_game_config()
-    game_mode = validate_requested_game_mode(mode_value if mode_value not in (None, "") else default_mode)
+    game_mode = validate_requested_game_mode(mode_value if mode_value not in (None, "") else default_mode, require_selectable=not allow_experimental)
     map_name = validate_requested_map(map_value if map_value not in (None, "") else default_map)
-    valid_maps = verified_maps_for_mode(game_mode)
+    valid_maps = candidate_maps_for_mode(game_mode, allow_experimental=allow_experimental)
 
     if map_name not in valid_maps:
         raise BackendApiError(
             {
                 "error": "invalid_map_mode_combination",
-                "message": f"{map_name} is not a verified map for {game_mode}",
+                "message": f"{map_name} is not a {'known candidate' if allow_experimental else 'verified map'} for {game_mode}",
                 "requested_map": map_name,
                 "requested_game_mode": game_mode,
                 "valid_maps": valid_maps,
+                "verified_maps": verified_maps_for_mode(game_mode),
+                "experimental_maps": experimental_maps_for_mode(game_mode),
                 "supported_modes": supported_game_modes(),
             },
             400,
@@ -1261,6 +1312,7 @@ def game_config_options_response() -> dict[str, Any]:
         "supported_modes": supported_game_modes(),
         "valid_maps_by_mode": valid_maps_by_mode,
         "modes": modes,
+        "experimental_probe_enabled": XONOTIC_ENABLE_EXPERIMENTAL_GAME_CONFIG,
         "note": "Only verified map/mode combinations are selectable by default.",
     }
 
@@ -2151,9 +2203,11 @@ def apply_match_config_fields(match: dict[str, Any], body: dict[str, Any]) -> No
     has_mode = "requested_game_mode" in body or "game_mode" in body
 
     if has_map or has_mode:
+        allow_experimental = experimental_game_config_allowed(body)
         requested_map, requested_game_mode = validate_requested_game_config(
             body.get("requested_map", body.get("map", match.get("requested_map"))),
             body.get("requested_game_mode", body.get("game_mode", match.get("requested_game_mode"))),
+            allow_experimental=allow_experimental,
         )
         match["requested_map"] = requested_map
         match["requested_game_mode"] = requested_game_mode
@@ -2197,9 +2251,11 @@ def build_match(body: dict[str, Any]) -> dict[str, Any]:
     name = str(body.get("name") or f"Match {len(MATCHES) + 1}").strip()
     if not name:
         name = f"Match {len(MATCHES) + 1}"
+    allow_experimental = experimental_game_config_allowed(body)
     requested_map, requested_game_mode = validate_requested_game_config(
         body.get("requested_map", body.get("map")),
         body.get("requested_game_mode", body.get("game_mode")),
+        allow_experimental=allow_experimental,
     )
 
     return {
@@ -2433,9 +2489,11 @@ def create_tournament_match(tournament_id: str):
 
         status = validate_status(body.get("status"), "status", TOURNAMENT_MATCH_STATUSES, "created")
         scheduled_at = validate_optional_timestamp(body.get("scheduled_at"), "scheduled_at")
+        allow_experimental = experimental_game_config_allowed(body)
         requested_map, requested_game_mode = validate_requested_game_config(
             body.get("requested_map", body.get("map")),
             body.get("requested_game_mode", body.get("game_mode")),
+            allow_experimental=allow_experimental,
         )
 
         with db_connect() as conn:
@@ -2597,6 +2655,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
         match_id = validate_db_id(match_id, "match_id")
         body = parse_json_body()
         force_replace = validate_optional_bool(body.get("force_replace"), "force_replace")
+        allow_experimental = experimental_game_config_allowed(body)
     except BackendApiError as exc:
         return jsonify(exc.payload), exc.status_code
 
@@ -2608,6 +2667,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                 requested_map, requested_game_mode = validate_requested_game_config(
                     match.get("requested_map"),
                     match.get("requested_game_mode"),
+                    allow_experimental=allow_experimental,
                 )
                 active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
 

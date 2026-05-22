@@ -263,7 +263,7 @@ Allocation reuses the existing Agones allocation primitives:
 
 If configuration or verification fails, the assignment remains persisted for operator cleanup, but the Match is marked `failed` rather than `server_ready`.
 
-Map/mode compatibility is deliberately conservative. The current verified combinations are `dm/xoylent`, `dm/stormkeep`, `dm/solarium`, and `tdm/stormkeep`. `ctf` and `duel` are kept out of normal allocation until they are verified by applying whitelisted RCON config and confirming the expected map/mode with `getstatus`.
+Map/mode compatibility is deliberately conservative. The current verified combinations are `dm/xoylent`, `dm/stormkeep`, `dm/solarium`, and `tdm/stormkeep`. `ctf`, `duel`, `ca`, `dom`, and `kh` are kept out of normal allocation until specific map/mode pairs are verified by applying whitelisted RCON config and confirming the expected map/mode with `getstatus`. The controlled verification workflow lives in `docs/tournament-map-mode-verification.md`.
 
 Release deletes the allocated Agones `GameServer`, marks the assignment `released`, stores `released_at`, and preserves assignment history.
 
