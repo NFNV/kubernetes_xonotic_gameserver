@@ -151,6 +151,17 @@ TOURNAMENT_MATCH_STATUSES = (
     "released",
     "failed",
 )
+SUPPORTED_BRACKET_SIZES = (2, 4, 8)
+BRACKET_SEED_PAIRS = {
+    2: ((1, 2),),
+    4: ((1, 4), (2, 3)),
+    8: ((1, 8), (4, 5), (2, 7), (3, 6)),
+}
+BRACKET_ROUND_NAMES = {
+    2: ("Final",),
+    4: ("Semifinals", "Final"),
+    8: ("Quarterfinals", "Semifinals", "Final"),
+}
 
 DB_MIGRATIONS = (
     (
@@ -163,6 +174,8 @@ DB_MIGRATIONS = (
           description text,
           status text NOT NULL DEFAULT 'draft',
           format text NOT NULL DEFAULT 'manual',
+          bracket_size integer,
+          bracket_generated_at timestamptz,
           started_at timestamptz,
           finished_at timestamptz,
           created_at timestamptz NOT NULL DEFAULT now(),
@@ -219,6 +232,9 @@ DB_MIGRATIONS = (
           result_notes text,
           requested_map text,
           requested_game_mode text,
+          bracket_position integer,
+          next_match_id uuid REFERENCES matches(id) ON DELETE SET NULL,
+          next_match_slot text,
           created_at timestamptz NOT NULL DEFAULT now(),
           updated_at timestamptz NOT NULL DEFAULT now()
         );
@@ -259,6 +275,48 @@ DB_MIGRATIONS = (
 
         CREATE INDEX IF NOT EXISTS match_server_assignments_status_idx
           ON match_server_assignments (status);
+        """,
+    ),
+    (
+        "003_single_elimination_brackets",
+        """
+        ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS bracket_size integer;
+        ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS bracket_generated_at timestamptz;
+        ALTER TABLE matches ADD COLUMN IF NOT EXISTS bracket_position integer;
+        ALTER TABLE matches ADD COLUMN IF NOT EXISTS next_match_id uuid;
+        ALTER TABLE matches ADD COLUMN IF NOT EXISTS next_match_slot text;
+
+        DO $$
+        BEGIN
+          ALTER TABLE tournaments
+            ADD CONSTRAINT tournaments_bracket_size_check
+            CHECK (bracket_size IS NULL OR bracket_size IN (2, 4, 8));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
+
+        DO $$
+        BEGIN
+          ALTER TABLE matches
+            ADD CONSTRAINT matches_next_match_id_fkey
+            FOREIGN KEY (next_match_id) REFERENCES matches(id) ON DELETE SET NULL;
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
+
+        DO $$
+        BEGIN
+          ALTER TABLE matches
+            ADD CONSTRAINT matches_next_match_slot_check
+            CHECK (next_match_slot IS NULL OR next_match_slot IN ('team_a', 'team_b'));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
+
+        CREATE INDEX IF NOT EXISTS matches_bracket_order_idx
+          ON matches (tournament_id, round_id, bracket_position)
+          WHERE bracket_position IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS matches_next_match_id_idx
+          ON matches (next_match_id)
+          WHERE next_match_id IS NOT NULL;
         """,
     ),
 )
@@ -2095,7 +2153,9 @@ def db_exception_response(exc: psycopg.Error, *, fallback_error: str, fallback_m
 def fetch_tournament(cur, tournament_id: str) -> dict[str, Any]:
     cur.execute(
         """
-        SELECT id, name, slug, description, status, format, started_at, finished_at, created_at, updated_at
+        SELECT
+          id, name, slug, description, status, format, bracket_size,
+          bracket_generated_at, started_at, finished_at, created_at, updated_at
         FROM tournaments
         WHERE id = %s
         """,
@@ -2114,7 +2174,8 @@ def fetch_tournament_match(cur, tournament_id: str, match_id: str) -> dict[str, 
           id, tournament_id, round_id, team_a_id, team_b_id, status,
           scheduled_at, started_at, finished_at, winner_team_id,
           team_a_score, team_b_score, result_notes, requested_map,
-          requested_game_mode, created_at, updated_at
+          requested_game_mode, bracket_position, next_match_id,
+          next_match_slot, created_at, updated_at
         FROM matches
         WHERE id = %s AND tournament_id = %s
         """,
@@ -2224,6 +2285,62 @@ def validate_match_winner(match: dict[str, Any], winner_team_id: str) -> str:
     return normalized_winner_team_id
 
 
+def advance_bracket_winner(cur, tournament_id: str, match: dict[str, Any], winner_team_id: str) -> dict[str, Any] | None:
+    next_match_id = str(match["next_match_id"]) if match.get("next_match_id") else None
+    next_match_slot = match.get("next_match_slot")
+    if not next_match_id:
+        return None
+
+    if next_match_slot not in {"team_a", "team_b"}:
+        raise BackendApiError(
+            {
+                "error": "invalid_bracket_link",
+                "message": "match has a next_match_id but no valid next_match_slot",
+                "match_id": str(match.get("id")),
+                "next_match_id": next_match_id,
+                "next_match_slot": next_match_slot,
+            },
+            500,
+        )
+
+    next_match = fetch_tournament_match(cur, tournament_id, next_match_id)
+    slot_field = f"{next_match_slot}_id"
+    existing_team_id = str(next_match[slot_field]) if next_match.get(slot_field) else None
+    if existing_team_id and existing_team_id != winner_team_id:
+        raise BackendApiError(
+            {
+                "error": "bracket_advance_conflict",
+                "message": "winner cannot advance because the next match slot is already occupied by a different team",
+                "match_id": str(match.get("id")),
+                "winner_team_id": winner_team_id,
+                "next_match_id": next_match_id,
+                "next_match_slot": next_match_slot,
+                "existing_team_id": existing_team_id,
+            },
+            409,
+        )
+
+    if existing_team_id == winner_team_id:
+        return next_match
+
+    slot_column = "team_a_id" if next_match_slot == "team_a" else "team_b_id"
+    cur.execute(
+        f"""
+        UPDATE matches
+        SET {slot_column} = %s, updated_at = now()
+        WHERE id = %s AND tournament_id = %s
+        RETURNING
+          id, tournament_id, round_id, team_a_id, team_b_id, status,
+          scheduled_at, started_at, finished_at, winner_team_id,
+          team_a_score, team_b_score, result_notes, requested_map,
+          requested_game_mode, bracket_position, next_match_id,
+          next_match_slot, created_at, updated_at
+        """,
+        (winner_team_id, next_match_id, tournament_id),
+    )
+    return cur.fetchone()
+
+
 def ensure_round_in_tournament(cur, tournament_id: str, round_id: str | None) -> None:
     if not round_id:
         return
@@ -2231,6 +2348,109 @@ def ensure_round_in_tournament(cur, tournament_id: str, round_id: str | None) ->
     cur.execute("SELECT id FROM rounds WHERE id = %s AND tournament_id = %s", (round_id, tournament_id))
     if not cur.fetchone():
         raise BackendApiError({"error": "round_not_found", "message": "round_id was not found in this tournament"}, 404)
+
+
+def fetch_seeded_bracket_teams(cur, tournament_id: str) -> tuple[int, dict[int, dict[str, Any]]]:
+    cur.execute(
+        """
+        SELECT id, tournament_id, name, tag, seed, created_at, updated_at
+        FROM teams
+        WHERE tournament_id = %s
+        ORDER BY seed NULLS LAST, name
+        """,
+        (tournament_id,),
+    )
+    teams = cur.fetchall()
+    bracket_size = len(teams)
+    if bracket_size not in SUPPORTED_BRACKET_SIZES:
+        raise BackendApiError(
+            {
+                "error": "unsupported_bracket_size",
+                "message": "single-elimination bracket generation currently supports exactly 2, 4, or 8 teams",
+                "team_count": bracket_size,
+                "supported_sizes": list(SUPPORTED_BRACKET_SIZES),
+            },
+            400,
+        )
+
+    seeds = [team.get("seed") for team in teams]
+    expected_seeds = list(range(1, bracket_size + 1))
+    if sorted(seed for seed in seeds if seed is not None) != expected_seeds:
+        raise BackendApiError(
+            {
+                "error": "invalid_bracket_seeds",
+                "message": "teams must have unique seeds from 1 through the bracket size before generation",
+                "expected_seeds": expected_seeds,
+                "actual_seeds": seeds,
+            },
+            400,
+        )
+
+    return bracket_size, {team["seed"]: team for team in teams}
+
+
+def ensure_bracket_generation_allowed(cur, tournament_id: str) -> None:
+    cur.execute("SELECT COUNT(*) AS count FROM rounds WHERE tournament_id = %s", (tournament_id,))
+    round_count = cur.fetchone()["count"]
+    cur.execute("SELECT COUNT(*) AS count FROM matches WHERE tournament_id = %s", (tournament_id,))
+    match_count = cur.fetchone()["count"]
+    if round_count or match_count:
+        raise BackendApiError(
+            {
+                "error": "bracket_generation_conflict",
+                "message": "bracket generation requires a tournament with no existing rounds or matches",
+                "round_count": round_count,
+                "match_count": match_count,
+            },
+            409,
+        )
+
+
+def build_bracket_rows(
+    *,
+    bracket_size: int,
+    teams_by_seed: dict[int, dict[str, Any]],
+    round_id_by_order: dict[int, str],
+    requested_map: str,
+    requested_game_mode: str,
+) -> list[dict[str, Any]]:
+    first_round_pairs = BRACKET_SEED_PAIRS[bracket_size]
+    match_rows = []
+    matches_by_round: dict[int, list[dict[str, Any]]] = {}
+
+    for round_index, _round_name in enumerate(BRACKET_ROUND_NAMES[bracket_size], start=1):
+        match_count = max(1, len(first_round_pairs) // (2 ** (round_index - 1)))
+        matches_by_round[round_index] = []
+        for position in range(1, match_count + 1):
+            team_a_id = None
+            team_b_id = None
+            if round_index == 1:
+                team_a_seed, team_b_seed = first_round_pairs[position - 1]
+                team_a_id = str(teams_by_seed[team_a_seed]["id"])
+                team_b_id = str(teams_by_seed[team_b_seed]["id"])
+
+            match_row = {
+                "id": new_db_id(),
+                "round_id": round_id_by_order[round_index],
+                "team_a_id": team_a_id,
+                "team_b_id": team_b_id,
+                "bracket_position": position,
+                "next_match_id": None,
+                "next_match_slot": None,
+                "requested_map": requested_map,
+                "requested_game_mode": requested_game_mode,
+            }
+            matches_by_round[round_index].append(match_row)
+            match_rows.append(match_row)
+
+    for round_index in range(1, len(matches_by_round)):
+        next_round_matches = matches_by_round[round_index + 1]
+        for index, match_row in enumerate(matches_by_round[round_index]):
+            next_match = next_round_matches[index // 2]
+            match_row["next_match_id"] = next_match["id"]
+            match_row["next_match_slot"] = "team_a" if index % 2 == 0 else "team_b"
+
+    return match_rows
 
 
 def apply_match_config_fields(match: dict[str, Any], body: dict[str, Any]) -> None:
@@ -2339,7 +2559,9 @@ def create_tournament():
                     """
                     INSERT INTO tournaments (id, name, slug, description, status, format)
                     VALUES (%s, %s, %s, %s, %s, %s)
-                    RETURNING id, name, slug, description, status, format, started_at, finished_at, created_at, updated_at
+                    RETURNING
+                      id, name, slug, description, status, format, bracket_size,
+                      bracket_generated_at, started_at, finished_at, created_at, updated_at
                     """,
                     (tournament_id, name, slug, description, status, tournament_format),
                 )
@@ -2359,7 +2581,9 @@ def list_tournaments():
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, name, slug, description, status, format, started_at, finished_at, created_at, updated_at
+                    SELECT
+                      id, name, slug, description, status, format, bracket_size,
+                      bracket_generated_at, started_at, finished_at, created_at, updated_at
                     FROM tournaments
                     ORDER BY created_at DESC
                     """
@@ -2509,6 +2733,136 @@ def list_tournament_rounds(tournament_id: str):
     return jsonify({"items": rows_to_json(rounds)})
 
 
+@APP.post("/tournaments/<tournament_id>/bracket/generate")
+def generate_tournament_bracket(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        body = parse_json_body()
+        requested_map, requested_game_mode = validate_requested_game_config(
+            body.get("requested_map", body.get("map")),
+            body.get("requested_game_mode", body.get("game_mode")),
+        )
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                ensure_bracket_generation_allowed(cur, tournament_id)
+                bracket_size, teams_by_seed = fetch_seeded_bracket_teams(cur, tournament_id)
+
+                round_rows = []
+                round_id_by_order = {}
+                for round_order, round_name in enumerate(BRACKET_ROUND_NAMES[bracket_size], start=1):
+                    round_id = new_db_id()
+                    round_id_by_order[round_order] = round_id
+                    cur.execute(
+                        """
+                        INSERT INTO rounds (id, tournament_id, name, round_order, status)
+                        VALUES (%s, %s, %s, %s, 'created')
+                        RETURNING id, tournament_id, name, round_order, status, created_at, updated_at
+                        """,
+                        (round_id, tournament_id, round_name, round_order),
+                    )
+                    round_rows.append(cur.fetchone())
+
+                bracket_match_rows = build_bracket_rows(
+                    bracket_size=bracket_size,
+                    teams_by_seed=teams_by_seed,
+                    round_id_by_order=round_id_by_order,
+                    requested_map=requested_map,
+                    requested_game_mode=requested_game_mode,
+                )
+                for match_row in bracket_match_rows:
+                    cur.execute(
+                        """
+                        INSERT INTO matches (
+                          id, tournament_id, round_id, team_a_id, team_b_id,
+                          requested_map, requested_game_mode, bracket_position,
+                          next_match_id, next_match_slot
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING
+                          id, tournament_id, round_id, team_a_id, team_b_id, status,
+                          scheduled_at, started_at, finished_at, winner_team_id,
+                          team_a_score, team_b_score, result_notes, requested_map,
+                          requested_game_mode, bracket_position, next_match_id,
+                          next_match_slot, created_at, updated_at
+                        """,
+                        (
+                            match_row["id"],
+                            tournament_id,
+                            match_row["round_id"],
+                            match_row["team_a_id"],
+                            match_row["team_b_id"],
+                            match_row["requested_map"],
+                            match_row["requested_game_mode"],
+                            match_row["bracket_position"],
+                            None,
+                            None,
+                        ),
+                    )
+                    cur.fetchone()
+
+                for match_row in bracket_match_rows:
+                    if match_row["next_match_id"]:
+                        cur.execute(
+                            """
+                            UPDATE matches
+                            SET next_match_id = %s,
+                                next_match_slot = %s,
+                                updated_at = now()
+                            WHERE id = %s AND tournament_id = %s
+                            """,
+                            (match_row["next_match_id"], match_row["next_match_slot"], match_row["id"], tournament_id),
+                        )
+
+                cur.execute(
+                    """
+                    SELECT
+                      m.id, m.tournament_id, m.round_id, m.team_a_id, m.team_b_id, m.status,
+                      m.scheduled_at, m.started_at, m.finished_at, m.winner_team_id,
+                      m.team_a_score, m.team_b_score, m.result_notes, m.requested_map,
+                      m.requested_game_mode, m.bracket_position, m.next_match_id,
+                      m.next_match_slot, m.created_at, m.updated_at
+                    FROM matches m
+                    LEFT JOIN rounds r ON r.id = m.round_id
+                    WHERE m.tournament_id = %s
+                    ORDER BY r.round_order, m.bracket_position
+                    """,
+                    (tournament_id,),
+                )
+                match_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    UPDATE tournaments
+                    SET format = 'single_elimination',
+                        bracket_size = %s,
+                        bracket_generated_at = now(),
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING
+                      id, name, slug, description, status, format, bracket_size,
+                      bracket_generated_at, started_at, finished_at, created_at, updated_at
+                    """,
+                    (bracket_size, tournament_id),
+                )
+                tournament = cur.fetchone()
+            conn.commit()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="bracket_generate_failed", fallback_message="failed to generate bracket")
+
+    return jsonify(
+        {
+            "tournament": row_to_json(tournament),
+            "rounds": rows_to_json(round_rows),
+            "matches": rows_to_json(match_rows),
+        }
+    ), 201
+
+
 @APP.post("/tournaments/<tournament_id>/matches")
 def create_tournament_match(tournament_id: str):
     try:
@@ -2548,7 +2902,8 @@ def create_tournament_match(tournament_id: str):
                       id, tournament_id, round_id, team_a_id, team_b_id, status,
                       scheduled_at, started_at, finished_at, winner_team_id,
                       team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, created_at, updated_at
+                      requested_game_mode, bracket_position, next_match_id,
+                      next_match_slot, created_at, updated_at
                     """,
                     (match_id, tournament_id, round_id, team_a_id, team_b_id, status, scheduled_at, requested_map, requested_game_mode),
                 )
@@ -2573,13 +2928,15 @@ def list_tournament_matches(tournament_id: str):
                 cur.execute(
                     """
                     SELECT
-                      id, tournament_id, round_id, team_a_id, team_b_id, status,
-                      scheduled_at, started_at, finished_at, winner_team_id,
-                      team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, created_at, updated_at
-                    FROM matches
-                    WHERE tournament_id = %s
-                    ORDER BY scheduled_at NULLS LAST, created_at
+                      m.id, m.tournament_id, m.round_id, m.team_a_id, m.team_b_id, m.status,
+                      m.scheduled_at, m.started_at, m.finished_at, m.winner_team_id,
+                      m.team_a_score, m.team_b_score, m.result_notes, m.requested_map,
+                      m.requested_game_mode, m.bracket_position, m.next_match_id,
+                      m.next_match_slot, m.created_at, m.updated_at
+                    FROM matches m
+                    LEFT JOIN rounds r ON r.id = m.round_id
+                    WHERE m.tournament_id = %s
+                    ORDER BY r.round_order NULLS LAST, m.bracket_position NULLS LAST, m.scheduled_at NULLS LAST, m.created_at
                     """,
                     (tournament_id,),
                 )
@@ -2625,11 +2982,13 @@ def record_tournament_match_result(tournament_id: str, match_id: str):
                       id, tournament_id, round_id, team_a_id, team_b_id, status,
                       scheduled_at, started_at, finished_at, winner_team_id,
                       team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, created_at, updated_at
+                      requested_game_mode, bracket_position, next_match_id,
+                      next_match_slot, created_at, updated_at
                     """,
                     (team_a_score, team_b_score, winner_team_id, result_notes, match_id, tournament_id),
                 )
                 updated_match = cur.fetchone()
+                advanced_match = advance_bracket_winner(cur, tournament_id, updated_match, winner_team_id)
                 active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
             conn.commit()
     except BackendApiError as exc:
@@ -2643,6 +3002,7 @@ def record_tournament_match_result(tournament_id: str, match_id: str):
 
     response = row_to_json(updated_match)
     response["active_server_assignment"] = assignment_response(active_assignment) if active_assignment else None
+    response["advanced_match"] = row_to_json(advanced_match) if advanced_match else None
     return jsonify(response)
 
 
@@ -2850,7 +3210,8 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                       id, tournament_id, round_id, team_a_id, team_b_id, status,
                       scheduled_at, started_at, finished_at, winner_team_id,
                       team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, created_at, updated_at
+                      requested_game_mode, bracket_position, next_match_id,
+                      next_match_slot, created_at, updated_at
                     """,
                     (next_status, match_id, tournament_id),
                 )
@@ -2925,7 +3286,8 @@ def release_tournament_match_server(tournament_id: str, match_id: str):
                       id, tournament_id, round_id, team_a_id, team_b_id, status,
                       scheduled_at, started_at, finished_at, winner_team_id,
                       team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, created_at, updated_at
+                      requested_game_mode, bracket_position, next_match_id,
+                      next_match_slot, created_at, updated_at
                     """,
                     (match_id, tournament_id),
                 )

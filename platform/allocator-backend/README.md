@@ -31,6 +31,7 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `GET /tournaments/<tournament_id>/teams`: list teams
 - `POST /tournaments/<tournament_id>/rounds`: create a round
 - `GET /tournaments/<tournament_id>/rounds`: list rounds
+- `POST /tournaments/<tournament_id>/bracket/generate`: generate a 2-, 4-, or 8-team single-elimination bracket from seeded teams
 - `POST /tournaments/<tournament_id>/matches`: create a tournament match record
 - `GET /tournaments/<tournament_id>/matches`: list tournament match records
 - `POST /matches`: create an in-memory Match Room
@@ -49,7 +50,7 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 
 Match Room state is intentionally process-local memory. It is lost when the backend Pod restarts. That keeps this phase small while still moving the project toward a tournament admin tool.
 
-Tournament state is PostgreSQL-backed. Brackets, result recording, winner advancement, auth, and persisted Match Rooms are intentionally deferred.
+Tournament state is PostgreSQL-backed. Single-elimination bracket generation, result recording, winner advancement, and persisted server assignments are implemented; auth, other tournament formats, and persisted Match Rooms are intentionally deferred.
 
 For allocated Match Rooms, the backend queries the assigned Xonotic server with UDP `getstatus` and briefly caches the result. This provides live map, game mode, player count, player names, scores, ping, and team scores when available. It is read-only and does not use RCON.
 

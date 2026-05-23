@@ -14,6 +14,7 @@ const HISTORY_LIMIT = 8;
 const ADMIN_MAPS = ["xoylent", "stormkeep", "implosion", "drain", "darkzone", "solarium"];
 const BROADCAST_MAX_LENGTH = 160;
 const VERIFIED_CONFIG_NOTE = "Only verified map/mode combinations are shown.";
+const SUPPORTED_BRACKET_SIZES = [2, 4, 8];
 const FALLBACK_GAME_CONFIG_OPTIONS = {
   default: {
     requested_game_mode: "dm",
@@ -174,6 +175,60 @@ function requestedConfigDiffers(match) {
 
 function shortId(id) {
   return id ? id.slice(0, 8) : "unknown";
+}
+
+function numericValue(value, fallback = Number.MAX_SAFE_INTEGER) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function compareByBracketOrder(left, right) {
+  const leftPosition = numericValue(left.bracket_position);
+  const rightPosition = numericValue(right.bracket_position);
+  if (leftPosition !== rightPosition) {
+    return leftPosition - rightPosition;
+  }
+
+  return String(left.created_at || left.id).localeCompare(String(right.created_at || right.id));
+}
+
+function bracketGenerationBlocker(teams, rounds, matches) {
+  if (rounds.length > 0 || matches.length > 0) {
+    return "Bracket generation requires a tournament with no rounds or matches.";
+  }
+
+  if (!SUPPORTED_BRACKET_SIZES.includes(teams.length)) {
+    return "Add exactly 2, 4, or 8 teams before generating a bracket.";
+  }
+
+  const expectedSeeds = Array.from({ length: teams.length }, (_item, index) => index + 1);
+  const actualSeeds = teams.map((team) => Number(team.seed)).filter((seed) => Number.isInteger(seed)).sort((left, right) => left - right);
+  const seedsAreComplete = actualSeeds.length === expectedSeeds.length
+    && actualSeeds.every((seed, index) => seed === expectedSeeds[index]);
+
+  if (!seedsAreComplete) {
+    return `Set unique seeds 1 through ${teams.length} before generating a bracket.`;
+  }
+
+  return "";
+}
+
+function bracketRoundColumns(rounds, matches) {
+  const matchesByRoundId = matches.reduce((groups, match) => {
+    const key = match.round_id || "unassigned";
+    return {
+      ...groups,
+      [key]: [...(groups[key] || []), match],
+    };
+  }, {});
+
+  return [...rounds]
+    .sort((left, right) => numericValue(left.round_order) - numericValue(right.round_order))
+    .map((round) => ({
+      round,
+      matches: [...(matchesByRoundId[round.id] || [])].sort(compareByBracketOrder),
+    }))
+    .filter((column) => column.matches.length > 0);
 }
 
 function assignmentEndpoint(assignment) {
@@ -338,6 +393,7 @@ export default function App() {
   const [creatingTournament, setCreatingTournament] = useState(false);
   const [creatingTeam, setCreatingTeam] = useState(false);
   const [creatingRound, setCreatingRound] = useState(false);
+  const [generatingBracket, setGeneratingBracket] = useState(false);
   const [creatingTournamentMatch, setCreatingTournamentMatch] = useState(false);
   const [allocatingTournamentServers, setAllocatingTournamentServers] = useState({});
   const [releasingTournamentServers, setReleasingTournamentServers] = useState({});
@@ -614,6 +670,50 @@ export default function App() {
       });
     } finally {
       setCreatingRound(false);
+    }
+  }
+
+  async function generateTournamentBracket() {
+    if (!selectedTournamentId) {
+      return;
+    }
+
+    const blocker = bracketGenerationBlocker(tournamentTeams, tournamentRounds, tournamentMatches);
+    if (blocker) {
+      setTournamentError({
+        title: "Generate bracket unavailable",
+        message: blocker,
+      });
+      return;
+    }
+
+    setGeneratingBracket(true);
+    setTournamentError(null);
+
+    try {
+      const config = normalizeGameConfig(tournamentMatchForm, gameConfigOptions);
+      const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/bracket/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      if (result.tournament) {
+        setTournaments((current) => current.map((tournament) => (
+          tournament.id === result.tournament.id ? result.tournament : tournament
+        )));
+      }
+      setTournamentRounds(result.rounds || []);
+      setTournamentMatches(result.matches || []);
+      setCopyMessage(`${result.tournament?.bracket_size || tournamentTeams.length}-team bracket generated.`);
+      window.setTimeout(() => setCopyMessage(""), 2400);
+      setLastUpdated(new Date().toLocaleTimeString());
+    } catch (err) {
+      setTournamentError({
+        title: "Generate bracket failed",
+        message: err.message,
+      });
+    } finally {
+      setGeneratingBracket(false);
     }
   }
 
@@ -1187,6 +1287,11 @@ export default function App() {
   const selectedTournament = tournaments.find((tournament) => tournament.id === selectedTournamentId) || null;
   const teamNameById = Object.fromEntries(tournamentTeams.map((team) => [team.id, team.name]));
   const roundNameById = Object.fromEntries(tournamentRounds.map((round) => [round.id, round.name]));
+  const bracketBlocker = selectedTournament ? bracketGenerationBlocker(tournamentTeams, tournamentRounds, tournamentMatches) : "";
+  const canGenerateBracket = Boolean(selectedTournament && !bracketBlocker);
+  const bracketConfig = normalizeGameConfig(tournamentMatchForm, gameConfigOptions);
+  const bracketColumns = bracketRoundColumns(tournamentRounds, tournamentMatches);
+  const hasBracketMatches = tournamentMatches.some((match) => match.bracket_position !== null && match.bracket_position !== undefined);
 
   return (
     <main className="page">
@@ -1339,8 +1444,29 @@ export default function App() {
 
                 <p className="deferred-note">
                   Tournament Matches are persisted planning records. They can now hold a persisted server assignment to one allocated Agones GameServer.
-                  Match Rooms remain available below as the lower-level/manual workflow. Brackets, result advancement, and winner automation remain manual/deferred.
+                  Single-elimination brackets can generate persisted rounds and matches; Match Rooms remain available below as the lower-level/manual workflow.
                 </p>
+
+                <article className="bracket-generator-card">
+                  <div>
+                    <p className="eyebrow">Single Elimination</p>
+                    <h3>Generate Bracket</h3>
+                    <p>
+                      {selectedTournament.bracket_generated_at
+                        ? `Generated ${selectedTournament.bracket_size}-team bracket.`
+                        : bracketBlocker || `${tournamentTeams.length}-team bracket ready.`}
+                    </p>
+                    <span>Match config: {bracketConfig.requested_map} / {bracketConfig.requested_game_mode}</span>
+                  </div>
+                  <button
+                    className="primary"
+                    type="button"
+                    onClick={() => void generateTournamentBracket()}
+                    disabled={!canGenerateBracket || generatingBracket}
+                  >
+                    {generatingBracket ? "Generating..." : "Generate Bracket"}
+                  </button>
+                </article>
 
                 {tournamentDetailLoading ? (
                   <p className="empty-state">Loading tournament details...</p>
@@ -1441,6 +1567,54 @@ export default function App() {
                         )}
                       </article>
                     </div>
+
+                    {hasBracketMatches && (
+                      <article className="data-card bracket-board-card">
+                        <div className="subsection-header">
+                          <div>
+                            <h3>Bracket</h3>
+                            <p>Round columns show generated matches in bracket order.</p>
+                          </div>
+                          <span>{bracketColumns.reduce((count, column) => count + column.matches.length, 0)} matches</span>
+                        </div>
+                        <div className="bracket-columns">
+                          {bracketColumns.map(({ round, matches: roundMatches }) => (
+                            <section className="bracket-round-column" key={round.id}>
+                              <div className="bracket-round-header">
+                                <h4>{round.name}</h4>
+                                <span>order {round.round_order}</span>
+                              </div>
+                              <div className="bracket-match-stack">
+                                {roundMatches.map((match) => {
+                                  const teamAName = match.team_a_id ? teamNameById[match.team_a_id] || shortId(match.team_a_id) : "TBD";
+                                  const teamBName = match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "TBD";
+                                  const winnerName = match.winner_team_id ? teamNameById[match.winner_team_id] || shortId(match.winner_team_id) : "";
+                                  const hasScore = tournamentMatchHasResult(match);
+
+                                  return (
+                                    <article className="bracket-match-card" key={match.id}>
+                                      <div className="bracket-match-card-header">
+                                        <strong>Match {match.bracket_position ?? shortId(match.id)}</strong>
+                                        <span className={tournamentMatchStatusClass(match.status || "created")}>{tournamentMatchStatusLabel(match.status || "created")}</span>
+                                      </div>
+                                      <div className={`bracket-team-row ${match.winner_team_id === match.team_a_id ? "bracket-team-winner" : ""}`}>
+                                        <span>{teamAName}</span>
+                                        {hasScore && <strong>{match.team_a_score}</strong>}
+                                      </div>
+                                      <div className={`bracket-team-row ${match.winner_team_id === match.team_b_id ? "bracket-team-winner" : ""}`}>
+                                        <span>{teamBName}</span>
+                                        {hasScore && <strong>{match.team_b_score}</strong>}
+                                      </div>
+                                      {winnerName && <p>Winner: {winnerName}</p>}
+                                    </article>
+                                  );
+                                })}
+                              </div>
+                            </section>
+                          ))}
+                        </div>
+                      </article>
+                    )}
 
                     <article className="data-card tournament-matches-card">
                       <div className="subsection-header">

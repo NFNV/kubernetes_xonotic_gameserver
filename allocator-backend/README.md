@@ -24,14 +24,15 @@ Implemented now:
 - create/list teams for a tournament
 - create/list rounds for a tournament
 - create/list tournament matches
+- generate 2-, 4-, and 8-team single-elimination brackets from seeded teams
 - record tournament match results and mark matches finished
+- advance generated bracket winners into their next match slot after result recording
 - allocate/release one persisted server assignment for a tournament match
 - minimal startup migrations for `tournaments`, `teams`, `players`, `rounds`, `matches`, and `match_server_assignments`
 
 Still deferred:
 
-- bracket generation
-- automatic winner advancement
+- double elimination, Swiss, and round robin formats
 - persisted live telemetry history
 - auth and production database hardening
 
@@ -61,8 +62,11 @@ Selectable combinations are only combinations verified in this project by applyi
 
 - `dm`: `xoylent`, `stormkeep`, `solarium`
 - `tdm`: `stormkeep`
+- `ctf`: `runningmanctf`
+- `duel`: `xoylent`
+- `ca`: `stormkeep`, `xoylent`
 
-`ctf`, `duel`, `ca`, `dom`, and `kh` are listed as deferred/experimental, but are not selectable for normal Match Room or tournament match allocation yet. Invalid combinations are rejected before a match is created or before any Agones allocation is attempted.
+Other `ctf`, `duel`, and `ca` maps plus `dom` and `kh` remain deferred/experimental and are not selectable for normal Match Room or tournament match allocation yet. Invalid combinations are rejected before a match is created or before any Agones allocation is attempted.
 
 Use `docs/tournament-map-mode-verification.md` and `scripts/verify-tournament-map-mode.sh` to prove a candidate pair through the tournament allocation flow before promotion. Experimental probes require the backend to be temporarily deployed with `XONOTIC_ENABLE_EXPERIMENTAL_GAME_CONFIG=1`; default runtime validation still accepts only verified combinations.
 
@@ -79,6 +83,7 @@ Use `docs/tournament-map-mode-verification.md` and `scripts/verify-tournament-ma
 - `GET /tournaments/<tournament_id>/teams`
 - `POST /tournaments/<tournament_id>/rounds`
 - `GET /tournaments/<tournament_id>/rounds`
+- `POST /tournaments/<tournament_id>/bracket/generate`
 - `POST /tournaments/<tournament_id>/matches`
 - `GET /tournaments/<tournament_id>/matches`
 - `POST /tournaments/<tournament_id>/matches/<match_id>/result`
@@ -198,7 +203,7 @@ curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/$
   -d "{\"team_a_score\":12,\"team_b_score\":8,\"winner_team_id\":\"${TEAM_A_ID}\",\"result_notes\":\"Manual result after referee confirmation\"}" | jq
 ```
 
-Result recording validates non-negative scores and requires the winner to be either `team_a_id` or `team_b_id`. It marks the match `finished`, but it does not auto-advance brackets and does not release the allocated server. Use `release-server` separately when the operator is ready to clean up the backing Agones `GameServer`.
+Result recording validates non-negative scores and requires the winner to be either `team_a_id` or `team_b_id`. It marks the match `finished`, advances generated bracket winners into their configured next match slot when one exists, and does not release the allocated server. Use `release-server` separately when the operator is ready to clean up the backing Agones `GameServer`.
 
 The lower-level Match Room API below remains available for manual/operator server sessions and RCON controls.
 

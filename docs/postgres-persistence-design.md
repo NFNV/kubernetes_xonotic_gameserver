@@ -11,7 +11,7 @@ The goal is to persist admin-authored tournament data without trying to store al
 - Store enough server assignment metadata to recover the dashboard after backend restart.
 - Do not store high-volume live telemetry yet.
 - Do not mirror Kubernetes resources as full database records.
-- Keep bracket generation, seeding automation, and winner advancement manual for now.
+- Keep the first bracket phase limited to seeded single elimination; defer seeding automation and other tournament formats.
 
 ## ID And Timestamp Conventions
 
@@ -424,6 +424,8 @@ create table tournaments (
   description text,
   status text not null default 'draft',
   format text not null default 'manual',
+  bracket_size integer,
+  bracket_generated_at timestamptz,
   started_at timestamptz,
   finished_at timestamptz,
   created_at timestamptz not null default now(),
@@ -480,6 +482,9 @@ create table matches (
   result_notes text,
   requested_map text,
   requested_game_mode text,
+  bracket_position integer,
+  next_match_id uuid references matches(id) on delete set null,
+  next_match_slot text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -539,11 +544,12 @@ Implemented in the first persistence phase:
 - persisted tournament match server assignments through `match_server_assignments`
 - allocate/release server endpoints for persisted tournament matches
 - manual tournament match result recording that persists scores, winner, notes, and `finished` status
+- 2-, 4-, and 8-team single-elimination bracket generation with winner advancement links
 
 Still deferred:
 
-- bracket generation
-- automatic winner advancement
+- double elimination, Swiss, and round robin formats
+- seeding automation
 - persisted live telemetry history
 - auth
 - production database hardening

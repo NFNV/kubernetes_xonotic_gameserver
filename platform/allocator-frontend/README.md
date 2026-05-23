@@ -18,7 +18,7 @@ It is not a public user-facing site. It is a simple control panel for:
 
 Match Rooms are the admin-facing objects. Allocated Agones `GameServer` instances are the infrastructure backing those rooms. `Ready` GameServers are standby/internal capacity and should not be treated as user-facing join targets.
 
-Tournament Management is the first PostgreSQL-backed frontend slice. It creates persisted tournament planning data but does not yet render brackets, advance winners, record results, or attach tournament matches directly to Match Rooms.
+Tournament Management is the first PostgreSQL-backed frontend slice. It creates persisted tournament planning data, can generate a first-phase single-elimination bracket view, records results, advances generated bracket winners, and attaches tournament matches directly to persisted server assignments.
 
 The map and game mode controls run before allocation. Because the Agones Fleet is warm, the backend allocates a Ready server first, applies requested map/mode through whitelisted RCON, verifies with `getstatus`, and only then exposes the endpoint as joinable. Max-player control remains deferred.
 
@@ -43,6 +43,7 @@ Backend endpoints used:
 - `POST /tournaments/<tournament_id>/teams`
 - `GET /tournaments/<tournament_id>/rounds`
 - `POST /tournaments/<tournament_id>/rounds`
+- `POST /tournaments/<tournament_id>/bracket/generate`
 - `GET /tournaments/<tournament_id>/matches`
 - `POST /tournaments/<tournament_id>/matches`
 - `GET /matches`

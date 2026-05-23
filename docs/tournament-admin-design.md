@@ -39,7 +39,7 @@ MVP behavior:
 
 - create/list/view tournaments
 - mark active/finished manually
-- no automatic bracket generation yet
+- first bracket phase supports generated single-elimination rounds and matches for 2, 4, and 8 seeded teams
 
 ### Team
 
@@ -96,7 +96,7 @@ MVP behavior:
 
 - create rounds manually
 - list matches by round
-- no automatic winner advancement yet
+- generated bracket matches can advance winners into the configured next match slot after manual result recording
 
 ### Match
 
@@ -391,10 +391,8 @@ Do not add:
 
 ## What Should Remain Manual For Now
 
-Keep these manual in the next MVP:
+Keep these manual outside the first single-elimination bracket slice:
 
-- bracket generation
-- winner advancement
 - team seeding
 - match scheduling
 - result confirmation
@@ -445,8 +443,7 @@ Do not build these in the next phase:
 - public user accounts
 - team self-registration
 - payments
-- full bracket generation
-- automatic winner advancement
+- double elimination, Swiss, and round robin formats
 - automatic result ingestion from scoreboard
 - player kick/ban UI
 - raw RCON console
@@ -469,7 +466,7 @@ Deliverables:
 - backend CRUD endpoints
 - simple frontend tournament dashboard
 - manual team and match creation
-- no bracket automation
+- first-phase single-elimination bracket generation
 
 ### Phase 2: Match-To-Room Integration
 

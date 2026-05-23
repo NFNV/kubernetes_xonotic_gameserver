@@ -491,6 +491,44 @@ button:disabled {
   color: #9fb8ca;
 }
 
+.bracket-generator-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(126, 176, 211, 0.14);
+  border-radius: 14px;
+  background: rgba(8, 17, 30, 0.62);
+}
+
+.bracket-generator-card div {
+  display: grid;
+  gap: 5px;
+}
+
+.bracket-generator-card h3,
+.bracket-generator-card p {
+  margin: 0;
+}
+
+.bracket-generator-card h3 {
+  color: #dffbff;
+  font-size: 1rem;
+}
+
+.bracket-generator-card p,
+.bracket-generator-card span {
+  color: #8faabe;
+  font-size: 0.86rem;
+}
+
+.bracket-generator-card button {
+  flex: 0 0 auto;
+  width: auto;
+}
+
 .tournament-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -590,6 +628,99 @@ button:disabled {
 .tournament-match-form .deferred-note {
   grid-column: 1 / -1;
   margin: 0;
+}
+
+.bracket-board-card {
+  margin-bottom: 14px;
+}
+
+.bracket-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.bracket-round-column {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
+}
+
+.bracket-round-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(126, 176, 211, 0.12);
+}
+
+.bracket-round-header h4 {
+  margin: 0;
+  color: #f7fbff;
+  font-size: 0.92rem;
+}
+
+.bracket-round-header span {
+  color: #83a2b9;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.bracket-match-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.bracket-match-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(126, 176, 211, 0.12);
+  border-radius: 12px;
+  background: rgba(5, 12, 21, 0.5);
+}
+
+.bracket-match-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.bracket-match-card-header strong {
+  color: #dffbff;
+  font-size: 0.86rem;
+}
+
+.bracket-team-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  color: #9fb8ca;
+  font-size: 0.88rem;
+}
+
+.bracket-team-row span {
+  overflow-wrap: anywhere;
+}
+
+.bracket-team-row strong {
+  color: #d7e7f4;
+}
+
+.bracket-team-winner span,
+.bracket-team-winner strong {
+  color: #f7fbff;
+  font-weight: 900;
+}
+
+.bracket-match-card p {
+  margin: 0;
+  color: #83a2b9;
+  font-size: 0.8rem;
 }
 
 .record-item {
@@ -1539,6 +1670,11 @@ th {
   .data-card:nth-child(2) .compact-form,
   .tournament-match-form {
     grid-template-columns: 1fr;
+  }
+
+  .bracket-generator-card {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .admin-control-row {
