@@ -491,6 +491,69 @@ button:disabled {
   color: #9fb8ca;
 }
 
+.tournament-summary-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 14px;
+  padding: 16px;
+  border: 1px solid rgba(126, 176, 211, 0.16);
+  border-radius: 16px;
+  background: rgba(8, 17, 30, 0.66);
+}
+
+.tournament-summary-main {
+  display: grid;
+  gap: 8px;
+}
+
+.tournament-summary-main h3,
+.tournament-summary-main p,
+.tournament-summary-grid {
+  margin: 0;
+}
+
+.tournament-summary-main h3 {
+  color: #f7fbff;
+  font-size: 1.18rem;
+}
+
+.tournament-summary-main > p:last-child {
+  color: #9fb8ca;
+  line-height: 1.45;
+}
+
+.tournament-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.tournament-summary-grid div {
+  min-width: 0;
+}
+
+.tournament-summary-grid dt {
+  margin-bottom: 3px;
+  color: #7897ad;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.tournament-summary-grid dd {
+  margin: 0;
+  color: #e6f6ff;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.tournament-summary-grid .tournament-summary-wide {
+  grid-column: 1 / -1;
+}
+
 .bracket-generator-card {
   display: flex;
   justify-content: space-between;
@@ -1667,6 +1730,8 @@ th {
   .tournament-columns,
   .empty-detail-grid,
   .compact-form,
+  .tournament-summary-card,
+  .tournament-summary-grid,
   .data-card:nth-child(2) .compact-form,
   .tournament-match-form {
     grid-template-columns: 1fr;

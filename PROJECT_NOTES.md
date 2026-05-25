@@ -97,7 +97,7 @@ This file is the running context log for the repository. Update it over time so 
 - Match Room state is intentionally in-memory and disappears on backend Pod restart until a later persistence phase
 - The next real tournament-management phase should add PostgreSQL for tournaments, teams, players, rounds, matches, and results rather than keeping those admin-authored records in-memory
 - The first PostgreSQL phase now persists tournament, team, player, round, tournament match records, and tournament match server assignment history; Match Rooms and live server telemetry remain runtime/in-memory for now
-- The frontend now has a Tournament Management section for persisted tournaments, teams, rounds, tournament match records, first-phase single-elimination bracket columns, server assignment controls, manual result recording, and active-assignment admin controls
+- The frontend now has a Tournament Management section for persisted tournaments, teams, rounds, tournament match records, selected-tournament outcome summaries, first-phase single-elimination bracket columns, server assignment controls, manual result recording, and active-assignment admin controls
 - PostgreSQL should persist durable admin intent and assignment snapshots, while Kubernetes/Agones remain the source of truth for live Fleet, GameServer, Pod, allocation-resource, and endpoint runtime state
 - Live player/map/score data should use read-only Xonotic `getstatus` first; avoid RCON unless a later feature truly requires command execution
 - Match Rooms now store requested map and game mode before allocation; allocation still uses a warm Fleet server, then applies requested config with whitelisted RCON and only exposes the endpoint when `getstatus` verifies it

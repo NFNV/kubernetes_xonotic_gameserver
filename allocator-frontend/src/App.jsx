@@ -283,6 +283,100 @@ function tournamentMatchCanAllocateServer(match) {
     && match.status !== "server_allocating";
 }
 
+function formatTimestamp(value) {
+  if (!value) {
+    return "not set";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString();
+}
+
+function humanizeIdentifier(value) {
+  return (value || "manual")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function matchTeamName(teamId, teamNameById, fallback) {
+  return teamId ? teamNameById[teamId] || shortId(teamId) : fallback;
+}
+
+function findFinalLikeMatch(matches, rounds) {
+  const roundOrderById = Object.fromEntries(rounds.map((round) => [round.id, numericValue(round.round_order, 0)]));
+  const bracketFinals = matches.filter((match) => (
+    match.bracket_position !== null
+    && match.bracket_position !== undefined
+    && !match.next_match_id
+  ));
+
+  if (bracketFinals.length > 0) {
+    return [...bracketFinals].sort((left, right) => (
+      numericValue(roundOrderById[right.round_id], 0) - numericValue(roundOrderById[left.round_id], 0)
+    ))[0];
+  }
+
+  const finishedMatches = matches.filter(tournamentMatchHasResult);
+  if (finishedMatches.length === 0) {
+    return null;
+  }
+
+  return [...finishedMatches].sort((left, right) => (
+    String(right.finished_at || right.updated_at || right.created_at || right.id)
+      .localeCompare(String(left.finished_at || left.updated_at || left.created_at || left.id))
+  ))[0];
+}
+
+function tournamentSummary(tournament, teams, rounds, matches, teamNameById) {
+  const totalMatches = matches.length;
+  const finishedMatches = matches.filter(tournamentMatchHasResult).length;
+  const remainingMatches = Math.max(totalMatches - finishedMatches, 0);
+  const finalMatch = findFinalLikeMatch(matches, rounds);
+  const championId = finalMatch?.winner_team_id || "";
+  const runnerUpId = championId && finalMatch?.team_a_id && finalMatch?.team_b_id
+    ? (championId === finalMatch.team_a_id ? finalMatch.team_b_id : finalMatch.team_a_id)
+    : "";
+  const championName = matchTeamName(championId, teamNameById, "");
+  const runnerUpName = matchTeamName(runnerUpId, teamNameById, "");
+  const finalScore = finalMatch && tournamentMatchHasResult(finalMatch)
+    ? `${finalMatch.team_a_score} - ${finalMatch.team_b_score}`
+    : "pending";
+  const finalTeams = finalMatch
+    ? `${matchTeamName(finalMatch.team_a_id, teamNameById, "TBD")} vs ${matchTeamName(finalMatch.team_b_id, teamNameById, "TBD")}`
+    : "No final match yet";
+  const finalNotes = finalMatch?.result_notes || "";
+
+  let story = "No matches yet. Add teams and generate a bracket or create matches manually.";
+  if (championName && runnerUpName) {
+    story = `${championName} defeated ${runnerUpName} ${finalScore} in the final.`;
+  } else if (championName) {
+    story = `${championName} won the latest completed match.`;
+  } else if (totalMatches > 0) {
+    story = `${finishedMatches} of ${totalMatches} matches are finished. ${remainingMatches} remaining.`;
+  }
+
+  return {
+    championName,
+    runnerUpName,
+    finalScore,
+    finalTeams,
+    finalNotes,
+    story,
+    totalMatches,
+    finishedMatches,
+    remainingMatches,
+    teamCount: teams.length,
+    roundCount: rounds.length,
+    formatLabel: humanizeIdentifier(tournament?.format),
+    bracketLabel: tournament?.bracket_size ? `${tournament.bracket_size} teams` : "manual",
+    generatedAt: formatTimestamp(tournament?.bracket_generated_at),
+  };
+}
+
 function selectableGameModes(gameConfigOptions) {
   const validMapsByMode = gameConfigOptions.valid_maps_by_mode || {};
   const modesByName = new Map();
@@ -1292,6 +1386,9 @@ export default function App() {
   const bracketConfig = normalizeGameConfig(tournamentMatchForm, gameConfigOptions);
   const bracketColumns = bracketRoundColumns(tournamentRounds, tournamentMatches);
   const hasBracketMatches = tournamentMatches.some((match) => match.bracket_position !== null && match.bracket_position !== undefined);
+  const selectedTournamentSummary = selectedTournament
+    ? tournamentSummary(selectedTournament, tournamentTeams, tournamentRounds, tournamentMatches, teamNameById)
+    : null;
 
   return (
     <main className="page">
@@ -1441,6 +1538,62 @@ export default function App() {
                   </div>
                   <span className="state-badge">{selectedTournament.status}</span>
                 </div>
+
+                {selectedTournamentSummary && (
+                  <article className="tournament-summary-card">
+                    <div className="tournament-summary-main">
+                      <p className="eyebrow">Tournament Summary</p>
+                      <h3>{selectedTournamentSummary.championName || "Champion pending"}</h3>
+                      <p>{selectedTournamentSummary.story}</p>
+                    </div>
+                    <dl className="tournament-summary-grid">
+                      <div>
+                        <dt>Format</dt>
+                        <dd>{selectedTournamentSummary.formatLabel}</dd>
+                      </div>
+                      <div>
+                        <dt>Bracket</dt>
+                        <dd>{selectedTournamentSummary.bracketLabel}</dd>
+                      </div>
+                      <div>
+                        <dt>Progress</dt>
+                        <dd>{selectedTournamentSummary.finishedMatches}/{selectedTournamentSummary.totalMatches} matches</dd>
+                      </div>
+                      <div>
+                        <dt>Teams</dt>
+                        <dd>{selectedTournamentSummary.teamCount}</dd>
+                      </div>
+                      <div>
+                        <dt>Rounds</dt>
+                        <dd>{selectedTournamentSummary.roundCount}</dd>
+                      </div>
+                      <div>
+                        <dt>Remaining</dt>
+                        <dd>{selectedTournamentSummary.remainingMatches}</dd>
+                      </div>
+                      <div>
+                        <dt>Final</dt>
+                        <dd>{selectedTournamentSummary.finalTeams}</dd>
+                      </div>
+                      <div>
+                        <dt>Score</dt>
+                        <dd>{selectedTournamentSummary.finalScore}</dd>
+                      </div>
+                      <div>
+                        <dt>Runner-up</dt>
+                        <dd>{selectedTournamentSummary.runnerUpName || "pending"}</dd>
+                      </div>
+                      <div>
+                        <dt>Generated</dt>
+                        <dd>{selectedTournamentSummary.generatedAt}</dd>
+                      </div>
+                      <div className="tournament-summary-wide">
+                        <dt>Notes</dt>
+                        <dd>{selectedTournamentSummary.finalNotes || "No result notes yet."}</dd>
+                      </div>
+                    </dl>
+                  </article>
+                )}
 
                 <p className="deferred-note">
                   Tournament Matches are persisted planning records. They can now hold a persisted server assignment to one allocated Agones GameServer.
