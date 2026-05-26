@@ -1401,6 +1401,7 @@ export default function App() {
         Auto-refresh checks every 7 seconds when enabled.
       </section>
 
+      <div className="dashboard-layout">
       <section className="panel tournament-panel">
         <div className="panel-header">
           <h2>Tournament Management</h2>
@@ -1414,44 +1415,45 @@ export default function App() {
           </div>
         )}
 
-        <article className="tournament-create-card">
-          <div className="subsection-header">
-            <div>
-              <h3>Create Tournament</h3>
-              <p>Start a clean persisted tournament record. Existing tournament details stay separate below.</p>
-            </div>
-            {selectedTournamentId && (
-              <button className="copy-button" type="button" onClick={() => setSelectedTournamentId("")}>
-                New Tournament Mode
-              </button>
-            )}
-          </div>
-          <form className="tournament-form" onSubmit={(event) => void createTournament(event)}>
-            <label>
-              <span>Tournament name</span>
-              <input
-                value={tournamentForm.name}
-                onChange={(event) => setTournamentForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Spring Arena Cup"
-                required
-              />
-            </label>
-            <label>
-              <span>Description</span>
-              <input
-                value={tournamentForm.description}
-                onChange={(event) => setTournamentForm((current) => ({ ...current, description: event.target.value }))}
-                placeholder="Optional operator notes"
-              />
-            </label>
-            <button className="primary" type="submit" disabled={creatingTournament || !tournamentForm.name.trim()}>
-              {creatingTournament ? "Creating..." : "Create Tournament"}
-            </button>
-          </form>
-        </article>
-
         <div className="tournament-layout">
-          <aside className="tournament-list">
+          <aside className="tournament-sidebar-stack">
+            <article className="tournament-create-card">
+              <div className="subsection-header">
+                <div>
+                  <h3>Create Tournament</h3>
+                  <p>Start a persisted tournament record.</p>
+                </div>
+                {selectedTournamentId && (
+                  <button className="copy-button" type="button" onClick={() => setSelectedTournamentId("")}>
+                    New
+                  </button>
+                )}
+              </div>
+              <form className="tournament-form" onSubmit={(event) => void createTournament(event)}>
+                <label>
+                  <span>Tournament name</span>
+                  <input
+                    value={tournamentForm.name}
+                    onChange={(event) => setTournamentForm((current) => ({ ...current, name: event.target.value }))}
+                    placeholder="Spring Arena Cup"
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Description</span>
+                  <input
+                    value={tournamentForm.description}
+                    onChange={(event) => setTournamentForm((current) => ({ ...current, description: event.target.value }))}
+                    placeholder="Optional notes"
+                  />
+                </label>
+                <button className="primary" type="submit" disabled={creatingTournament || !tournamentForm.name.trim()}>
+                  {creatingTournament ? "Creating..." : "Create Tournament"}
+                </button>
+              </form>
+            </article>
+
+          <div className="tournament-list">
             <div className="subsection-header">
               <h3>Existing Tournaments</h3>
               <button className="copy-button" type="button" onClick={() => void loadTournaments({ silent: true })} disabled={tournamentLoading}>
@@ -1477,6 +1479,7 @@ export default function App() {
                 ))}
               </div>
             )}
+          </div>
           </aside>
 
           <div className="tournament-detail">
@@ -1518,7 +1521,9 @@ export default function App() {
                       <h3>{summaryWinnerName || "Champion pending"}</h3>
                       <p className="summary-story">{selectedTournamentSummary.story}</p>
                       {summaryActiveServerCount > 0 && (
-                        <p className="summary-note">{summaryActiveServerCount} active match server assignment{summaryActiveServerCount === 1 ? "" : "s"} still need release.</p>
+                        <p className="summary-note">
+                          {summaryActiveServerCount} active server assignment{summaryActiveServerCount === 1 ? "" : "s"} still need{summaryActiveServerCount === 1 ? "s" : ""} to be released.
+                        </p>
                       )}
                       {summaryFinalizeBlocker && !selectedTournamentSummary.completed && (
                         <p className="summary-note">{summaryFinalizeBlocker}</p>
@@ -1536,48 +1541,28 @@ export default function App() {
                     </div>
                     <dl className="tournament-summary-grid">
                       <div>
-                        <dt>Format</dt>
-                        <dd>{humanizeIdentifier(summaryBracket.format)}</dd>
-                      </div>
-                      <div>
-                        <dt>Bracket</dt>
-                        <dd>{summaryBracket.size ? `${summaryBracket.size} teams` : "manual"}</dd>
+                        <dt>Champion</dt>
+                        <dd>{summaryWinnerName || "pending"}</dd>
                       </div>
                       <div>
                         <dt>Progress</dt>
                         <dd>{summaryCounts.finished_matches || 0}/{summaryCounts.matches || 0} matches</dd>
                       </div>
                       <div>
-                        <dt>Teams</dt>
-                        <dd>{summaryCounts.teams || 0}</dd>
-                      </div>
-                      <div>
-                        <dt>Rounds</dt>
-                        <dd>{summaryCounts.rounds || 0}</dd>
-                      </div>
-                      <div>
                         <dt>Remaining</dt>
                         <dd>{summaryCounts.remaining_matches || 0}</dd>
                       </div>
                       <div>
+                        <dt>Active Servers</dt>
+                        <dd>{summaryActiveServerCount}</dd>
+                      </div>
+                      <div>
+                        <dt>Final Status</dt>
+                        <dd>{selectedTournamentSummary.completed ? `Completed ${formatTimestamp(selectedTournamentSummary.completed_at)}` : "Pending finalization"}</dd>
+                      </div>
+                      <div>
                         <dt>Final</dt>
-                        <dd>{selectedTournamentSummary.final_teams_label || "No final match yet"}</dd>
-                      </div>
-                      <div>
-                        <dt>Score</dt>
-                        <dd>{selectedTournamentSummary.final_score?.label || "pending"}</dd>
-                      </div>
-                      <div>
-                        <dt>Runner-up</dt>
-                        <dd>{selectedTournamentSummary.runner_up_team?.name || "pending"}</dd>
-                      </div>
-                      <div>
-                        <dt>Generated</dt>
-                        <dd>{formatTimestamp(summaryBracket.generated_at)}</dd>
-                      </div>
-                      <div>
-                        <dt>Completed</dt>
-                        <dd>{selectedTournamentSummary.completed ? formatTimestamp(selectedTournamentSummary.completed_at) : "pending"}</dd>
+                        <dd>{selectedTournamentSummary.final_teams_label || "No final match yet"} · {selectedTournamentSummary.final_score?.label || "score pending"}</dd>
                       </div>
                       <div className="tournament-summary-wide">
                         <dt>Notes</dt>
@@ -1858,6 +1843,7 @@ export default function App() {
                           >
                             {creatingTournamentMatch ? "Working..." : "Create & Allocate Server"}
                           </button>
+                          <span className="capacity-hint">Ready capacity: {fleetStatus.ready_replicas}</span>
                         </div>
                         <p className="deferred-note">{VERIFIED_CONFIG_NOTE}</p>
                       </form>
@@ -1865,263 +1851,258 @@ export default function App() {
                       {tournamentMatches.length === 0 ? (
                         <p className="empty-state">No tournament matches yet.</p>
                       ) : (
-                        <div className="table-wrap">
-                          <table>
-                            <thead>
-                              <tr>
-                                <th>Match</th>
-                                <th>Round</th>
-                                <th>Teams</th>
-                                <th>Status</th>
-                                <th>Server Assignment</th>
-                                <th>Winner</th>
-                                <th>Score</th>
-                                <th>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {tournamentMatches.map((match) => {
-                                const activeAssignment = match.active_server_assignment;
-                                const endpoint = assignmentEndpoint(activeAssignment);
-                                const command = connectCommand(endpoint);
-                                const status = match.status || "created";
-                                const isFinished = status === "finished";
-                                const isReleased = status === "released";
-                                const isAllocatingServer = Boolean(allocatingTournamentServers[match.id]);
-                                const isReleasingServer = Boolean(releasingTournamentServers[match.id]);
-                                const isRecordingResult = Boolean(recordingTournamentResults[match.id]);
-                                const assignmentVerified = status !== "failed";
-                                const resultForm = tournamentResultForm(match);
-                                const teamAName = match.team_a_id ? teamNameById[match.team_a_id] || shortId(match.team_a_id) : "Team A";
-                                const teamBName = match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "Team B";
-                                const winnerName = match.winner_team_id ? teamNameById[match.winner_team_id] || `Team ${shortId(match.winner_team_id)}` : "";
-                                const hasRecordedResult = tournamentMatchHasResult(match);
-                                const canShowResultForm = tournamentMatchCanShowResultForm(match);
-                                const canRecordResult = tournamentMatchCanRecordResult(match);
-                                const canAllocateServer = tournamentMatchCanAllocateServer(match);
-                                const adminId = tournamentAdminId(match.id);
-                                const broadcastValue = broadcastForms[adminId] || "";
-                                const selectedMap = changeMapForms[adminId] || (ADMIN_MAPS.includes(match.requested_map) ? match.requested_map : ADMIN_MAPS[0]);
-                                const isBroadcasting = Boolean(adminActions[adminActionKey(adminId, "broadcast")]);
-                                const isChangingMap = Boolean(adminActions[adminActionKey(adminId, "change-map")]);
-                                const feedback = adminFeedback[adminId];
-                                const resultActionMessage = hasRecordedResult
-                                  ? "Result recorded."
-                                  : TERMINAL_TOURNAMENT_MATCH_STATUSES.has(status)
-                                    ? "No result recorded."
-                                    : "Assign both teams before recording a result.";
+                        <div className="tournament-match-grid">
+                          {tournamentMatches.map((match) => {
+                            const activeAssignment = match.active_server_assignment;
+                            const endpoint = assignmentEndpoint(activeAssignment);
+                            const command = connectCommand(endpoint);
+                            const status = match.status || "created";
+                            const isFinished = status === "finished";
+                            const isReleased = status === "released";
+                            const isAllocatingServer = Boolean(allocatingTournamentServers[match.id]);
+                            const isReleasingServer = Boolean(releasingTournamentServers[match.id]);
+                            const isRecordingResult = Boolean(recordingTournamentResults[match.id]);
+                            const assignmentVerified = status !== "failed";
+                            const resultForm = tournamentResultForm(match);
+                            const teamAName = match.team_a_id ? teamNameById[match.team_a_id] || shortId(match.team_a_id) : "TBD";
+                            const teamBName = match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "TBD";
+                            const winnerName = match.winner_team_id ? teamNameById[match.winner_team_id] || `Team ${shortId(match.winner_team_id)}` : "";
+                            const hasRecordedResult = tournamentMatchHasResult(match);
+                            const canShowResultForm = tournamentMatchCanShowResultForm(match);
+                            const canRecordResult = tournamentMatchCanRecordResult(match);
+                            const canAllocateServer = tournamentMatchCanAllocateServer(match);
+                            const adminId = tournamentAdminId(match.id);
+                            const broadcastValue = broadcastForms[adminId] || "";
+                            const selectedMap = changeMapForms[adminId] || (ADMIN_MAPS.includes(match.requested_map) ? match.requested_map : ADMIN_MAPS[0]);
+                            const isBroadcasting = Boolean(adminActions[adminActionKey(adminId, "broadcast")]);
+                            const isChangingMap = Boolean(adminActions[adminActionKey(adminId, "change-map")]);
+                            const feedback = adminFeedback[adminId];
+                            const resultActionMessage = hasRecordedResult
+                              ? "Result recorded."
+                              : TERMINAL_TOURNAMENT_MATCH_STATUSES.has(status)
+                                ? "No result recorded."
+                                : "Assign both teams before recording a result.";
+                            const matchLabel = match.bracket_position
+                              ? `Match ${match.bracket_position}`
+                              : `Match ${shortId(match.id)}`;
 
-                                return (
-                                  <tr className={isReleased ? "tournament-match-row-released" : ""} key={match.id}>
-                                    <td>
-                                      <div className="server-name-cell">
-                                        <strong>Match {shortId(match.id)}</strong>
-                                        <span>{match.requested_map || "map unset"} / {match.requested_game_mode || "mode unset"}</span>
-                                      </div>
-                                    </td>
-                                    <td>{match.round_id ? roundNameById[match.round_id] || shortId(match.round_id) : "Unassigned"}</td>
-                                    <td>
-                                      {match.team_a_id ? teamAName : "TBD"} vs{" "}
-                                      {match.team_b_id ? teamBName : "TBD"}
-                                    </td>
-                                    <td><span className={tournamentMatchStatusClass(status)}>{tournamentMatchStatusLabel(status)}</span></td>
-                                    <td>
+                            return (
+                              <article className={`tournament-match-card ${isReleased ? "tournament-match-card-released" : ""}`} key={match.id}>
+                                <div className="tournament-match-card-header">
+                                  <div>
+                                    <p className="eyebrow">{match.round_id ? roundNameById[match.round_id] || shortId(match.round_id) : "Unassigned round"}</p>
+                                    <h4>{matchLabel}</h4>
+                                  </div>
+                                  <span className={tournamentMatchStatusClass(status)}>{tournamentMatchStatusLabel(status)}</span>
+                                </div>
+
+                                <div className="tournament-match-teams">
+                                  <strong>{teamAName}</strong>
+                                  <span>vs</span>
+                                  <strong>{teamBName}</strong>
+                                </div>
+
+                                <dl className="tournament-match-facts">
+                                  <div>
+                                    <dt>Map / Mode</dt>
+                                    <dd>{match.requested_map || "map unset"} / {match.requested_game_mode || "mode unset"}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Endpoint</dt>
+                                    <dd>
                                       {activeAssignment ? (
-                                        <div className={`tournament-server-cell ${assignmentVerified ? "" : "tournament-server-cell-warning"}`}>
-                                          <strong className="join-endpoint">{endpoint || "Endpoint pending"}</strong>
-                                          <span>{activeAssignment.allocated_game_server_name}</span>
-                                          {!assignmentVerified && <span>Config not verified; do not treat as ready.</span>}
-                                          {command && <code className="connection-command">{command}</code>}
-                                          <div className="button-row">
-                                            <CopyButton text={endpoint} label="Copy endpoint" onCopy={copyText} />
-                                            <CopyButton text={command} label="Copy connect" onCopy={copyText} />
-                                          </div>
-                                        </div>
+                                        <span className={assignmentVerified ? "join-endpoint" : "warning-text"}>{endpoint || "Endpoint pending"}</span>
                                       ) : isReleased ? (
-                                        <div className="tournament-server-cell tournament-server-cell-released">
-                                          <strong>Server released</strong>
-                                          <span>Endpoint hidden after release.</span>
-                                        </div>
+                                        <span className="muted-endpoint">Server released</span>
                                       ) : (
-                                        <span className="muted-endpoint">No active server assignment</span>
+                                        <span className="muted-endpoint">No active assignment</span>
                                       )}
-                                    </td>
-                                    <td>
-                                      {winnerName ? (
-                                        <div className="winner-cell">
-                                          <strong>{winnerName}</strong>
-                                          {!teamNameById[match.winner_team_id] && <span>{match.winner_team_id}</span>}
-                                        </div>
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt>Result</dt>
+                                    <dd>
+                                      {hasRecordedResult ? (
+                                        <span>{match.team_a_score} - {match.team_b_score}{winnerName ? ` · ${winnerName}` : ""}</span>
                                       ) : (
                                         <span className="muted-endpoint">Not recorded</span>
                                       )}
-                                    </td>
-                                    <td>
-                                      <div className={`score-cell ${hasRecordedResult ? "score-cell-final" : ""}`}>
-                                        {hasRecordedResult ? (
-                                          <>
-                                            <span>Final</span>
-                                            <strong>{match.team_a_score} - {match.team_b_score}</strong>
-                                            <small>{teamAName} vs {teamBName}</small>
-                                          </>
-                                        ) : (
-                                          <span className="muted-endpoint">Not recorded</span>
-                                        )}
-                                        {match.result_notes && <small>{match.result_notes}</small>}
-                                      </div>
-                                    </td>
-                                    <td>
-                                      <div className="tournament-actions">
-                                        {activeAssignment ? (
-                                          <>
-                                            {isFinished && (
-                                              <span className="active-server-note">Result recorded. Server still active.</span>
-                                            )}
-                                            <button
-                                              className="danger-button"
-                                              type="button"
-                                              onClick={() => void releaseTournamentMatchServer(match)}
-                                              disabled={isReleasingServer}
-                                            >
-                                              {isReleasingServer ? "Releasing..." : "Release Server"}
-                                            </button>
-                                            <div className="tournament-admin-controls">
-                                              <div className="tournament-admin-controls-header">
-                                                <h4>Admin Controls</h4>
-                                                <span>Whitelisted RCON only</span>
-                                              </div>
-                                              <form className="tournament-admin-row" onSubmit={(event) => {
-                                                event.preventDefault();
-                                                void broadcastToTournamentMatch(match);
-                                              }}>
-                                                <label>
-                                                  <span>Broadcast</span>
-                                                  <input
-                                                    id={`tournament-broadcast-${match.id}`}
-                                                    value={broadcastValue}
-                                                    maxLength={BROADCAST_MAX_LENGTH}
-                                                    onChange={(event) => setBroadcastForms((current) => ({ ...current, [adminId]: event.target.value }))}
-                                                    placeholder="Match starts in 2 minutes"
-                                                  />
-                                                </label>
-                                                <button className="secondary" type="submit" disabled={isBroadcasting || !broadcastValue.trim()}>
-                                                  {isBroadcasting ? "Sending..." : "Send"}
-                                                </button>
-                                              </form>
-                                              <form className="tournament-admin-row" onSubmit={(event) => {
-                                                event.preventDefault();
-                                                void changeTournamentMatchMap(match);
-                                              }}>
-                                                <label>
-                                                  <span>Map</span>
-                                                  <select
-                                                    id={`tournament-change-map-${match.id}`}
-                                                    value={selectedMap}
-                                                    onChange={(event) => setChangeMapForms((current) => ({ ...current, [adminId]: event.target.value }))}
-                                                  >
-                                                    {ADMIN_MAPS.map((mapName) => (
-                                                      <option key={mapName} value={mapName}>
-                                                        {mapName}
-                                                      </option>
-                                                    ))}
-                                                  </select>
-                                                </label>
-                                                <button className="secondary" type="submit" disabled={isChangingMap}>
-                                                  {isChangingMap ? "Changing..." : "Change"}
-                                                </button>
-                                              </form>
-                                              {feedback && (
-                                                <p className={`admin-feedback ${feedback.type === "warning" ? "admin-feedback-warning" : ""}`}>
-                                                  {feedback.message || feedback}
-                                                </p>
-                                              )}
-                                            </div>
-                                          </>
-                                        ) : canAllocateServer ? (
-                                          <button
-                                            className="secondary"
-                                            type="button"
-                                            onClick={() => void allocateTournamentMatchServer(match)}
-                                            disabled={isAllocatingServer}
-                                          >
-                                            {isAllocatingServer ? "Allocating..." : "Allocate Server"}
-                                          </button>
-                                        ) : (
-                                          <span className="muted-endpoint">{isReleased ? "Server assignment released." : "Server allocation unavailable."}</span>
-                                        )}
+                                    </dd>
+                                  </div>
+                                </dl>
 
-                                        {canShowResultForm ? (
-                                          <form className="result-form" onSubmit={(event) => {
-                                            event.preventDefault();
-                                            void recordTournamentMatchResult(match);
-                                          }}>
-                                            <div className="result-score-row">
-                                              <label>
-                                                <span>{teamAName}</span>
-                                                <input
-                                                  min="0"
-                                                  type="number"
-                                                  value={resultForm.team_a_score}
-                                                  onChange={(event) => updateTournamentResultForm(match.id, "team_a_score", event.target.value)}
-                                                  disabled={!canRecordResult || isRecordingResult}
-                                                />
-                                              </label>
-                                              <label>
-                                                <span>{teamBName}</span>
-                                                <input
-                                                  min="0"
-                                                  type="number"
-                                                  value={resultForm.team_b_score}
-                                                  onChange={(event) => updateTournamentResultForm(match.id, "team_b_score", event.target.value)}
-                                                  disabled={!canRecordResult || isRecordingResult}
-                                                />
-                                              </label>
-                                            </div>
+                                {activeAssignment && (
+                                  <div className={`tournament-server-cell ${assignmentVerified ? "" : "tournament-server-cell-warning"}`}>
+                                    <span>{activeAssignment.allocated_game_server_name}</span>
+                                    {!assignmentVerified && <span>Config not verified; do not treat as ready.</span>}
+                                    {command && <code className="connection-command">{command}</code>}
+                                    <div className="button-row">
+                                      <CopyButton text={endpoint} label="Endpoint" onCopy={copyText} />
+                                      <CopyButton text={command} label="Connect" onCopy={copyText} />
+                                    </div>
+                                  </div>
+                                )}
+
+                                {match.result_notes && <p className="match-note">{match.result_notes}</p>}
+
+                                <div className="tournament-action-groups">
+                                  <div className="action-group">
+                                    <span>Server</span>
+                                    {activeAssignment ? (
+                                      <>
+                                        {isFinished && <p className="active-server-note">Result recorded. Server still active.</p>}
+                                        <button
+                                          className="danger-button"
+                                          type="button"
+                                          onClick={() => void releaseTournamentMatchServer(match)}
+                                          disabled={isReleasingServer}
+                                        >
+                                          {isReleasingServer ? "Releasing..." : "Release Server"}
+                                        </button>
+                                      </>
+                                    ) : canAllocateServer ? (
+                                      <>
+                                        <button
+                                          className="secondary"
+                                          type="button"
+                                          onClick={() => void allocateTournamentMatchServer(match)}
+                                          disabled={isAllocatingServer}
+                                        >
+                                          {isAllocatingServer ? "Allocating..." : "Allocate Server"}
+                                        </button>
+                                        <small>Ready capacity: {fleetStatus.ready_replicas}</small>
+                                      </>
+                                    ) : (
+                                      <small>{isReleased ? "Server assignment released." : "Server allocation unavailable."}</small>
+                                    )}
+                                  </div>
+
+                                  <div className="action-group">
+                                    <span>Result</span>
+                                    {canShowResultForm ? (
+                                      <details className="match-action-panel">
+                                        <summary>Record Result</summary>
+                                        <form className="result-form" onSubmit={(event) => {
+                                          event.preventDefault();
+                                          void recordTournamentMatchResult(match);
+                                        }}>
+                                          <div className="result-score-row">
                                             <label>
-                                              <span>Winner</span>
-                                              <select
-                                                value={resultForm.winner_team_id}
-                                                onChange={(event) => updateTournamentResultForm(match.id, "winner_team_id", event.target.value)}
-                                                disabled={!canRecordResult || isRecordingResult}
-                                              >
-                                                {match.team_a_id && <option value={match.team_a_id}>{teamAName}</option>}
-                                                {match.team_b_id && <option value={match.team_b_id}>{teamBName}</option>}
-                                              </select>
-                                            </label>
-                                            <label>
-                                              <span>Notes</span>
-                                              <textarea
-                                                value={resultForm.result_notes}
-                                                onChange={(event) => updateTournamentResultForm(match.id, "result_notes", event.target.value)}
-                                                placeholder="Optional result notes"
+                                              <span>{teamAName}</span>
+                                              <input
+                                                min="0"
+                                                type="number"
+                                                value={resultForm.team_a_score}
+                                                onChange={(event) => updateTournamentResultForm(match.id, "team_a_score", event.target.value)}
                                                 disabled={!canRecordResult || isRecordingResult}
                                               />
                                             </label>
-                                            <button
-                                              className="secondary"
-                                              type="submit"
-                                              disabled={
-                                                !canRecordResult ||
-                                                isRecordingResult ||
-                                                resultForm.team_a_score === "" ||
-                                                resultForm.team_b_score === "" ||
-                                                !resultForm.winner_team_id
-                                              }
+                                            <label>
+                                              <span>{teamBName}</span>
+                                              <input
+                                                min="0"
+                                                type="number"
+                                                value={resultForm.team_b_score}
+                                                onChange={(event) => updateTournamentResultForm(match.id, "team_b_score", event.target.value)}
+                                                disabled={!canRecordResult || isRecordingResult}
+                                              />
+                                            </label>
+                                          </div>
+                                          <label>
+                                            <span>Winner</span>
+                                            <select
+                                              value={resultForm.winner_team_id}
+                                              onChange={(event) => updateTournamentResultForm(match.id, "winner_team_id", event.target.value)}
+                                              disabled={!canRecordResult || isRecordingResult}
                                             >
-                                              {isRecordingResult ? "Saving..." : "Record Result"}
-                                            </button>
-                                            {!canRecordResult && <span className="muted-endpoint">Assign both teams before recording a result.</span>}
-                                          </form>
-                                        ) : (
-                                          <span className="muted-endpoint">{resultActionMessage}</span>
-                                        )}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
+                                              {match.team_a_id && <option value={match.team_a_id}>{teamAName}</option>}
+                                              {match.team_b_id && <option value={match.team_b_id}>{teamBName}</option>}
+                                            </select>
+                                          </label>
+                                          <label>
+                                            <span>Notes</span>
+                                            <textarea
+                                              value={resultForm.result_notes}
+                                              onChange={(event) => updateTournamentResultForm(match.id, "result_notes", event.target.value)}
+                                              placeholder="Optional result notes"
+                                              disabled={!canRecordResult || isRecordingResult}
+                                            />
+                                          </label>
+                                          <button
+                                            className="secondary"
+                                            type="submit"
+                                            disabled={
+                                              !canRecordResult ||
+                                              isRecordingResult ||
+                                              resultForm.team_a_score === "" ||
+                                              resultForm.team_b_score === "" ||
+                                              !resultForm.winner_team_id
+                                            }
+                                          >
+                                            {isRecordingResult ? "Saving..." : "Save Result"}
+                                          </button>
+                                          {!canRecordResult && <span className="muted-endpoint">Assign both teams before recording a result.</span>}
+                                        </form>
+                                      </details>
+                                    ) : (
+                                      <small>{resultActionMessage}</small>
+                                    )}
+                                  </div>
+
+                                  {activeAssignment && (
+                                    <details className="match-action-panel tournament-admin-controls">
+                                      <summary>Admin Controls</summary>
+                                      <form className="tournament-admin-row" onSubmit={(event) => {
+                                        event.preventDefault();
+                                        void broadcastToTournamentMatch(match);
+                                      }}>
+                                        <label>
+                                          <span>Broadcast</span>
+                                          <input
+                                            id={`tournament-broadcast-${match.id}`}
+                                            value={broadcastValue}
+                                            maxLength={BROADCAST_MAX_LENGTH}
+                                            onChange={(event) => setBroadcastForms((current) => ({ ...current, [adminId]: event.target.value }))}
+                                            placeholder="Match starts in 2 minutes"
+                                          />
+                                        </label>
+                                        <button className="secondary" type="submit" disabled={isBroadcasting || !broadcastValue.trim()}>
+                                          {isBroadcasting ? "Sending..." : "Send"}
+                                        </button>
+                                      </form>
+                                      <form className="tournament-admin-row" onSubmit={(event) => {
+                                        event.preventDefault();
+                                        void changeTournamentMatchMap(match);
+                                      }}>
+                                        <label>
+                                          <span>Map</span>
+                                          <select
+                                            id={`tournament-change-map-${match.id}`}
+                                            value={selectedMap}
+                                            onChange={(event) => setChangeMapForms((current) => ({ ...current, [adminId]: event.target.value }))}
+                                          >
+                                            {ADMIN_MAPS.map((mapName) => (
+                                              <option key={mapName} value={mapName}>
+                                                {mapName}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </label>
+                                        <button className="secondary" type="submit" disabled={isChangingMap}>
+                                          {isChangingMap ? "Changing..." : "Change"}
+                                        </button>
+                                      </form>
+                                      {feedback && (
+                                        <p className={`admin-feedback ${feedback.type === "warning" ? "admin-feedback-warning" : ""}`}>
+                                          {feedback.message || feedback}
+                                        </p>
+                                      )}
+                                    </details>
+                                  )}
+                                </div>
+                              </article>
+                            );
+                          })}
                         </div>
                       )}
                     </article>
@@ -2133,9 +2114,10 @@ export default function App() {
         </div>
       </section>
 
+      <aside className="right-rail">
       <section className="panel match-rooms-panel">
         <div className="panel-header">
-          <h2>Match Rooms</h2>
+          <h2>Advanced / Debug Match Rooms</h2>
           <span className="panel-meta">{matches.length} in-memory rooms</span>
         </div>
 
@@ -2174,12 +2156,13 @@ export default function App() {
               ))}
             </select>
           </label>
-          <button className="primary" type="submit" disabled={creatingMatch || loading}>
+          <button className="secondary" type="submit" disabled={creatingMatch || loading}>
             {creatingMatch ? "Creating..." : "Create Match Room"}
           </button>
         </form>
         <p className="deferred-note">
-          Servers come from a warm Agones Fleet. Allocation picks a Ready server, applies requested map/mode through whitelisted RCON, verifies with getstatus, then exposes the endpoint.
+          Lower-level/manual infrastructure testing. Normal tournament workflow uses Tournament Matches above.
+          Servers still come from the warm Agones Fleet, apply requested map/mode through whitelisted RCON, verify with getstatus, then expose the endpoint.
           {" "}{VERIFIED_CONFIG_NOTE}
         </p>
 
@@ -2410,7 +2393,7 @@ export default function App() {
                         Allocation will configure the warm server with RCON and verify getstatus before showing a join endpoint.
                         {" "}{VERIFIED_CONFIG_NOTE}
                       </p>
-                      <button className="primary" type="button" onClick={() => void allocateMatch(match)} disabled={isAllocating || isConfiguring || isReleased}>
+                      <button className="secondary" type="button" onClick={() => void allocateMatch(match)} disabled={isAllocating || isConfiguring || isReleased}>
                         {isAllocating || isConfiguring ? "Allocating..." : isReleased ? "Match Ended" : "Allocate Server"}
                       </button>
                     </div>
@@ -2427,7 +2410,7 @@ export default function App() {
         )}
       </section>
 
-      <section className="grid metrics">
+      <section className="grid metrics rail-metrics">
         <MetricCard label="Fleet Desired" value={fleetStatus.desired_replicas} />
         <MetricCard label="Fleet Total" value={fleetStatus.replicas} />
         <MetricCard label="Ready" value={fleetStatus.ready_replicas} />
@@ -2435,7 +2418,7 @@ export default function App() {
         <MetricCard label="Reserved" value={fleetStatus.reserved_replicas} />
       </section>
 
-      <section className="grid panels">
+      <section className="grid panels rail-panels">
         <article className="panel">
           <div className="panel-header">
             <h2>Fleet Summary</h2>
@@ -2526,7 +2509,7 @@ export default function App() {
         </details>
       </section>
 
-      <section className="panel">
+      <section className="panel allocated-servers-panel">
         <div className="panel-header">
           <h2>Allocated Servers</h2>
           <span className="panel-meta">{allocatedServers.length} backing infrastructure allocations</span>
@@ -2682,7 +2665,7 @@ export default function App() {
         )}
       </section>
 
-      <section className="panel">
+      <section className="panel internal-servers-panel">
         <div className="panel-header">
           <h2>Standby / Internal Servers</h2>
           <span className="panel-meta">{internalServers.length} infrastructure servers</span>
@@ -2718,6 +2701,8 @@ export default function App() {
           </div>
         )}
       </section>
+      </aside>
+      </div>
     </main>
   );
 }
