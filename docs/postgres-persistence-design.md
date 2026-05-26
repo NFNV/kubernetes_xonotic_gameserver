@@ -22,7 +22,7 @@ Use these timestamp columns on every table:
 - `created_at timestamptz not null default now()`
 - `updated_at timestamptz not null default now()`
 
-Use explicit lifecycle timestamps only where they matter, such as `started_at`, `finished_at`, `allocated_at`, and `released_at`.
+Use explicit lifecycle timestamps only where they matter, such as `started_at`, `finished_at`, `completed_at`, `allocated_at`, and `released_at`.
 
 ## Lifecycle States
 
@@ -32,7 +32,7 @@ Tournament states:
 
 - `draft`
 - `active`
-- `finished`
+- `completed`
 - `cancelled`
 
 Round states:
@@ -83,8 +83,10 @@ slug text unique
 description text
 status text not null default 'draft'
 format text not null default 'manual'
+winner_team_id uuid
 started_at timestamptz
 finished_at timestamptz
+completed_at timestamptz
 created_at timestamptz not null default now()
 updated_at timestamptz not null default now()
 ```
@@ -92,14 +94,16 @@ updated_at timestamptz not null default now()
 Validation:
 
 - `name` required, trimmed, reasonable max length.
-- `status` must be one of tournament states.
+- `status` must be one of tournament states; explicit finalization sets it to `completed`.
 - `format` should remain `manual` for the MVP.
+- `winner_team_id` and `completed_at` are set only by explicit tournament finalization after the final match has a recorded winner.
 
 Relationships:
 
 - one tournament has many teams
 - one tournament has many rounds
 - one tournament has many matches
+- tournament `winner_team_id` references one team after finalization
 
 ### `teams`
 
@@ -424,10 +428,12 @@ create table tournaments (
   description text,
   status text not null default 'draft',
   format text not null default 'manual',
+  winner_team_id uuid,
   bracket_size integer,
   bracket_generated_at timestamptz,
   started_at timestamptz,
   finished_at timestamptz,
+  completed_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

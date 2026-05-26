@@ -519,9 +519,30 @@ button:disabled {
   font-size: 1.18rem;
 }
 
-.tournament-summary-main > p:last-child {
+.tournament-summary-main .summary-story {
   color: #9fb8ca;
   line-height: 1.45;
+}
+
+.tournament-summary-main .summary-note {
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 205, 93, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 205, 93, 0.08);
+  color: #e8d39a;
+  font-size: 0.84rem;
+}
+
+.tournament-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.tournament-summary-actions button {
+  flex: 0 0 auto;
+  width: auto;
 }
 
 .tournament-summary-grid {

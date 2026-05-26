@@ -39,6 +39,8 @@ Backend endpoints used:
 - `GET /gameservers`
 - `GET /tournaments`
 - `POST /tournaments`
+- `GET /tournaments/<tournament_id>/summary`
+- `POST /tournaments/<tournament_id>/finalize`
 - `GET /tournaments/<tournament_id>/teams`
 - `POST /tournaments/<tournament_id>/teams`
 - `GET /tournaments/<tournament_id>/rounds`

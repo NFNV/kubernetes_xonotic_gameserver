@@ -302,81 +302,6 @@ function humanizeIdentifier(value) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function matchTeamName(teamId, teamNameById, fallback) {
-  return teamId ? teamNameById[teamId] || shortId(teamId) : fallback;
-}
-
-function findFinalLikeMatch(matches, rounds) {
-  const roundOrderById = Object.fromEntries(rounds.map((round) => [round.id, numericValue(round.round_order, 0)]));
-  const bracketFinals = matches.filter((match) => (
-    match.bracket_position !== null
-    && match.bracket_position !== undefined
-    && !match.next_match_id
-  ));
-
-  if (bracketFinals.length > 0) {
-    return [...bracketFinals].sort((left, right) => (
-      numericValue(roundOrderById[right.round_id], 0) - numericValue(roundOrderById[left.round_id], 0)
-    ))[0];
-  }
-
-  const finishedMatches = matches.filter(tournamentMatchHasResult);
-  if (finishedMatches.length === 0) {
-    return null;
-  }
-
-  return [...finishedMatches].sort((left, right) => (
-    String(right.finished_at || right.updated_at || right.created_at || right.id)
-      .localeCompare(String(left.finished_at || left.updated_at || left.created_at || left.id))
-  ))[0];
-}
-
-function tournamentSummary(tournament, teams, rounds, matches, teamNameById) {
-  const totalMatches = matches.length;
-  const finishedMatches = matches.filter(tournamentMatchHasResult).length;
-  const remainingMatches = Math.max(totalMatches - finishedMatches, 0);
-  const finalMatch = findFinalLikeMatch(matches, rounds);
-  const championId = finalMatch?.winner_team_id || "";
-  const runnerUpId = championId && finalMatch?.team_a_id && finalMatch?.team_b_id
-    ? (championId === finalMatch.team_a_id ? finalMatch.team_b_id : finalMatch.team_a_id)
-    : "";
-  const championName = matchTeamName(championId, teamNameById, "");
-  const runnerUpName = matchTeamName(runnerUpId, teamNameById, "");
-  const finalScore = finalMatch && tournamentMatchHasResult(finalMatch)
-    ? `${finalMatch.team_a_score} - ${finalMatch.team_b_score}`
-    : "pending";
-  const finalTeams = finalMatch
-    ? `${matchTeamName(finalMatch.team_a_id, teamNameById, "TBD")} vs ${matchTeamName(finalMatch.team_b_id, teamNameById, "TBD")}`
-    : "No final match yet";
-  const finalNotes = finalMatch?.result_notes || "";
-
-  let story = "No matches yet. Add teams and generate a bracket or create matches manually.";
-  if (championName && runnerUpName) {
-    story = `${championName} defeated ${runnerUpName} ${finalScore} in the final.`;
-  } else if (championName) {
-    story = `${championName} won the latest completed match.`;
-  } else if (totalMatches > 0) {
-    story = `${finishedMatches} of ${totalMatches} matches are finished. ${remainingMatches} remaining.`;
-  }
-
-  return {
-    championName,
-    runnerUpName,
-    finalScore,
-    finalTeams,
-    finalNotes,
-    story,
-    totalMatches,
-    finishedMatches,
-    remainingMatches,
-    teamCount: teams.length,
-    roundCount: rounds.length,
-    formatLabel: humanizeIdentifier(tournament?.format),
-    bracketLabel: tournament?.bracket_size ? `${tournament.bracket_size} teams` : "manual",
-    generatedAt: formatTimestamp(tournament?.bracket_generated_at),
-  };
-}
-
 function selectableGameModes(gameConfigOptions) {
   const validMapsByMode = gameConfigOptions.valid_maps_by_mode || {};
   const modesByName = new Map();
@@ -481,6 +406,7 @@ export default function App() {
   const [tournamentTeams, setTournamentTeams] = useState([]);
   const [tournamentRounds, setTournamentRounds] = useState([]);
   const [tournamentMatches, setTournamentMatches] = useState([]);
+  const [tournamentSummaryData, setTournamentSummaryData] = useState(null);
   const [tournamentLoading, setTournamentLoading] = useState(false);
   const [tournamentDetailLoading, setTournamentDetailLoading] = useState(false);
   const [tournamentError, setTournamentError] = useState(null);
@@ -488,6 +414,7 @@ export default function App() {
   const [creatingTeam, setCreatingTeam] = useState(false);
   const [creatingRound, setCreatingRound] = useState(false);
   const [generatingBracket, setGeneratingBracket] = useState(false);
+  const [finalizingTournament, setFinalizingTournament] = useState(false);
   const [creatingTournamentMatch, setCreatingTournamentMatch] = useState(false);
   const [allocatingTournamentServers, setAllocatingTournamentServers] = useState({});
   const [releasingTournamentServers, setReleasingTournamentServers] = useState({});
@@ -644,6 +571,7 @@ export default function App() {
       setTournamentTeams([]);
       setTournamentRounds([]);
       setTournamentMatches([]);
+      setTournamentSummaryData(null);
       return;
     }
 
@@ -653,14 +581,16 @@ export default function App() {
     setTournamentError(null);
 
     try {
-      const [teamsResponse, roundsResponse, matchesResponse] = await Promise.all([
+      const [teamsResponse, roundsResponse, matchesResponse, summaryResponse] = await Promise.all([
         fetchJson(`/api/tournaments/${tournamentId}/teams`),
         fetchJson(`/api/tournaments/${tournamentId}/rounds`),
         fetchJson(`/api/tournaments/${tournamentId}/matches`),
+        fetchJson(`/api/tournaments/${tournamentId}/summary`),
       ]);
       setTournamentTeams(teamsResponse.items || []);
       setTournamentRounds(roundsResponse.items || []);
       setTournamentMatches(matchesResponse.items || []);
+      setTournamentSummaryData(summaryResponse);
     } catch (err) {
       setTournamentError({
         title: "Tournament detail refresh failed",
@@ -691,6 +621,7 @@ export default function App() {
       setTournamentTeams([]);
       setTournamentRounds([]);
       setTournamentMatches([]);
+      setTournamentSummaryData(null);
       setTeamForm({ name: "", tag: "", seed: "" });
       setRoundForm({ name: "", round_order: "" });
       setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions));
@@ -798,6 +729,7 @@ export default function App() {
       }
       setTournamentRounds(result.rounds || []);
       setTournamentMatches(result.matches || []);
+      await loadTournamentDetails(selectedTournamentId, { silent: true });
       setCopyMessage(`${result.tournament?.bracket_size || tournamentTeams.length}-team bracket generated.`);
       window.setTimeout(() => setCopyMessage(""), 2400);
       setLastUpdated(new Date().toLocaleTimeString());
@@ -808,6 +740,43 @@ export default function App() {
       });
     } finally {
       setGeneratingBracket(false);
+    }
+  }
+
+  async function finalizeTournament() {
+    if (!selectedTournamentId || !tournamentSummaryData?.can_finalize) {
+      return;
+    }
+
+    const championName = tournamentSummaryData.champion_team?.name || "the recorded winner";
+    const confirmed = window.confirm(`Finalize this tournament with ${championName} as winner? Match results will remain visible and server release stays separate.`);
+    if (!confirmed) {
+      return;
+    }
+
+    setFinalizingTournament(true);
+    setTournamentError(null);
+
+    try {
+      const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/finalize`, { method: "POST" });
+      if (result.tournament) {
+        setTournaments((current) => current.map((tournament) => (
+          tournament.id === result.tournament.id ? result.tournament : tournament
+        )));
+      }
+      if (result.summary) {
+        setTournamentSummaryData(result.summary);
+      }
+      setCopyMessage(`${result.summary?.winner_team?.name || championName} finalized as tournament winner.`);
+      window.setTimeout(() => setCopyMessage(""), 2400);
+      setLastUpdated(new Date().toLocaleTimeString());
+    } catch (err) {
+      setTournamentError({
+        title: "Finalize tournament failed",
+        message: err.message,
+      });
+    } finally {
+      setFinalizingTournament(false);
     }
   }
 
@@ -1386,9 +1355,12 @@ export default function App() {
   const bracketConfig = normalizeGameConfig(tournamentMatchForm, gameConfigOptions);
   const bracketColumns = bracketRoundColumns(tournamentRounds, tournamentMatches);
   const hasBracketMatches = tournamentMatches.some((match) => match.bracket_position !== null && match.bracket_position !== undefined);
-  const selectedTournamentSummary = selectedTournament
-    ? tournamentSummary(selectedTournament, tournamentTeams, tournamentRounds, tournamentMatches, teamNameById)
-    : null;
+  const selectedTournamentSummary = selectedTournament ? tournamentSummaryData : null;
+  const summaryCounts = selectedTournamentSummary?.counts || {};
+  const summaryBracket = selectedTournamentSummary?.bracket || {};
+  const summaryWinnerName = selectedTournamentSummary?.winner_team?.name || selectedTournamentSummary?.champion_team?.name || "";
+  const summaryFinalizeBlocker = selectedTournamentSummary?.finalize_blockers?.[0] || "";
+  const summaryActiveServerCount = selectedTournamentSummary?.active_server_assignment_count || 0;
 
   return (
     <main className="page">
@@ -1543,53 +1515,73 @@ export default function App() {
                   <article className="tournament-summary-card">
                     <div className="tournament-summary-main">
                       <p className="eyebrow">Tournament Summary</p>
-                      <h3>{selectedTournamentSummary.championName || "Champion pending"}</h3>
-                      <p>{selectedTournamentSummary.story}</p>
+                      <h3>{summaryWinnerName || "Champion pending"}</h3>
+                      <p className="summary-story">{selectedTournamentSummary.story}</p>
+                      {summaryActiveServerCount > 0 && (
+                        <p className="summary-note">{summaryActiveServerCount} active match server assignment{summaryActiveServerCount === 1 ? "" : "s"} still need release.</p>
+                      )}
+                      {summaryFinalizeBlocker && !selectedTournamentSummary.completed && (
+                        <p className="summary-note">{summaryFinalizeBlocker}</p>
+                      )}
+                      <div className="tournament-summary-actions">
+                        <button
+                          className="primary"
+                          type="button"
+                          onClick={() => void finalizeTournament()}
+                          disabled={!selectedTournamentSummary.can_finalize || finalizingTournament}
+                        >
+                          {finalizingTournament ? "Finalizing..." : selectedTournamentSummary.completed ? "Tournament Finalized" : "Finalize Tournament"}
+                        </button>
+                      </div>
                     </div>
                     <dl className="tournament-summary-grid">
                       <div>
                         <dt>Format</dt>
-                        <dd>{selectedTournamentSummary.formatLabel}</dd>
+                        <dd>{humanizeIdentifier(summaryBracket.format)}</dd>
                       </div>
                       <div>
                         <dt>Bracket</dt>
-                        <dd>{selectedTournamentSummary.bracketLabel}</dd>
+                        <dd>{summaryBracket.size ? `${summaryBracket.size} teams` : "manual"}</dd>
                       </div>
                       <div>
                         <dt>Progress</dt>
-                        <dd>{selectedTournamentSummary.finishedMatches}/{selectedTournamentSummary.totalMatches} matches</dd>
+                        <dd>{summaryCounts.finished_matches || 0}/{summaryCounts.matches || 0} matches</dd>
                       </div>
                       <div>
                         <dt>Teams</dt>
-                        <dd>{selectedTournamentSummary.teamCount}</dd>
+                        <dd>{summaryCounts.teams || 0}</dd>
                       </div>
                       <div>
                         <dt>Rounds</dt>
-                        <dd>{selectedTournamentSummary.roundCount}</dd>
+                        <dd>{summaryCounts.rounds || 0}</dd>
                       </div>
                       <div>
                         <dt>Remaining</dt>
-                        <dd>{selectedTournamentSummary.remainingMatches}</dd>
+                        <dd>{summaryCounts.remaining_matches || 0}</dd>
                       </div>
                       <div>
                         <dt>Final</dt>
-                        <dd>{selectedTournamentSummary.finalTeams}</dd>
+                        <dd>{selectedTournamentSummary.final_teams_label || "No final match yet"}</dd>
                       </div>
                       <div>
                         <dt>Score</dt>
-                        <dd>{selectedTournamentSummary.finalScore}</dd>
+                        <dd>{selectedTournamentSummary.final_score?.label || "pending"}</dd>
                       </div>
                       <div>
                         <dt>Runner-up</dt>
-                        <dd>{selectedTournamentSummary.runnerUpName || "pending"}</dd>
+                        <dd>{selectedTournamentSummary.runner_up_team?.name || "pending"}</dd>
                       </div>
                       <div>
                         <dt>Generated</dt>
-                        <dd>{selectedTournamentSummary.generatedAt}</dd>
+                        <dd>{formatTimestamp(summaryBracket.generated_at)}</dd>
+                      </div>
+                      <div>
+                        <dt>Completed</dt>
+                        <dd>{selectedTournamentSummary.completed ? formatTimestamp(selectedTournamentSummary.completed_at) : "pending"}</dd>
                       </div>
                       <div className="tournament-summary-wide">
                         <dt>Notes</dt>
-                        <dd>{selectedTournamentSummary.finalNotes || "No result notes yet."}</dd>
+                        <dd>{selectedTournamentSummary.final_notes || "No result notes yet."}</dd>
                       </div>
                     </dl>
                   </article>

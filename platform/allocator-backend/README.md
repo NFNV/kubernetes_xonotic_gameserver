@@ -27,6 +27,8 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `POST /tournaments`: create a persisted tournament
 - `GET /tournaments`: list persisted tournaments
 - `GET /tournaments/<tournament_id>`: inspect one persisted tournament
+- `GET /tournaments/<tournament_id>/summary`: get backend-owned winner/progress/final-match summary
+- `POST /tournaments/<tournament_id>/finalize`: mark a tournament `completed`, store `winner_team_id`, and set `completed_at` once the final match has a recorded winner
 - `POST /tournaments/<tournament_id>/teams`: create a team
 - `GET /tournaments/<tournament_id>/teams`: list teams
 - `POST /tournaments/<tournament_id>/rounds`: create a round
@@ -50,7 +52,7 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 
 Match Room state is intentionally process-local memory. It is lost when the backend Pod restarts. That keeps this phase small while still moving the project toward a tournament admin tool.
 
-Tournament state is PostgreSQL-backed. Single-elimination bracket generation, result recording, winner advancement, and persisted server assignments are implemented; auth, other tournament formats, and persisted Match Rooms are intentionally deferred.
+Tournament state is PostgreSQL-backed. Single-elimination bracket generation, result recording, winner advancement, backend-owned tournament summaries, explicit finalization, and persisted server assignments are implemented; auth, other tournament formats, and persisted Match Rooms are intentionally deferred.
 
 For allocated Match Rooms, the backend queries the assigned Xonotic server with UDP `getstatus` and briefly caches the result. This provides live map, game mode, player count, player names, scores, ping, and team scores when available. It is read-only and does not use RCON.
 
@@ -228,6 +230,7 @@ curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" 
   -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"stormkeep\",\"requested_game_mode\":\"dm\"}" | jq
 
 curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" | jq
+curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/summary" | jq
 ```
 
 Create and allocate a Match Room:

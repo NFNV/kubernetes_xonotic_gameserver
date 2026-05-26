@@ -28,17 +28,19 @@ Fields:
 
 - `tournament_id`
 - `name`
-- `status`: `draft`, `active`, `finished`, `cancelled`
+- `status`: `draft`, `active`, `completed`, `cancelled`
 - `created_at`
 - `started_at`
 - `finished_at`
+- `completed_at`
+- `winner_team_id`
 - `description`
 - `format`: initially `manual`
 
 MVP behavior:
 
 - create/list/view tournaments
-- mark active/finished manually
+- mark active/completed manually
 - first bracket phase supports generated single-elimination rounds and matches for 2, 4, and 8 seeded teams
 
 ### Team
@@ -198,9 +200,11 @@ Use explicit resource endpoints. Keep raw RCON and arbitrary command execution o
 POST /tournaments
 GET /tournaments
 GET /tournaments/<tournament_id>
+GET /tournaments/<tournament_id>/summary
 PATCH /tournaments/<tournament_id>
 POST /tournaments/<tournament_id>/start
 POST /tournaments/<tournament_id>/finish
+POST /tournaments/<tournament_id>/finalize
 ```
 
 ### Teams

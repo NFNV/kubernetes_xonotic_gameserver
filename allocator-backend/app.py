@@ -139,7 +139,7 @@ DB_MIGRATIONS_READY = False
 DB_MIGRATION_ERROR: str | None = None
 DB_MIGRATIONS_LOCK = Lock()
 
-TOURNAMENT_STATUSES = ("draft", "active", "finished", "cancelled")
+TOURNAMENT_STATUSES = ("draft", "active", "completed", "finished", "cancelled")
 ROUND_STATUSES = ("created", "scheduled", "running", "finished")
 TOURNAMENT_MATCH_STATUSES = (
     "created",
@@ -174,10 +174,12 @@ DB_MIGRATIONS = (
           description text,
           status text NOT NULL DEFAULT 'draft',
           format text NOT NULL DEFAULT 'manual',
+          winner_team_id uuid,
           bracket_size integer,
           bracket_generated_at timestamptz,
           started_at timestamptz,
           finished_at timestamptz,
+          completed_at timestamptz,
           created_at timestamptz NOT NULL DEFAULT now(),
           updated_at timestamptz NOT NULL DEFAULT now()
         );
@@ -317,6 +319,31 @@ DB_MIGRATIONS = (
         CREATE INDEX IF NOT EXISTS matches_next_match_id_idx
           ON matches (next_match_id)
           WHERE next_match_id IS NOT NULL;
+        """,
+    ),
+    (
+        "004_tournament_finalize_summary",
+        """
+        ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS winner_team_id uuid;
+        ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+
+        DO $$
+        BEGIN
+          ALTER TABLE tournaments
+            ADD CONSTRAINT tournaments_winner_team_id_fkey
+            FOREIGN KEY (winner_team_id) REFERENCES teams(id) ON DELETE RESTRICT;
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
+
+        CREATE INDEX IF NOT EXISTS tournaments_winner_team_id_idx
+          ON tournaments (winner_team_id)
+          WHERE winner_team_id IS NOT NULL;
+        """,
+    ),
+    (
+        "005_tournament_completed_at",
+        """
+        ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS completed_at timestamptz;
         """,
     ),
 )
@@ -2154,8 +2181,8 @@ def fetch_tournament(cur, tournament_id: str) -> dict[str, Any]:
     cur.execute(
         """
         SELECT
-          id, name, slug, description, status, format, bracket_size,
-          bracket_generated_at, started_at, finished_at, created_at, updated_at
+          id, name, slug, description, status, format, winner_team_id, bracket_size,
+          bracket_generated_at, started_at, finished_at, completed_at, created_at, updated_at
         FROM tournaments
         WHERE id = %s
         """,
@@ -2165,6 +2192,200 @@ def fetch_tournament(cur, tournament_id: str) -> dict[str, Any]:
     if not tournament:
         raise BackendApiError({"error": "tournament_not_found", "message": f"tournament {tournament_id} was not found"}, 404)
     return tournament
+
+
+def fetch_tournament_teams(cur, tournament_id: str) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT id, tournament_id, name, tag, seed, created_at, updated_at
+        FROM teams
+        WHERE tournament_id = %s
+        ORDER BY seed NULLS LAST, name
+        """,
+        (tournament_id,),
+    )
+    return cur.fetchall()
+
+
+def fetch_tournament_rounds(cur, tournament_id: str) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT id, tournament_id, name, round_order, status, created_at, updated_at
+        FROM rounds
+        WHERE tournament_id = %s
+        ORDER BY round_order, created_at
+        """,
+        (tournament_id,),
+    )
+    return cur.fetchall()
+
+
+def fetch_tournament_matches(cur, tournament_id: str) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT
+          m.id, m.tournament_id, m.round_id, m.team_a_id, m.team_b_id, m.status,
+          m.scheduled_at, m.started_at, m.finished_at, m.winner_team_id,
+          m.team_a_score, m.team_b_score, m.result_notes, m.requested_map,
+          m.requested_game_mode, m.bracket_position, m.next_match_id,
+          m.next_match_slot, m.created_at, m.updated_at
+        FROM matches m
+        LEFT JOIN rounds r ON r.id = m.round_id
+        WHERE m.tournament_id = %s
+        ORDER BY r.round_order NULLS LAST, m.bracket_position NULLS LAST, m.scheduled_at NULLS LAST, m.created_at
+        """,
+        (tournament_id,),
+    )
+    return cur.fetchall()
+
+
+def tournament_match_has_result(match: dict[str, Any] | None) -> bool:
+    if not match:
+        return False
+    return (
+        match.get("team_a_score") is not None
+        and match.get("team_b_score") is not None
+        and bool(match.get("winner_team_id"))
+    )
+
+
+def find_tournament_final_match(matches: list[dict[str, Any]], rounds: list[dict[str, Any]]) -> dict[str, Any] | None:
+    round_order_by_id = {str(round_row["id"]): round_row.get("round_order") or 0 for round_row in rounds}
+    bracket_finals = [
+        match
+        for match in matches
+        if match.get("bracket_position") is not None and not match.get("next_match_id")
+    ]
+
+    if bracket_finals:
+        return sorted(
+            bracket_finals,
+            key=lambda match: (
+                round_order_by_id.get(str(match.get("round_id")), 0),
+                match.get("bracket_position") or 0,
+                str(match.get("created_at") or match.get("id")),
+            ),
+            reverse=True,
+        )[0]
+
+    finished_matches = [match for match in matches if tournament_match_has_result(match)]
+    if not finished_matches:
+        return None
+
+    return sorted(
+        finished_matches,
+        key=lambda match: str(match.get("finished_at") or match.get("updated_at") or match.get("created_at") or match.get("id")),
+        reverse=True,
+    )[0]
+
+
+def team_by_id(teams: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(team["id"]): team for team in teams}
+
+
+def tournament_team_summary(teams_by_id: dict[str, dict[str, Any]], team_id: Any) -> dict[str, Any] | None:
+    if not team_id:
+        return None
+    return row_to_json(teams_by_id.get(str(team_id)))
+
+
+def build_tournament_summary(cur, tournament_id: str) -> dict[str, Any]:
+    tournament = fetch_tournament(cur, tournament_id)
+    teams = fetch_tournament_teams(cur, tournament_id)
+    rounds = fetch_tournament_rounds(cur, tournament_id)
+    matches = fetch_tournament_matches(cur, tournament_id)
+    final_match = find_tournament_final_match(matches, rounds)
+    final_has_result = tournament_match_has_result(final_match)
+    teams_by_id = team_by_id(teams)
+
+    champion_team_id = str(final_match["winner_team_id"]) if final_has_result else None
+    runner_up_team_id = None
+    if champion_team_id and final_match.get("team_a_id") and final_match.get("team_b_id"):
+        team_a_id = str(final_match["team_a_id"])
+        team_b_id = str(final_match["team_b_id"])
+        runner_up_team_id = team_b_id if champion_team_id == team_a_id else team_a_id
+
+    official_winner_team = tournament_team_summary(teams_by_id, tournament.get("winner_team_id"))
+    champion_team = tournament_team_summary(teams_by_id, champion_team_id)
+    runner_up_team = tournament_team_summary(teams_by_id, runner_up_team_id)
+    total_matches = len(matches)
+    finished_matches = sum(1 for match in matches if tournament_match_has_result(match))
+    remaining_matches = max(total_matches - finished_matches, 0)
+    final_score = None
+    if final_has_result:
+        final_score = {
+            "team_a": final_match.get("team_a_score"),
+            "team_b": final_match.get("team_b_score"),
+            "label": f"{final_match.get('team_a_score')} - {final_match.get('team_b_score')}",
+        }
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM match_server_assignments
+        WHERE tournament_id = %s AND status = 'active'
+        """,
+        (tournament_id,),
+    )
+    active_assignment_count = cur.fetchone()["count"]
+
+    finalize_blockers = []
+    is_finalized = tournament.get("status") in {"completed", "finished"} and bool(tournament.get("winner_team_id"))
+    if is_finalized:
+        finalize_blockers.append("Tournament is already finalized.")
+    elif tournament.get("status") == "cancelled":
+        finalize_blockers.append("Cancelled tournaments cannot be finalized.")
+    elif not final_match:
+        finalize_blockers.append("No final match is available yet.")
+    elif not final_has_result:
+        finalize_blockers.append("Record the final match result before finalizing the tournament.")
+
+    final_teams_label = "No final match yet"
+    if final_match:
+        team_a_name = teams_by_id.get(str(final_match.get("team_a_id")), {}).get("name") if final_match.get("team_a_id") else "TBD"
+        team_b_name = teams_by_id.get(str(final_match.get("team_b_id")), {}).get("name") if final_match.get("team_b_id") else "TBD"
+        final_teams_label = f"{team_a_name} vs {team_b_name}"
+
+    if official_winner_team:
+        story = f"{official_winner_team['name']} is the finalized tournament winner."
+    elif champion_team and runner_up_team and final_score:
+        story = f"{champion_team['name']} defeated {runner_up_team['name']} {final_score['label']} in the final. Finalize to lock the tournament winner."
+    elif champion_team:
+        story = f"{champion_team['name']} won the latest completed match. Finalize when this is the intended tournament result."
+    elif total_matches:
+        story = f"{finished_matches} of {total_matches} matches are finished. {remaining_matches} remaining."
+    else:
+        story = "No matches yet. Add teams and generate a bracket or create matches manually."
+
+    return {
+        "tournament": row_to_json(tournament),
+        "status": tournament.get("status"),
+        "completed": is_finalized,
+        "completed_at": row_to_json({"completed_at": tournament.get("completed_at")})["completed_at"],
+        "winner_team": official_winner_team,
+        "champion_team": champion_team,
+        "runner_up_team": runner_up_team,
+        "final_match": row_to_json(final_match),
+        "final_teams_label": final_teams_label,
+        "final_score": final_score,
+        "final_notes": final_match.get("result_notes") if final_match else None,
+        "story": story,
+        "can_finalize": len(finalize_blockers) == 0,
+        "finalize_blockers": finalize_blockers,
+        "active_server_assignment_count": active_assignment_count,
+        "counts": {
+            "teams": len(teams),
+            "rounds": len(rounds),
+            "matches": total_matches,
+            "finished_matches": finished_matches,
+            "remaining_matches": remaining_matches,
+        },
+        "bracket": {
+            "format": tournament.get("format"),
+            "size": tournament.get("bracket_size"),
+            "generated_at": row_to_json({"generated_at": tournament.get("bracket_generated_at")})["generated_at"],
+        },
+    }
 
 
 def fetch_tournament_match(cur, tournament_id: str, match_id: str) -> dict[str, Any]:
@@ -2560,8 +2781,8 @@ def create_tournament():
                     INSERT INTO tournaments (id, name, slug, description, status, format)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     RETURNING
-                      id, name, slug, description, status, format, bracket_size,
-                      bracket_generated_at, started_at, finished_at, created_at, updated_at
+                      id, name, slug, description, status, format, winner_team_id, bracket_size,
+                      bracket_generated_at, started_at, finished_at, completed_at, created_at, updated_at
                     """,
                     (tournament_id, name, slug, description, status, tournament_format),
                 )
@@ -2582,8 +2803,8 @@ def list_tournaments():
                 cur.execute(
                     """
                     SELECT
-                      id, name, slug, description, status, format, bracket_size,
-                      bracket_generated_at, started_at, finished_at, created_at, updated_at
+                      id, name, slug, description, status, format, winner_team_id, bracket_size,
+                      bracket_generated_at, started_at, finished_at, completed_at, created_at, updated_at
                     FROM tournaments
                     ORDER BY created_at DESC
                     """
@@ -2611,6 +2832,67 @@ def get_tournament(tournament_id: str):
         return db_exception_response(exc, fallback_error="tournament_read_failed", fallback_message="failed to read tournament")
 
     return jsonify(row_to_json(tournament))
+
+
+@APP.get("/tournaments/<tournament_id>/summary")
+def get_tournament_summary(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                summary = build_tournament_summary(cur, tournament_id)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="tournament_summary_failed", fallback_message="failed to build tournament summary")
+
+    return jsonify(summary)
+
+
+@APP.post("/tournaments/<tournament_id>/finalize")
+def finalize_tournament(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                summary = build_tournament_summary(cur, tournament_id)
+                if not summary["can_finalize"]:
+                    return jsonify(
+                        {
+                            "error": "tournament_finalize_blocked",
+                            "message": summary["finalize_blockers"][0],
+                            "finalize_blockers": summary["finalize_blockers"],
+                            "summary": summary,
+                        }
+                    ), 409
+
+                winner_team_id = summary["champion_team"]["id"]
+                cur.execute(
+                    """
+                    UPDATE tournaments
+                    SET status = 'completed',
+                        winner_team_id = %s,
+                        completed_at = COALESCE(completed_at, now()),
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING
+                      id, name, slug, description, status, format, winner_team_id, bracket_size,
+                      bracket_generated_at, started_at, finished_at, completed_at, created_at, updated_at
+                    """,
+                    (winner_team_id, tournament_id),
+                )
+                tournament = cur.fetchone()
+                summary = build_tournament_summary(cur, tournament_id)
+            conn.commit()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(exc, fallback_error="tournament_finalize_failed", fallback_message="failed to finalize tournament")
+
+    return jsonify({"tournament": row_to_json(tournament), "summary": summary})
 
 
 @APP.post("/tournaments/<tournament_id>/teams")
@@ -2842,8 +3124,8 @@ def generate_tournament_bracket(tournament_id: str):
                         updated_at = now()
                     WHERE id = %s
                     RETURNING
-                      id, name, slug, description, status, format, bracket_size,
-                      bracket_generated_at, started_at, finished_at, created_at, updated_at
+                      id, name, slug, description, status, format, winner_team_id, bracket_size,
+                      bracket_generated_at, started_at, finished_at, completed_at, created_at, updated_at
                     """,
                     (bracket_size, tournament_id),
                 )
