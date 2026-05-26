@@ -10,9 +10,15 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  max-width: 100%;
+}
+
 body {
   margin: 0;
-  min-width: 320px;
+  min-width: 0;
   min-height: 100vh;
   background:
     linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
@@ -42,9 +48,10 @@ button:disabled {
 }
 
 .page {
+  width: min(calc(100% - 32px), 1440px);
   max-width: 1440px;
   margin: 0 auto;
-  padding: 30px 22px 64px;
+  padding: 30px 0 64px;
 }
 
 .hero {
@@ -193,14 +200,21 @@ button:disabled {
 
 .dashboard-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.32fr);
+  gap: 24px;
   align-items: start;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.dashboard-layout > * {
+  min-width: 0;
 }
 
 .right-rail {
   display: grid;
-  gap: 16px;
+  gap: 20px;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -230,18 +244,20 @@ button:disabled {
 }
 
 .metrics {
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
   margin-bottom: 18px;
 }
 
 .right-rail .metrics {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
   gap: 10px;
   margin-bottom: 0;
 }
 
 .metric-card,
 .panel {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid rgba(126, 176, 211, 0.16);
   border-radius: 24px;
   background:
@@ -283,7 +299,7 @@ button:disabled {
 }
 
 .panels {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   margin-bottom: 18px;
 }
 
@@ -310,6 +326,7 @@ button:disabled {
 .right-rail .panel,
 .right-rail .grid {
   margin-bottom: 0;
+  min-width: 0;
 }
 
 .panel-header {
@@ -360,7 +377,7 @@ button:disabled {
 
 .match-form {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(130px, 0.45fr) minmax(120px, 0.4fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.45fr) minmax(0, 0.4fr) auto;
   gap: 12px;
   align-items: end;
   margin-bottom: 12px;
@@ -448,9 +465,11 @@ button:disabled {
 
 .tournament-layout {
   display: grid;
-  grid-template-columns: minmax(240px, 0.34fr) minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: minmax(0, 0.32fr) minmax(0, 1fr);
+  gap: 22px;
   align-items: start;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .tournament-sidebar-stack {
@@ -551,7 +570,7 @@ button:disabled {
 
 .tournament-summary-card {
   display: grid;
-  grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr);
   gap: 16px;
   align-items: start;
   margin-bottom: 14px;
@@ -675,14 +694,14 @@ button:disabled {
 .tournament-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin-bottom: 14px;
+  gap: 16px;
+  margin-bottom: 18px;
 }
 
 .data-card {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 14px;
+  padding: 16px;
 }
 
 .tournament-matches-card {
@@ -721,13 +740,13 @@ button:disabled {
 
 .compact-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(80px, 0.4fr) minmax(70px, 0.3fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(82px, 0.4fr) minmax(82px, 0.3fr) auto;
   gap: 10px;
   align-items: end;
 }
 
 .data-card:nth-child(2) .compact-form {
-  grid-template-columns: minmax(0, 1fr) minmax(80px, 0.35fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(82px, 0.35fr) auto;
 }
 
 .tournament-match-form {
@@ -782,8 +801,8 @@ button:disabled {
 
 .tournament-match-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 14px;
 }
 
 .tournament-match-card {
@@ -921,7 +940,7 @@ button:disabled {
 
 .bracket-columns {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
   gap: 12px;
 }
 
@@ -1086,7 +1105,7 @@ button:disabled {
 
 .match-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 14px;
 }
 
@@ -1259,6 +1278,8 @@ button:disabled {
 
 .assigned-server code {
   color: #dffbff;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .admin-controls {
@@ -1392,7 +1413,7 @@ button:disabled {
 
 .player-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(90px, 0.8fr) auto;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) auto;
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
@@ -1434,6 +1455,7 @@ button:disabled {
   margin: 0;
   color: #eef8ff;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .empty-state {
@@ -1491,6 +1513,7 @@ button:disabled {
 }
 
 .table-wrap {
+  min-width: 0;
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
@@ -1538,6 +1561,7 @@ th {
 .join-endpoint {
   color: #76efff;
   font-weight: 900;
+  overflow-wrap: anywhere;
   text-shadow: 0 0 18px rgba(0, 209, 255, 0.18);
 }
 
@@ -1545,6 +1569,7 @@ th {
   color: #f5fbff;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.9rem;
+  overflow-wrap: anywhere;
 }
 
 .muted-endpoint {
@@ -1559,7 +1584,7 @@ th {
 .tournament-server-cell {
   display: grid;
   gap: 5px;
-  min-width: 220px;
+  min-width: 0;
 }
 
 .tournament-match-card .tournament-server-cell {
@@ -1611,7 +1636,7 @@ th {
 .winner-cell {
   display: grid;
   gap: 3px;
-  min-width: 110px;
+  min-width: 0;
 }
 
 .winner-cell strong {
@@ -1627,11 +1652,11 @@ th {
 .score-cell {
   display: grid;
   gap: 4px;
-  min-width: 90px;
+  min-width: 0;
 }
 
 .score-cell-final {
-  min-width: 150px;
+  min-width: 0;
 }
 
 .score-cell-final > span:first-child {
@@ -1656,7 +1681,7 @@ th {
 .tournament-actions {
   display: grid;
   gap: 10px;
-  min-width: 260px;
+  min-width: 0;
 }
 
 .tournament-admin-controls {
@@ -1913,7 +1938,7 @@ th {
 
 .history-item {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
   gap: 12px;
   align-items: center;
   padding: 12px;
@@ -1941,7 +1966,7 @@ th {
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1240px) {
   .dashboard-layout {
     grid-template-columns: 1fr;
   }
@@ -1957,10 +1982,15 @@ th {
   }
 }
 
-@media (max-width: 920px) {
+@media (max-width: 980px) {
   .tournament-layout,
+  .tournament-summary-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 920px) {
   .right-rail,
-  .tournament-summary-card,
   .tournament-summary-grid {
     grid-template-columns: 1fr;
   }
@@ -1968,7 +1998,8 @@ th {
 
 @media (max-width: 720px) {
   .page {
-    padding: 20px 14px 48px;
+    width: min(calc(100% - 24px), 1440px);
+    padding: 20px 0 48px;
   }
 
   .hero {
