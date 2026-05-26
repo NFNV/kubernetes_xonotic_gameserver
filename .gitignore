@@ -60,3 +60,7 @@ kubeconfig.*
 *.tar.gz
 *.zip
 node_modules/
+
+# Local AI/project working notes
+AGENTS.md
+PROJECT_NOTES.md
