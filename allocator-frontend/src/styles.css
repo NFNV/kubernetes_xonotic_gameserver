@@ -720,6 +720,20 @@ button:disabled {
   gap: 4px;
 }
 
+.subsection-actions {
+  justify-items: end;
+}
+
+.subsection-actions button {
+  width: auto;
+}
+
+.subsection-actions small {
+  color: #8fa8bc;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .subsection-header h3 {
   margin: 0;
   color: #dffbff;
@@ -2009,6 +2023,15 @@ th {
 
   .hero-actions {
     justify-content: flex-start;
+  }
+
+  .subsection-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .subsection-actions {
+    justify-items: start;
   }
 
   .match-form {

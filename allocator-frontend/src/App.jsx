@@ -251,6 +251,8 @@ const TOURNAMENT_MATCH_STATUS_LABELS = {
 };
 
 const TERMINAL_TOURNAMENT_MATCH_STATUSES = new Set(["finished", "released"]);
+const REGENERABLE_TOURNAMENT_MATCH_STATUSES = new Set(["created", "scheduled"]);
+const SERVER_HISTORY_TOURNAMENT_MATCH_STATUSES = new Set(["server_allocating", "server_ready", "failed", "released"]);
 
 function tournamentMatchStatusLabel(status) {
   return TOURNAMENT_MATCH_STATUS_LABELS[status] || status || "Unknown";
@@ -278,9 +280,45 @@ function tournamentMatchCanRecordResult(match) {
 }
 
 function tournamentMatchCanAllocateServer(match) {
+  const status = match.status || "created";
   return !match.active_server_assignment
-    && !TERMINAL_TOURNAMENT_MATCH_STATUSES.has(match.status)
-    && match.status !== "server_allocating";
+    && !TERMINAL_TOURNAMENT_MATCH_STATUSES.has(status)
+    && status !== "server_allocating";
+}
+
+function isGeneratedBracketMatch(match) {
+  return match.bracket_position !== null && match.bracket_position !== undefined;
+}
+
+function tournamentMatchCanBulkAllocate(match) {
+  return isGeneratedBracketMatch(match)
+    && Boolean(match.team_a_id && match.team_b_id)
+    && !tournamentMatchHasResult(match)
+    && tournamentMatchCanAllocateServer(match);
+}
+
+function bracketRegenerationBlocker(tournament, matches) {
+  if (!tournament) {
+    return "Select a tournament first.";
+  }
+
+  if (["completed", "finished"].includes(tournament.status)) {
+    return "Completed tournaments cannot regenerate brackets.";
+  }
+
+  if (matches.some((match) => tournamentMatchHasResult(match) || match.status === "finished")) {
+    return "Bracket regeneration is blocked after a match result is recorded.";
+  }
+
+  if (matches.some((match) => match.active_server_assignment || SERVER_HISTORY_TOURNAMENT_MATCH_STATUSES.has(match.status || "created"))) {
+    return "Bracket regeneration is blocked after a server has been allocated.";
+  }
+
+  if (matches.some((match) => !REGENERABLE_TOURNAMENT_MATCH_STATUSES.has(match.status || "created"))) {
+    return "Bracket regeneration is only available before matches start.";
+  }
+
+  return "";
 }
 
 function formatTimestamp(value) {
@@ -416,6 +454,8 @@ export default function App() {
   const [generatingBracket, setGeneratingBracket] = useState(false);
   const [finalizingTournament, setFinalizingTournament] = useState(false);
   const [creatingTournamentMatch, setCreatingTournamentMatch] = useState(false);
+  const [allocatingPlayableMatches, setAllocatingPlayableMatches] = useState(false);
+  const [bulkAllocationProgress, setBulkAllocationProgress] = useState("");
   const [allocatingTournamentServers, setAllocatingTournamentServers] = useState({});
   const [releasingTournamentServers, setReleasingTournamentServers] = useState({});
   const [recordingTournamentResults, setRecordingTournamentResults] = useState({});
@@ -698,18 +738,27 @@ export default function App() {
     }
   }
 
-  async function generateTournamentBracket() {
+  async function generateTournamentBracket({ replaceExisting = false } = {}) {
     if (!selectedTournamentId) {
       return;
     }
 
-    const blocker = bracketGenerationBlocker(tournamentTeams, tournamentRounds, tournamentMatches);
+    const blocker = replaceExisting
+      ? bracketRegenerationBlocker(selectedTournament, tournamentMatches)
+      : bracketGenerationBlocker(tournamentTeams, tournamentRounds, tournamentMatches);
     if (blocker) {
       setTournamentError({
-        title: "Generate bracket unavailable",
+        title: replaceExisting ? "Regenerate bracket unavailable" : "Generate bracket unavailable",
         message: blocker,
       });
       return;
+    }
+
+    if (replaceExisting) {
+      const confirmed = window.confirm("Regenerate this bracket? Current rounds and matches will be replaced. This is only allowed before server allocation or result recording.");
+      if (!confirmed) {
+        return;
+      }
     }
 
     setGeneratingBracket(true);
@@ -720,7 +769,10 @@ export default function App() {
       const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/bracket/generate`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(config),
+        body: JSON.stringify({
+          ...config,
+          replace_existing: replaceExisting || undefined,
+        }),
       });
       if (result.tournament) {
         setTournaments((current) => current.map((tournament) => (
@@ -730,12 +782,12 @@ export default function App() {
       setTournamentRounds(result.rounds || []);
       setTournamentMatches(result.matches || []);
       await loadTournamentDetails(selectedTournamentId, { silent: true });
-      setCopyMessage(`${result.tournament?.bracket_size || tournamentTeams.length}-team bracket generated.`);
+      setCopyMessage(`${result.tournament?.bracket_size || tournamentTeams.length}-team bracket ${replaceExisting ? "regenerated" : "generated"}.`);
       window.setTimeout(() => setCopyMessage(""), 2400);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
       setTournamentError({
-        title: "Generate bracket failed",
+        title: replaceExisting ? "Regenerate bracket failed" : "Generate bracket failed",
         message: err.message,
       });
     } finally {
@@ -856,6 +908,94 @@ export default function App() {
       setAllocatingTournamentServers((current) => {
         const next = { ...current };
         delete next[match.id];
+        return next;
+      });
+    }
+  }
+
+  async function allocatePlayableTournamentMatches(matchesToAllocate) {
+    if (!selectedTournamentId) {
+      return;
+    }
+
+    if (matchesToAllocate.length === 0) {
+      setTournamentError({
+        title: "No playable matches to allocate",
+        message: "Only generated bracket matches with both teams assigned and no active server are allocated in bulk.",
+      });
+      return;
+    }
+
+    const capacityWarning = fleetStatus.ready_replicas < matchesToAllocate.length
+      ? ` Ready capacity is currently ${fleetStatus.ready_replicas}; extra allocations may wait for FleetAutoscaler replenishment or fail.`
+      : "";
+    const confirmed = window.confirm(`Allocate servers for ${matchesToAllocate.length} playable bracket match${matchesToAllocate.length === 1 ? "" : "es"}?${capacityWarning}`);
+    if (!confirmed) {
+      return;
+    }
+
+    setAllocatingPlayableMatches(true);
+    setTournamentError(null);
+    setBulkAllocationProgress(`0 / ${matchesToAllocate.length}`);
+    setAllocatingTournamentServers((current) => ({
+      ...current,
+      ...Object.fromEntries(matchesToAllocate.map((match) => [match.id, true])),
+    }));
+
+    const failures = [];
+    const successes = [];
+
+    try {
+      for (const [index, match] of matchesToAllocate.entries()) {
+        const matchLabel = match.bracket_position ? `Match ${match.bracket_position}` : `Match ${shortId(match.id)}`;
+        setBulkAllocationProgress(`${index + 1} / ${matchesToAllocate.length}`);
+
+        try {
+          const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/allocate-server`, {
+            method: "POST",
+          });
+          if (result.warning || result.configuration?.verified === false) {
+            throw new Error(result.warning || result.configuration?.message || "requested map/mode verification failed");
+          }
+          successes.push({ match, endpoint: assignmentEndpoint(result.assignment) });
+        } catch (err) {
+          failures.push({ label: matchLabel, message: err.message });
+        } finally {
+          setAllocatingTournamentServers((current) => {
+            const next = { ...current };
+            delete next[match.id];
+            return next;
+          });
+        }
+      }
+
+      await loadTournamentDetails(selectedTournamentId, { silent: true });
+      await loadDashboard({ silent: true, source: "Playable tournament assignment refresh" });
+
+      if (failures.length > 0) {
+        setTournamentError({
+          title: "Some playable matches failed to allocate",
+          message: `${successes.length} assigned, ${failures.length} failed. ${failures.map((failure) => `${failure.label}: ${failure.message}`).join(" ")}`,
+        });
+      }
+
+      if (successes.length > 0) {
+        setCopyMessage(`${successes.length} playable bracket match${successes.length === 1 ? "" : "es"} assigned.`);
+        window.setTimeout(() => setCopyMessage(""), 2400);
+      }
+    } catch (err) {
+      setTournamentError({
+        title: "Allocate playable matches failed",
+        message: err.message,
+      });
+    } finally {
+      setAllocatingPlayableMatches(false);
+      setBulkAllocationProgress("");
+      setAllocatingTournamentServers((current) => {
+        const next = { ...current };
+        for (const match of matchesToAllocate) {
+          delete next[match.id];
+        }
         return next;
       });
     }
@@ -1350,11 +1490,14 @@ export default function App() {
   const selectedTournament = tournaments.find((tournament) => tournament.id === selectedTournamentId) || null;
   const teamNameById = Object.fromEntries(tournamentTeams.map((team) => [team.id, team.name]));
   const roundNameById = Object.fromEntries(tournamentRounds.map((round) => [round.id, round.name]));
-  const bracketBlocker = selectedTournament ? bracketGenerationBlocker(tournamentTeams, tournamentRounds, tournamentMatches) : "";
-  const canGenerateBracket = Boolean(selectedTournament && !bracketBlocker);
   const bracketConfig = normalizeGameConfig(tournamentMatchForm, gameConfigOptions);
   const bracketColumns = bracketRoundColumns(tournamentRounds, tournamentMatches);
   const hasBracketMatches = tournamentMatches.some((match) => match.bracket_position !== null && match.bracket_position !== undefined);
+  const playableBracketMatches = tournamentMatches.filter(tournamentMatchCanBulkAllocate);
+  const bracketCreateBlocker = selectedTournament ? bracketGenerationBlocker(tournamentTeams, tournamentRounds, tournamentMatches) : "";
+  const bracketReplaceBlocker = selectedTournament && hasBracketMatches ? bracketRegenerationBlocker(selectedTournament, tournamentMatches) : "";
+  const bracketActionBlocker = hasBracketMatches ? bracketReplaceBlocker : bracketCreateBlocker;
+  const canGenerateBracket = Boolean(selectedTournament && !bracketActionBlocker);
   const selectedTournamentSummary = selectedTournament ? tournamentSummaryData : null;
   const summaryCounts = selectedTournamentSummary?.counts || {};
   const summaryBracket = selectedTournamentSummary?.bracket || {};
@@ -1580,21 +1723,21 @@ export default function App() {
                 <article className="bracket-generator-card">
                   <div>
                     <p className="eyebrow">Single Elimination</p>
-                    <h3>Generate Bracket</h3>
+                    <h3>{hasBracketMatches ? "Regenerate Bracket" : "Generate Bracket"}</h3>
                     <p>
                       {selectedTournament.bracket_generated_at
-                        ? `Generated ${selectedTournament.bracket_size}-team bracket.`
-                        : bracketBlocker || `${tournamentTeams.length}-team bracket ready.`}
+                        ? bracketActionBlocker || `Generated ${selectedTournament.bracket_size}-team bracket. Regeneration is available until servers or results exist.`
+                        : bracketActionBlocker || `${tournamentTeams.length}-team bracket ready.`}
                     </p>
                     <span>Match config: {bracketConfig.requested_map} / {bracketConfig.requested_game_mode}</span>
                   </div>
                   <button
-                    className="primary"
+                    className={hasBracketMatches ? "secondary" : "primary"}
                     type="button"
-                    onClick={() => void generateTournamentBracket()}
+                    onClick={() => void generateTournamentBracket({ replaceExisting: hasBracketMatches })}
                     disabled={!canGenerateBracket || generatingBracket}
                   >
-                    {generatingBracket ? "Generating..." : "Generate Bracket"}
+                    {generatingBracket ? "Working..." : hasBracketMatches ? "Regenerate Bracket" : "Generate Bracket"}
                   </button>
                 </article>
 
@@ -1705,7 +1848,20 @@ export default function App() {
                             <h3>Bracket</h3>
                             <p>Round columns show generated matches in bracket order.</p>
                           </div>
-                          <span>{bracketColumns.reduce((count, column) => count + column.matches.length, 0)} matches</span>
+                          <div className="subsection-actions">
+                            <span>{bracketColumns.reduce((count, column) => count + column.matches.length, 0)} matches</span>
+                            <button
+                              className="primary"
+                              type="button"
+                              onClick={() => void allocatePlayableTournamentMatches(playableBracketMatches)}
+                              disabled={allocatingPlayableMatches || playableBracketMatches.length === 0}
+                            >
+                              {allocatingPlayableMatches ? `Allocating ${bulkAllocationProgress}` : "Allocate Playable Matches"}
+                            </button>
+                            <small>
+                              {playableBracketMatches.length} playable now · Ready capacity: {fleetStatus.ready_replicas}
+                            </small>
+                          </div>
                         </div>
                         <div className="bracket-columns">
                           {bracketColumns.map(({ round, matches: roundMatches }) => (
@@ -1836,16 +1992,20 @@ export default function App() {
                             {creatingTournamentMatch ? "Working..." : "Create Match"}
                           </button>
                           <button
-                            className="primary"
+                            className={hasBracketMatches ? "secondary" : "primary"}
                             type="button"
                             onClick={() => void createTournamentMatch({ allocate: true })}
                             disabled={creatingTournamentMatch}
                           >
-                            {creatingTournamentMatch ? "Working..." : "Create & Allocate Server"}
+                            {creatingTournamentMatch ? "Working..." : hasBracketMatches ? "Create Ad Hoc & Allocate" : "Create & Allocate Server"}
                           </button>
                           <span className="capacity-hint">Ready capacity: {fleetStatus.ready_replicas}</span>
                         </div>
-                        <p className="deferred-note">{VERIFIED_CONFIG_NOTE}</p>
+                        <p className="deferred-note">
+                          {hasBracketMatches
+                            ? `Use Allocate Playable Matches for generated bracket matches. Manual creation here is for ad hoc matches only. ${VERIFIED_CONFIG_NOTE}`
+                            : VERIFIED_CONFIG_NOTE}
+                        </p>
                       </form>
 
                       {tournamentMatches.length === 0 ? (

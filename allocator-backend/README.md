@@ -24,7 +24,7 @@ Implemented now:
 - create/list teams for a tournament
 - create/list rounds for a tournament
 - create/list tournament matches
-- generate 2-, 4-, and 8-team single-elimination brackets from seeded teams
+- generate 2-, 4-, and 8-team single-elimination brackets from seeded teams, with safe regeneration before server assignments or results exist
 - record tournament match results and mark matches finished
 - advance generated bracket winners into their next match slot after result recording
 - allocate/release one persisted server assignment for a tournament match

@@ -152,6 +152,7 @@ TOURNAMENT_MATCH_STATUSES = (
     "failed",
 )
 SUPPORTED_BRACKET_SIZES = (2, 4, 8)
+BRACKET_REGENERABLE_MATCH_STATUSES = ("created", "scheduled")
 BRACKET_SEED_PAIRS = {
     2: ((1, 2),),
     4: ((1, 4), (2, 3)),
@@ -2627,6 +2628,84 @@ def ensure_bracket_generation_allowed(cur, tournament_id: str) -> None:
         )
 
 
+def ensure_bracket_replacement_allowed(cur, tournament: dict[str, Any]) -> None:
+    tournament_id = str(tournament["id"])
+    if tournament.get("status") in {"completed", "finished"}:
+        raise BackendApiError(
+            {
+                "error": "bracket_replacement_conflict",
+                "message": "completed tournaments cannot regenerate brackets",
+                "tournament_status": tournament.get("status"),
+            },
+            409,
+        )
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM matches
+        WHERE tournament_id = %s
+          AND (
+            winner_team_id IS NOT NULL
+            OR team_a_score IS NOT NULL
+            OR team_b_score IS NOT NULL
+            OR finished_at IS NOT NULL
+            OR status = 'finished'
+          )
+        """,
+        (tournament_id,),
+    )
+    result_count = cur.fetchone()["count"]
+    if result_count:
+        raise BackendApiError(
+            {
+                "error": "bracket_replacement_conflict",
+                "message": "recorded match results must be cleared by creating a new tournament; this bracket cannot be regenerated",
+                "result_match_count": result_count,
+            },
+            409,
+        )
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM match_server_assignments
+        WHERE tournament_id = %s
+        """,
+        (tournament_id,),
+    )
+    assignment_count = cur.fetchone()["count"]
+    if assignment_count:
+        raise BackendApiError(
+            {
+                "error": "bracket_replacement_conflict",
+                "message": "server assignment history exists; release or avoid allocating servers before regenerating the bracket",
+                "assignment_count": assignment_count,
+            },
+            409,
+        )
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM matches
+        WHERE tournament_id = %s
+          AND status <> ALL(%s)
+        """,
+        (tournament_id, list(BRACKET_REGENERABLE_MATCH_STATUSES)),
+    )
+    started_count = cur.fetchone()["count"]
+    if started_count:
+        raise BackendApiError(
+            {
+                "error": "bracket_replacement_conflict",
+                "message": "brackets can only be regenerated before matches start",
+                "started_match_count": started_count,
+            },
+            409,
+        )
+
+
 def build_bracket_rows(
     *,
     bracket_size: int,
@@ -3021,6 +3100,7 @@ def generate_tournament_bracket(tournament_id: str):
         require_db()
         tournament_id = validate_db_id(tournament_id, "tournament_id")
         body = parse_json_body()
+        replace_existing = validate_optional_bool(body.get("replace_existing"), "replace_existing")
         requested_map, requested_game_mode = validate_requested_game_config(
             body.get("requested_map", body.get("map")),
             body.get("requested_game_mode", body.get("game_mode")),
@@ -3028,8 +3108,24 @@ def generate_tournament_bracket(tournament_id: str):
 
         with db_connect() as conn:
             with conn.cursor() as cur:
-                fetch_tournament(cur, tournament_id)
-                ensure_bracket_generation_allowed(cur, tournament_id)
+                existing_tournament = fetch_tournament(cur, tournament_id)
+                if replace_existing:
+                    ensure_bracket_replacement_allowed(cur, existing_tournament)
+                    cur.execute(
+                        """
+                        UPDATE matches
+                        SET next_match_id = NULL,
+                            next_match_slot = NULL,
+                            updated_at = now()
+                        WHERE tournament_id = %s
+                        """,
+                        (tournament_id,),
+                    )
+                    cur.execute("DELETE FROM matches WHERE tournament_id = %s", (tournament_id,))
+                    cur.execute("DELETE FROM rounds WHERE tournament_id = %s", (tournament_id,))
+                else:
+                    ensure_bracket_generation_allowed(cur, tournament_id)
+
                 bracket_size, teams_by_seed = fetch_seeded_bracket_teams(cur, tournament_id)
 
                 round_rows = []
@@ -3141,8 +3237,9 @@ def generate_tournament_bracket(tournament_id: str):
             "tournament": row_to_json(tournament),
             "rounds": rows_to_json(round_rows),
             "matches": rows_to_json(match_rows),
+            "replaced_existing": replace_existing,
         }
-    ), 201
+    ), 200 if replace_existing else 201
 
 
 @APP.post("/tournaments/<tournament_id>/matches")

@@ -29,7 +29,7 @@ Match Rooms are the primary admin-facing objects. Allocated `GameServer` instanc
 
 Map and game mode are selected before allocation. The backend still uses a warm Agones Fleet, so it allocates an already-running server, configures it through whitelisted RCON, verifies with `getstatus`, and only then exposes a join endpoint. Max-player control remains deferred.
 
-The mode selector drives the map selector from `GET /game-config/options`. Only verified combinations are shown in normal create/allocation flows: `dm` on `xoylent`, `stormkeep`, or `solarium`, and `tdm` on `stormkeep`. `ctf`, `duel`, `ca`, `dom`, and `kh` remain hidden from normal selection until specific map/mode pairs are verified in this cluster flow.
+The mode selector drives the map selector from `GET /game-config/options`. Only verified combinations are shown in normal create/allocation flows: `dm` on `xoylent`, `stormkeep`, or `solarium`; `tdm` on `stormkeep`; `ctf` on `runningmanctf`; `duel` on `xoylent`; and `ca` on `stormkeep` or `xoylent`.
 
 Post-allocation admin controls are intentionally narrow: broadcast a message with RCON `say` and use an allowlisted map override with RCON `changelevel`. The UI does not expose raw RCON command input or the RCON password.
 
@@ -37,14 +37,13 @@ Manual Direct Allocation is hidden under Advanced / Debug and should only be use
 
 Allocated Servers are infrastructure allocations. The table can terminate an `Allocated` GameServer directly; Fleet/FleetAutoscaler should replenish capacity afterward. The Commands panel routes safe actions through a linked Match Room when available and keeps direct/manual allocations disabled for RCON actions.
 
-The Tournament Management section is the first UI over PostgreSQL-backed tournament APIs. It lets operators create/select tournaments, add teams, add rounds, and create simple tournament match records. Tournament matches can now allocate and release a persisted server assignment that links the match to one allocated Agones `GameServer`.
+The Tournament Management section is the first UI over PostgreSQL-backed tournament APIs. It lets operators create/select tournaments, add teams, add rounds, generate or safely regenerate single-elimination brackets before servers/results exist, and create simple tournament match records. Generated brackets can bulk-allocate currently playable matches, while individual tournament matches can still allocate and release a persisted server assignment that links the match to one allocated Agones `GameServer`.
 
 Tournament matches also support manual result recording: operators enter Team A score, Team B score, a winner, and optional notes. Saving a result marks the persisted match `finished`. Server release remains a separate operator action.
 
 Current tournament limitations:
 
-- no bracket visualization
-- no automatic winner advancement
+- no external bracket visualization library
 - match names are not persisted by the backend schema yet; the UI displays match IDs
 - tournament match admin controls are limited to whitelisted broadcast and allowlisted map change while an active server assignment exists
 
