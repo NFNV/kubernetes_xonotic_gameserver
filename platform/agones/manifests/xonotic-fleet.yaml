@@ -4,7 +4,7 @@ metadata:
   name: xonotic-fleet
   namespace: xonotic-agones
 spec:
-  replicas: 3
+  replicas: 1
   scheduling: Packed
   strategy:
     type: RollingUpdate
@@ -58,3 +58,8 @@ spec:
                 - name: gameplay
                   containerPort: 26000
                   protocol: UDP
+              resources:
+                requests:
+                  memory: 256Mi
+                limits:
+                  memory: 768Mi

@@ -15,7 +15,7 @@ from flask import Flask, jsonify, request
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from kubernetes.config.config_exception import ConfigException
-from werkzeug.exceptions import BadRequest, UnsupportedMediaType
+from werkzeug.exceptions import BadRequest, HTTPException, UnsupportedMediaType
 
 
 APP = Flask(__name__)
@@ -104,6 +104,17 @@ GAME_CONFIG_OPTIONS = {
         "experimental_maps": ("implosion", "runningman", "runningmanctf", "solarium", "stormkeep"),
     },
 }
+
+
+@APP.errorhandler(Exception)
+def handle_unexpected_error(exc: Exception):
+    if isinstance(exc, HTTPException):
+        return jsonify({"error": "http_error", "message": exc.description}), exc.code or 500
+
+    APP.logger.exception("Unhandled backend exception")
+    return jsonify({"error": "internal_server_error", "message": "unexpected backend error"}), 500
+
+
 ADMIN_ALLOWED_MAPS = tuple(sorted({map_name for config in GAME_CONFIG_OPTIONS.values() for map_name in config["verified_maps"] + config["experimental_maps"]}))
 ADMIN_ALLOWED_GAME_MODES = tuple(GAME_CONFIG_OPTIONS.keys())
 GAME_MODE_ALIASES = {
@@ -355,6 +366,11 @@ class BackendApiError(Exception):
         super().__init__(payload.get("message", "backend API error"))
         self.payload = payload
         self.status_code = status_code
+
+
+@APP.errorhandler(BackendApiError)
+def handle_backend_api_error(exc: BackendApiError):
+    return jsonify(exc.payload), exc.status_code
 
 
 def utc_now() -> str:
@@ -652,6 +668,45 @@ def raise_kubernetes_api_error(
         ),
         502,
     )
+
+
+def read_fleet_status() -> dict[str, Any]:
+    fleet = custom_objects_api.get_namespaced_custom_object(
+        group="agones.dev",
+        version="v1",
+        namespace=AGONES_NAMESPACE,
+        plural="fleets",
+        name=FLEET_NAME,
+    )
+    return extract_fleet_status(fleet)
+
+
+def ensure_ready_gameserver_capacity() -> dict[str, Any]:
+    try:
+        fleet = read_fleet_status()
+    except ApiException as exc:
+        raise_kubernetes_api_error(
+            operation="get",
+            resource_type=FLEET_RESOURCE_KIND,
+            namespace=AGONES_NAMESPACE,
+            name=FLEET_NAME,
+            request_context={"fleet_name": FLEET_NAME},
+            exc=exc,
+        )
+    except Exception as exc:
+        raise BackendApiError({"error": "fleet_status_read_failed", "message": str(exc)}, 500) from exc
+
+    if int(fleet.get("ready_replicas") or 0) <= 0:
+        raise BackendApiError(
+            {
+                "error": "no_ready_servers",
+                "message": "no Ready Xonotic servers are available yet; wait for FleetAutoscaler to replenish capacity",
+                "fleet": fleet,
+            },
+            409,
+        )
+
+    return fleet
 
 
 def extract_allocation_response(allocation: dict) -> dict:
@@ -2426,6 +2481,22 @@ def fetch_active_server_assignment(cur, tournament_id: str, match_id: str) -> di
     return cur.fetchone()
 
 
+def fetch_active_tournament_server_assignments(cur, tournament_id: str) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT
+          id, tournament_id, match_id, allocated_game_server_name,
+          allocation_request_name, address, port, status, created_at,
+          released_at, updated_at
+        FROM match_server_assignments
+        WHERE tournament_id = %s AND status = 'active'
+        ORDER BY created_at
+        """,
+        (tournament_id,),
+    )
+    return cur.fetchall()
+
+
 def assignment_response(assignment: dict[str, Any], *, include_live_status: bool = True) -> dict[str, Any]:
     response = row_to_json(assignment) or {}
     address = assignment.get("address")
@@ -2468,6 +2539,37 @@ def attach_active_assignments_to_matches(cur, matches: list[dict[str, Any]]) -> 
         enriched.append(match_json)
 
     return enriched
+
+
+def mark_tournament_match_allocation_failed(tournament_id: str, match_id: str) -> None:
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE matches m
+                    SET status = 'failed', updated_at = now()
+                    WHERE m.id = %s
+                      AND m.tournament_id = %s
+                      AND m.status = 'server_allocating'
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM match_server_assignments msa
+                        WHERE msa.tournament_id = m.tournament_id
+                          AND msa.match_id = m.id
+                          AND msa.status = 'active'
+                      )
+                    """,
+                    (match_id, tournament_id),
+                )
+            conn.commit()
+    except Exception:
+        APP.logger.warning(
+            "Failed to mark tournament match allocation failure tournament_id=%s match_id=%s",
+            tournament_id,
+            match_id,
+            exc_info=True,
+        )
 
 
 def ensure_team_in_tournament(cur, tournament_id: str, team_id: str | None, field: str) -> None:
@@ -3454,6 +3556,8 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                         }
                     )
 
+                ensure_ready_gameserver_capacity()
+
                 if active_assignment and force_replace:
                     release_result = delete_gameserver(active_assignment["allocated_game_server_name"])
                     cur.execute(
@@ -3540,6 +3644,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                 delete_gameserver(allocation["allocated_game_server_name"])
             except BackendApiError:
                 APP.logger.warning("allocated GameServer cleanup failed after tournament assignment error", exc_info=True)
+        mark_tournament_match_allocation_failed(tournament_id, match_id)
         return jsonify(exc.payload), exc.status_code
     except psycopg.Error as exc:
         if allocation:
@@ -3547,6 +3652,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                 delete_gameserver(allocation["allocated_game_server_name"])
             except BackendApiError:
                 APP.logger.warning("allocated GameServer cleanup failed after tournament assignment DB error", exc_info=True)
+        mark_tournament_match_allocation_failed(tournament_id, match_id)
         return db_exception_response(
             exc,
             fallback_error="server_assignment_create_failed",
@@ -3573,6 +3679,24 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
             "error": exc.payload.get("error", "server_configuration_failed"),
             "message": exc.payload.get("message", "server assignment was persisted, but configuration failed"),
             "details": exc.payload,
+            "live_status": get_cached_xonotic_status(allocation.get("address"), allocation.get("port")),
+        }
+    except Exception as exc:
+        APP.logger.exception(
+            "Unexpected tournament match server configuration failure tournament_id=%s match_id=%s allocation=%s",
+            tournament_id,
+            match_id,
+            allocation,
+        )
+        config_result = {
+            "ok": False,
+            "rcon_sent": False,
+            "verified": False,
+            "requested_map": requested_map,
+            "requested_game_mode": requested_game_mode,
+            "error": "server_configuration_failed",
+            "message": "server assignment was persisted, but configuration failed unexpectedly",
+            "details": {"error_type": type(exc).__name__, "message": str(exc)},
             "live_status": get_cached_xonotic_status(allocation.get("address"), allocation.get("port")),
         }
 
@@ -3684,6 +3808,114 @@ def release_tournament_match_server(tournament_id: str, match_id: str):
     return jsonify({"match": row_to_json(match), "assignment": assignment_response(assignment, include_live_status=False), "release_result": release_result})
 
 
+@APP.post("/tournaments/<tournament_id>/server-assignments/release-all")
+def release_all_tournament_match_servers(tournament_id: str):
+    try:
+        require_db()
+        tournament_id = validate_db_id(tournament_id, "tournament_id")
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                fetch_tournament(cur, tournament_id)
+                active_assignments = fetch_active_tournament_server_assignments(cur, tournament_id)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except psycopg.Error as exc:
+        return db_exception_response(
+            exc,
+            fallback_error="server_assignment_release_all_read_failed",
+            fallback_message="failed to read active tournament server assignments",
+        )
+
+    released_attempts = []
+    failed = []
+    for assignment in active_assignments:
+        assignment_json = assignment_response(assignment, include_live_status=False)
+        try:
+            release_result = delete_gameserver(assignment["allocated_game_server_name"])
+            clear_status_cache(assignment.get("address"), assignment.get("port"))
+            released_attempts.append({"assignment": assignment, "release_result": release_result})
+        except BackendApiError as exc:
+            failed.append(
+                {
+                    "assignment": assignment_json,
+                    "error": exc.payload,
+                    "message": exc.payload.get("message", "failed to release server assignment"),
+                }
+            )
+
+    released_assignments = []
+    released_matches = []
+    if released_attempts:
+        assignment_ids = [attempt["assignment"]["id"] for attempt in released_attempts]
+        match_ids = list({attempt["assignment"]["match_id"] for attempt in released_attempts})
+        assignment_placeholders = ", ".join(["%s"] * len(assignment_ids))
+        match_placeholders = ", ".join(["%s"] * len(match_ids))
+
+        try:
+            with db_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        UPDATE match_server_assignments
+                        SET status = 'released', released_at = now(), updated_at = now()
+                        WHERE id IN ({assignment_placeholders})
+                        RETURNING
+                          id, tournament_id, match_id, allocated_game_server_name,
+                          allocation_request_name, address, port, status, created_at,
+                          released_at, updated_at
+                        """,
+                        assignment_ids,
+                    )
+                    released_assignments = cur.fetchall()
+                    cur.execute(
+                        f"""
+                        UPDATE matches
+                        SET status = 'released', finished_at = COALESCE(finished_at, now()), updated_at = now()
+                        WHERE tournament_id = %s AND id IN ({match_placeholders})
+                        RETURNING
+                          id, tournament_id, round_id, team_a_id, team_b_id, status,
+                          scheduled_at, started_at, finished_at, winner_team_id,
+                          team_a_score, team_b_score, result_notes, requested_map,
+                          requested_game_mode, bracket_position, next_match_id,
+                          next_match_slot, created_at, updated_at
+                        """,
+                        [tournament_id, *match_ids],
+                    )
+                    released_matches = cur.fetchall()
+                conn.commit()
+        except psycopg.Error as exc:
+            return db_exception_response(
+                exc,
+                fallback_error="server_assignment_release_all_update_failed",
+                fallback_message="servers were deleted, but failed to update tournament assignment release state",
+            )
+
+    release_result_by_assignment_id = {
+        str(attempt["assignment"]["id"]): attempt["release_result"]
+        for attempt in released_attempts
+    }
+    match_by_id = {str(match["id"]): match for match in released_matches}
+    released = [
+        {
+            "assignment": assignment_response(assignment, include_live_status=False),
+            "match": row_to_json(match_by_id.get(str(assignment["match_id"]))),
+            "release_result": release_result_by_assignment_id.get(str(assignment["id"])),
+        }
+        for assignment in released_assignments
+    ]
+
+    return jsonify(
+        {
+            "active_count_before": len(active_assignments),
+            "released_count": len(released),
+            "failed_count": len(failed),
+            "released": released,
+            "failed": failed,
+        }
+    )
+
+
 @APP.post("/tournaments/<tournament_id>/matches/<match_id>/admin/broadcast")
 def tournament_match_admin_broadcast(tournament_id: str, match_id: str):
     try:
@@ -3750,13 +3982,7 @@ def game_config_options():
 @APP.get("/fleet-status")
 def fleet_status():
     try:
-        fleet = custom_objects_api.get_namespaced_custom_object(
-            group="agones.dev",
-            version="v1",
-            namespace=AGONES_NAMESPACE,
-            plural="fleets",
-            name=FLEET_NAME,
-        )
+        fleet = read_fleet_status()
     except ApiException as exc:
         return kubernetes_api_error_response(
             operation="get",
@@ -3769,7 +3995,7 @@ def fleet_status():
     except Exception as exc:
         return jsonify({"error": "fleet_status_read_failed", "message": str(exc)}), 500
 
-    return jsonify(extract_fleet_status(fleet))
+    return jsonify(fleet)
 
 
 @APP.get("/gameservers")

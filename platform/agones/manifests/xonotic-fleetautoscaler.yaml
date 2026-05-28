@@ -8,9 +8,9 @@ spec:
   policy:
     type: Buffer
     buffer:
-      bufferSize: 3
-      minReplicas: 3
-      maxReplicas: 6
+      bufferSize: 1
+      minReplicas: 1
+      maxReplicas: 4
   sync:
     type: FixedInterval
     fixedInterval:

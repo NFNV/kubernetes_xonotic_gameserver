@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 
 const EMPTY_FLEET = {
   name: "xonotic-fleet",
@@ -13,6 +13,10 @@ const AUTO_REFRESH_MS = 7000;
 const HISTORY_LIMIT = 8;
 const ADMIN_MAPS = ["xoylent", "stormkeep", "implosion", "drain", "darkzone", "solarium"];
 const BROADCAST_MAX_LENGTH = 160;
+const BULK_ALLOCATION_READY_POLL_MS = 5000;
+const BULK_ALLOCATION_READY_TIMEOUT_MS = 120000;
+const BULK_ALLOCATION_REQUEST_RETRY_LIMIT = 4;
+const BULK_ALLOCATION_BACKEND_RETRY_MS = 5000;
 const VERIFIED_CONFIG_NOTE = "Only verified map/mode combinations are shown.";
 const SUPPORTED_BRACKET_SIZES = [2, 4, 8];
 const FALLBACK_GAME_CONFIG_OPTIONS = {
@@ -85,17 +89,61 @@ const FALLBACK_GAME_CONFIG_OPTIONS = {
   note: VERIFIED_CONFIG_NOTE,
 };
 
+class ApiError extends Error {
+  constructor(message, { status = 0, data = null, path = "" } = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+    this.path = path;
+  }
+}
+
 async function fetchJson(path, options) {
-  const response = await fetch(path, options);
+  let response;
+  try {
+    response = await fetch(path, options);
+  } catch (err) {
+    const message = err?.message || "Network request failed";
+    throw new ApiError(message, {
+      status: 0,
+      data: { error: "network_error", message },
+      path,
+    });
+  }
+
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("application/json") ? await response.json() : null;
 
   if (!response.ok) {
     const message = data?.message || `${response.status} ${response.statusText}`;
-    throw new Error(message);
+    throw new ApiError(message, { status: response.status, data, path });
   }
 
   return data;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function isRetryableAllocationError(err) {
+  if (err?.data?.error === "no_ready_servers") {
+    return true;
+  }
+
+  if ([502, 503, 504].includes(err?.status)) {
+    return true;
+  }
+
+  const message = String(err?.message || "").toLowerCase();
+  return message.includes("bad gateway")
+    || message.includes("failed to fetch")
+    || message.includes("load failed")
+    || message.includes("networkerror")
+    || message.includes("timed out");
 }
 
 function allocationEndpoint(allocation) {
@@ -453,6 +501,7 @@ export default function App() {
   const [creatingRound, setCreatingRound] = useState(false);
   const [generatingBracket, setGeneratingBracket] = useState(false);
   const [finalizingTournament, setFinalizingTournament] = useState(false);
+  const [releasingAllTournamentServers, setReleasingAllTournamentServers] = useState(false);
   const [creatingTournamentMatch, setCreatingTournamentMatch] = useState(false);
   const [allocatingPlayableMatches, setAllocatingPlayableMatches] = useState(false);
   const [bulkAllocationProgress, setBulkAllocationProgress] = useState("");
@@ -464,6 +513,7 @@ export default function App() {
   const [teamForm, setTeamForm] = useState({ name: "", tag: "", seed: "" });
   const [roundForm, setRoundForm] = useState({ name: "", round_order: "" });
   const [tournamentMatchForm, setTournamentMatchForm] = useState(emptyTournamentMatchForm());
+  const bulkAllocationActiveRef = useRef(false);
 
   async function copyText(text, label) {
     if (!text) {
@@ -546,7 +596,7 @@ export default function App() {
     }
   }
 
-  async function loadDashboard({ silent = false, source = "Refresh" } = {}) {
+  async function loadDashboard({ silent = false, source = "Refresh", suppressError = false } = {}) {
     if (silent) {
       setRefreshing(true);
     } else {
@@ -569,15 +619,46 @@ export default function App() {
       setMatches(matchResponse.items || []);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
-      setError({
-        title: `${source} failed`,
-        message: err.message,
-      });
-      setBackendHealthy(false);
+      if (!suppressError && !(bulkAllocationActiveRef.current && silent)) {
+        setError({
+          title: `${source} failed`,
+          message: err.message,
+        });
+        setBackendHealthy(false);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
+  }
+
+  async function waitForReadyServerCapacity({ matchNumber, totalMatches }) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < BULK_ALLOCATION_READY_TIMEOUT_MS) {
+      let fleet = null;
+      try {
+        fleet = await fetchJson("/api/fleet-status");
+        setFleetStatus(fleet);
+      } catch (err) {
+        if (!isRetryableAllocationError(err)) {
+          throw err;
+        }
+
+        setBulkAllocationProgress(`Backend unavailable; retrying ${matchNumber} / ${totalMatches}`);
+        await sleep(BULK_ALLOCATION_BACKEND_RETRY_MS);
+        continue;
+      }
+
+      if ((fleet.ready_replicas || 0) > 0) {
+        return fleet;
+      }
+
+      setBulkAllocationProgress(`Waiting for ready server ${matchNumber} / ${totalMatches}`);
+      await sleep(BULK_ALLOCATION_READY_POLL_MS);
+    }
+
+    throw new Error("Timed out waiting for a Ready server. FleetAutoscaler may still be replenishing capacity.");
   }
 
   async function loadTournaments({ silent = false } = {}) {
@@ -621,16 +702,46 @@ export default function App() {
     setTournamentError(null);
 
     try {
-      const [teamsResponse, roundsResponse, matchesResponse, summaryResponse] = await Promise.all([
-        fetchJson(`/api/tournaments/${tournamentId}/teams`),
-        fetchJson(`/api/tournaments/${tournamentId}/rounds`),
-        fetchJson(`/api/tournaments/${tournamentId}/matches`),
-        fetchJson(`/api/tournaments/${tournamentId}/summary`),
-      ]);
-      setTournamentTeams(teamsResponse.items || []);
-      setTournamentRounds(roundsResponse.items || []);
-      setTournamentMatches(matchesResponse.items || []);
-      setTournamentSummaryData(summaryResponse);
+      const detailRequests = [
+        {
+          label: "Teams",
+          request: fetchJson(`/api/tournaments/${tournamentId}/teams`),
+          apply: (response) => setTournamentTeams(response.items || []),
+        },
+        {
+          label: "Rounds",
+          request: fetchJson(`/api/tournaments/${tournamentId}/rounds`),
+          apply: (response) => setTournamentRounds(response.items || []),
+        },
+        {
+          label: "Matches",
+          request: fetchJson(`/api/tournaments/${tournamentId}/matches`),
+          apply: (response) => setTournamentMatches(response.items || []),
+        },
+        {
+          label: "Summary",
+          request: fetchJson(`/api/tournaments/${tournamentId}/summary`),
+          apply: (response) => setTournamentSummaryData(response),
+        },
+      ];
+      const results = await Promise.allSettled(detailRequests.map((item) => item.request));
+      const failures = [];
+
+      results.forEach((result, index) => {
+        const detail = detailRequests[index];
+        if (result.status === "fulfilled") {
+          detail.apply(result.value);
+        } else {
+          failures.push(`${detail.label}: ${result.reason?.message || "load failed"}`);
+        }
+      });
+
+      if (failures.length > 0) {
+        setTournamentError({
+          title: "Tournament detail refresh partially failed",
+          message: failures.join(" "),
+        });
+      }
     } catch (err) {
       setTournamentError({
         title: "Tournament detail refresh failed",
@@ -639,6 +750,13 @@ export default function App() {
     } finally {
       setTournamentDetailLoading(false);
     }
+  }
+
+  async function refreshTournamentMatchesSnapshot(tournamentId) {
+    const response = await fetchJson(`/api/tournaments/${tournamentId}/matches`);
+    const items = response.items || [];
+    setTournamentMatches(items);
+    return items;
   }
 
   async function createTournament(event) {
@@ -927,55 +1045,97 @@ export default function App() {
     }
 
     const capacityWarning = fleetStatus.ready_replicas < matchesToAllocate.length
-      ? ` Ready capacity is currently ${fleetStatus.ready_replicas}; extra allocations may wait for FleetAutoscaler replenishment or fail.`
+      ? ` Ready capacity is currently ${fleetStatus.ready_replicas}, so this will pause while FleetAutoscaler replenishes warm servers.`
       : "";
-    const confirmed = window.confirm(`Allocate servers for ${matchesToAllocate.length} playable bracket match${matchesToAllocate.length === 1 ? "" : "es"}?${capacityWarning}`);
+    const confirmed = window.confirm(`Allocate servers one at a time for ${matchesToAllocate.length} playable bracket match${matchesToAllocate.length === 1 ? "" : "es"}?${capacityWarning}`);
     if (!confirmed) {
       return;
     }
 
     setAllocatingPlayableMatches(true);
     setTournamentError(null);
-    setBulkAllocationProgress(`0 / ${matchesToAllocate.length}`);
-    setAllocatingTournamentServers((current) => ({
-      ...current,
-      ...Object.fromEntries(matchesToAllocate.map((match) => [match.id, true])),
-    }));
+    setBulkAllocationProgress(`Preparing 0 / ${matchesToAllocate.length}`);
+    bulkAllocationActiveRef.current = true;
 
     const failures = [];
     const successes = [];
+    const warnings = [];
 
     try {
       for (const [index, match] of matchesToAllocate.entries()) {
         const matchLabel = match.bracket_position ? `Match ${match.bracket_position}` : `Match ${shortId(match.id)}`;
-        setBulkAllocationProgress(`${index + 1} / ${matchesToAllocate.length}`);
+        let assigned = false;
+        let lastError = null;
 
-        try {
-          const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/allocate-server`, {
-            method: "POST",
-          });
-          if (result.warning || result.configuration?.verified === false) {
-            throw new Error(result.warning || result.configuration?.message || "requested map/mode verification failed");
+        for (let attempt = 1; attempt <= BULK_ALLOCATION_REQUEST_RETRY_LIMIT; attempt += 1) {
+          try {
+            await waitForReadyServerCapacity({ matchNumber: index + 1, totalMatches: matchesToAllocate.length });
+            setBulkAllocationProgress(`Allocating ${index + 1} / ${matchesToAllocate.length}`);
+            setAllocatingTournamentServers((current) => ({ ...current, [match.id]: true }));
+
+            const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/allocate-server`, {
+              method: "POST",
+            });
+            if (!result.assignment) {
+              throw new Error("server allocation response did not include an assignment");
+            }
+
+            successes.push({ match, endpoint: assignmentEndpoint(result.assignment) });
+            if (result.warning || result.configuration?.verified === false) {
+              warnings.push(`${matchLabel}: ${result.warning || result.configuration?.message || "assigned but map/mode verification needs attention"}`);
+            }
+            assigned = true;
+            break;
+          } catch (err) {
+            lastError = err;
+            try {
+              const refreshedMatches = await refreshTournamentMatchesSnapshot(selectedTournamentId);
+              const refreshedMatch = refreshedMatches.find((item) => item.id === match.id);
+              if (refreshedMatch?.active_server_assignment) {
+                successes.push({ match: refreshedMatch, endpoint: assignmentEndpoint(refreshedMatch.active_server_assignment) });
+                warnings.push(`${matchLabel}: assignment exists after a lost or failed response; refreshed from PostgreSQL.`);
+                assigned = true;
+                break;
+              }
+            } catch (refreshErr) {
+              if (!isRetryableAllocationError(refreshErr)) {
+                lastError = refreshErr;
+                break;
+              }
+            }
+
+            if (!isRetryableAllocationError(err) || attempt === BULK_ALLOCATION_REQUEST_RETRY_LIMIT) {
+              break;
+            }
+
+            setBulkAllocationProgress(`Retrying ${index + 1} / ${matchesToAllocate.length}`);
+            await sleep(BULK_ALLOCATION_BACKEND_RETRY_MS);
+          } finally {
+            setAllocatingTournamentServers((current) => {
+              const next = { ...current };
+              delete next[match.id];
+              return next;
+            });
           }
-          successes.push({ match, endpoint: assignmentEndpoint(result.assignment) });
-        } catch (err) {
-          failures.push({ label: matchLabel, message: err.message });
-        } finally {
-          setAllocatingTournamentServers((current) => {
-            const next = { ...current };
-            delete next[match.id];
-            return next;
-          });
+        }
+
+        if (!assigned) {
+          failures.push({ label: matchLabel, message: lastError?.message || "allocation did not complete" });
         }
       }
 
       await loadTournamentDetails(selectedTournamentId, { silent: true });
-      await loadDashboard({ silent: true, source: "Playable tournament assignment refresh" });
+      await loadDashboard({ silent: true, source: "Playable tournament assignment refresh", suppressError: true });
 
       if (failures.length > 0) {
         setTournamentError({
           title: "Some playable matches failed to allocate",
           message: `${successes.length} assigned, ${failures.length} failed. ${failures.map((failure) => `${failure.label}: ${failure.message}`).join(" ")}`,
+        });
+      } else if (warnings.length > 0) {
+        setTournamentError({
+          title: "Playable matches assigned with warnings",
+          message: warnings.join(" "),
         });
       }
 
@@ -989,6 +1149,7 @@ export default function App() {
         message: err.message,
       });
     } finally {
+      bulkAllocationActiveRef.current = false;
       setAllocatingPlayableMatches(false);
       setBulkAllocationProgress("");
       setAllocatingTournamentServers((current) => {
@@ -1034,6 +1195,56 @@ export default function App() {
         delete next[match.id];
         return next;
       });
+    }
+  }
+
+  async function releaseAllTournamentServers() {
+    if (!selectedTournamentId) {
+      return;
+    }
+
+    const activeCount = tournamentActiveServerCount;
+    if (activeCount === 0) {
+      setTournamentError({
+        title: "No active tournament servers",
+        message: "This tournament does not have any active server assignments to release.",
+      });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Release ${activeCount} active server assignment${activeCount === 1 ? "" : "s"} for this tournament? This deletes the allocated Agones GameServers and keeps match history in PostgreSQL.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setReleasingAllTournamentServers(true);
+    setTournamentError(null);
+
+    try {
+      const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/server-assignments/release-all`, {
+        method: "POST",
+      });
+      await loadTournamentDetails(selectedTournamentId, { silent: true });
+      await loadDashboard({ silent: true, source: "Tournament release-all refresh", suppressError: true });
+
+      if (result.failed_count > 0) {
+        setTournamentError({
+          title: "Some tournament servers failed to release",
+          message: `${result.released_count} released, ${result.failed_count} failed. ${result.failed.map((failure) => failure.message).join(" ")}`,
+        });
+      } else {
+        setCopyMessage(`${result.released_count} tournament server assignment${result.released_count === 1 ? "" : "s"} released.`);
+        window.setTimeout(() => setCopyMessage(""), 2400);
+      }
+    } catch (err) {
+      setTournamentError({
+        title: "Release all tournament servers failed",
+        message: err.message,
+      });
+    } finally {
+      setReleasingAllTournamentServers(false);
     }
   }
 
@@ -1504,6 +1715,10 @@ export default function App() {
   const summaryWinnerName = selectedTournamentSummary?.winner_team?.name || selectedTournamentSummary?.champion_team?.name || "";
   const summaryFinalizeBlocker = selectedTournamentSummary?.finalize_blockers?.[0] || "";
   const summaryActiveServerCount = selectedTournamentSummary?.active_server_assignment_count || 0;
+  const tournamentActiveServerCount = Math.max(
+    summaryActiveServerCount,
+    tournamentMatches.filter((match) => match.active_server_assignment).length
+  );
 
   return (
     <main className="page">
@@ -1663,9 +1878,9 @@ export default function App() {
                       <p className="eyebrow">Tournament Summary</p>
                       <h3>{summaryWinnerName || "Champion pending"}</h3>
                       <p className="summary-story">{selectedTournamentSummary.story}</p>
-                      {summaryActiveServerCount > 0 && (
+                      {tournamentActiveServerCount > 0 && (
                         <p className="summary-note">
-                          {summaryActiveServerCount} active server assignment{summaryActiveServerCount === 1 ? "" : "s"} still need{summaryActiveServerCount === 1 ? "s" : ""} to be released.
+                          {tournamentActiveServerCount} active server assignment{tournamentActiveServerCount === 1 ? "" : "s"} still need{tournamentActiveServerCount === 1 ? "s" : ""} to be released.
                         </p>
                       )}
                       {summaryFinalizeBlocker && !selectedTournamentSummary.completed && (
@@ -1679,6 +1894,14 @@ export default function App() {
                           disabled={!selectedTournamentSummary.can_finalize || finalizingTournament}
                         >
                           {finalizingTournament ? "Finalizing..." : selectedTournamentSummary.completed ? "Tournament Finalized" : "Finalize Tournament"}
+                        </button>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() => void releaseAllTournamentServers()}
+                          disabled={releasingAllTournamentServers || tournamentActiveServerCount === 0}
+                        >
+                          {releasingAllTournamentServers ? "Releasing..." : "Release All Tournament Servers"}
                         </button>
                       </div>
                     </div>
@@ -1697,7 +1920,7 @@ export default function App() {
                       </div>
                       <div>
                         <dt>Active Servers</dt>
-                        <dd>{summaryActiveServerCount}</dd>
+                        <dd>{tournamentActiveServerCount}</dd>
                       </div>
                       <div>
                         <dt>Final Status</dt>
@@ -1856,10 +2079,10 @@ export default function App() {
                               onClick={() => void allocatePlayableTournamentMatches(playableBracketMatches)}
                               disabled={allocatingPlayableMatches || playableBracketMatches.length === 0}
                             >
-                              {allocatingPlayableMatches ? `Allocating ${bulkAllocationProgress}` : "Allocate Playable Matches"}
+                              {allocatingPlayableMatches ? bulkAllocationProgress || "Allocating..." : "Allocate Playable Matches"}
                             </button>
                             <small>
-                              {playableBracketMatches.length} playable now · Ready capacity: {fleetStatus.ready_replicas}
+                              {playableBracketMatches.length} playable now · Ready capacity: {fleetStatus.ready_replicas} · allocates one at a time
                             </small>
                           </div>
                         </div>
@@ -1904,8 +2127,29 @@ export default function App() {
 
                     <article className="data-card tournament-matches-card">
                       <div className="subsection-header">
-                        <h3>Tournament Matches</h3>
-                        <span>{tournamentMatches.length}</span>
+                        <div>
+                          <h3>Tournament Matches</h3>
+                          <p>{tournamentMatches.length} persisted match{tournamentMatches.length === 1 ? "" : "es"}</p>
+                        </div>
+                        <div className="subsection-actions">
+                          <button
+                            className="secondary"
+                            type="button"
+                            onClick={() => void loadTournamentDetails(selectedTournamentId, { silent: true })}
+                            disabled={tournamentDetailLoading}
+                          >
+                            {tournamentDetailLoading ? "Refreshing..." : "Refresh Tournament"}
+                          </button>
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => void releaseAllTournamentServers()}
+                            disabled={releasingAllTournamentServers || tournamentActiveServerCount === 0}
+                          >
+                            {releasingAllTournamentServers ? "Releasing..." : "Release All Servers"}
+                          </button>
+                          <small>{tournamentActiveServerCount} active server{tournamentActiveServerCount === 1 ? "" : "s"}</small>
+                        </div>
                       </div>
                       <form className="tournament-match-form" onSubmit={(event) => {
                         event.preventDefault();

@@ -721,7 +721,11 @@ button:disabled {
 }
 
 .subsection-actions {
-  justify-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .subsection-actions button {
