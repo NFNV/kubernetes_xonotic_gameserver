@@ -65,6 +65,7 @@ XONOTIC_RCON_OUTPUT_LIMIT = int(os.environ.get("XONOTIC_RCON_OUTPUT_LIMIT", "400
 XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS = float(os.environ.get("XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS", "1"))
 XONOTIC_RCON_CHANGE_MAP_VERIFY_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_RCON_CHANGE_MAP_VERIFY_TIMEOUT_SECONDS", "12"))
 XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS = float(os.environ.get("XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS", "1"))
+TOURNAMENT_ALLOCATION_STALE_SECONDS = float(os.environ.get("TOURNAMENT_ALLOCATION_STALE_SECONDS", "60"))
 XONOTIC_RCON_PROTOCOLS = tuple(
     protocol.strip()
     for protocol in os.environ.get("XONOTIC_RCON_PROTOCOLS", "secure-challenge,secure-time,plaintext").split(",")
@@ -2649,6 +2650,75 @@ def attach_active_assignments_to_matches(cur, matches: list[dict[str, Any]]) -> 
     return enriched
 
 
+def recover_stale_tournament_match_allocations(cur, tournament_id: str) -> None:
+    cur.execute(
+        """
+        SELECT
+          m.id, m.requested_map, m.requested_game_mode, m.updated_at,
+          msa.id AS assignment_id, msa.address, msa.port
+        FROM matches m
+        LEFT JOIN LATERAL (
+          SELECT id, address, port
+          FROM match_server_assignments
+          WHERE tournament_id = m.tournament_id
+            AND match_id = m.id
+            AND status = 'active'
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) msa ON TRUE
+        WHERE m.tournament_id = %s
+          AND m.status = 'server_allocating'
+          AND m.updated_at < now() - (%s * interval '1 second')
+        ORDER BY m.updated_at
+        """,
+        (tournament_id, TOURNAMENT_ALLOCATION_STALE_SECONDS),
+    )
+    stale_matches = cur.fetchall()
+
+    for stale_match in stale_matches:
+        next_status = "failed"
+        recovery_reason = "no_active_assignment"
+        live_status = None
+
+        if stale_match.get("assignment_id"):
+            live_status = get_cached_xonotic_status(stale_match.get("address"), stale_match.get("port"))
+            if live_status and live_status.get("ok"):
+                actual_map = live_status.get("map")
+                actual_game_mode = normalize_game_mode(live_status.get("game_mode"))
+                requested_map = stale_match.get("requested_map")
+                requested_game_mode = stale_match.get("requested_game_mode")
+                map_verified = requested_map is None or actual_map == requested_map
+                mode_verified = requested_game_mode is None or actual_game_mode == requested_game_mode
+                if map_verified and mode_verified:
+                    next_status = "server_ready"
+                    recovery_reason = "active_assignment_verified"
+                else:
+                    recovery_reason = "active_assignment_verification_mismatch"
+            else:
+                recovery_reason = (live_status or {}).get("error") or "status_query_failed"
+
+        cur.execute(
+            """
+            UPDATE matches
+            SET status = %s, updated_at = now()
+            WHERE id = %s
+              AND tournament_id = %s
+              AND status = 'server_allocating'
+            RETURNING id
+            """,
+            (next_status, stale_match["id"], tournament_id),
+        )
+        if cur.fetchone():
+            APP.logger.info(
+                "Recovered stale tournament match allocation tournament_id=%s match_id=%s status=%s reason=%s live_status_ok=%s",
+                tournament_id,
+                stale_match["id"],
+                next_status,
+                recovery_reason,
+                bool(live_status and live_status.get("ok")),
+            )
+
+
 def mark_tournament_match_allocation_failed(tournament_id: str, match_id: str) -> None:
     try:
         with db_connect() as conn:
@@ -3130,7 +3200,9 @@ def get_tournament_summary(tournament_id: str):
         tournament_id = validate_db_id(tournament_id, "tournament_id")
         with db_connect() as conn:
             with conn.cursor() as cur:
+                recover_stale_tournament_match_allocations(cur, tournament_id)
                 summary = build_tournament_summary(cur, tournament_id)
+            conn.commit()
     except BackendApiError as exc:
         return jsonify(exc.payload), exc.status_code
     except psycopg.Error as exc:
@@ -3514,6 +3586,7 @@ def list_tournament_matches(tournament_id: str):
         with db_connect() as conn:
             with conn.cursor() as cur:
                 fetch_tournament(cur, tournament_id)
+                recover_stale_tournament_match_allocations(cur, tournament_id)
                 cur.execute(
                     """
                     SELECT
@@ -3531,6 +3604,7 @@ def list_tournament_matches(tournament_id: str):
                 )
                 matches = cur.fetchall()
                 enriched_matches = attach_active_assignments_to_matches(cur, matches)
+            conn.commit()
     except BackendApiError as exc:
         return jsonify(exc.payload), exc.status_code
     except psycopg.Error as exc:
@@ -3647,6 +3721,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
         with db_connect() as conn:
             with conn.cursor() as cur:
                 fetch_tournament(cur, tournament_id)
+                recover_stale_tournament_match_allocations(cur, tournament_id)
                 match = fetch_tournament_match(cur, tournament_id, match_id)
                 requested_map, requested_game_mode = validate_requested_game_config(
                     match.get("requested_map"),
