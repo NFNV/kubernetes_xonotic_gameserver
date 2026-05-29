@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: xonotic-prometheus
+  namespace: xonotic-observability
+spec:
+  type: ClusterIP
+  selector:
+    app: xonotic-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+      protocol: TCP

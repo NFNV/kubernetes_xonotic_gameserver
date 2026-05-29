@@ -10,6 +10,8 @@ This directory is reserved for cluster-level platform components that sit on top
 
 `allocator-frontend/` contains the small operator-facing admin dashboard for the allocator backend.
 
+`observability/` contains the lightweight Prometheus and Grafana MVP for scraping allocator backend metrics in the single-node dev cluster.
+
 Expected future contents:
 
 - the pre-Agones connectivity checkpoint documentation and manifests

@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xonotic-prometheus
+  namespace: xonotic-observability
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: xonotic-prometheus
+  template:
+    metadata:
+      labels:
+        app: xonotic-prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.10.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=6h
+            - --storage.tsdb.retention.size=256MB
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: 9090
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 25m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: xonotic-prometheus-config
+        - name: data
+          emptyDir:
+            sizeLimit: 512Mi

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: xonotic-grafana-dashboard-provider
+  namespace: xonotic-observability
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: Xonotic Allocator
+        orgId: 1
+        folder: Xonotic
+        type: file
+        disableDeletion: true
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards

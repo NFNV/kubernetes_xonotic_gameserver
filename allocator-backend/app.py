@@ -11,14 +11,46 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
-from flask import Flask, jsonify, request
+from flask import Flask, Response, g, jsonify, request
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from kubernetes.config.config_exception import ConfigException
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from werkzeug.exceptions import BadRequest, HTTPException, UnsupportedMediaType
 
 
 APP = Flask(__name__)
+
+HTTP_REQUEST_COUNT = Counter(
+    "allocator_backend_http_requests_total",
+    "Allocator backend HTTP requests.",
+    ("method", "endpoint", "status"),
+)
+HTTP_REQUEST_LATENCY_SECONDS = Histogram(
+    "allocator_backend_http_request_duration_seconds",
+    "Allocator backend HTTP request latency.",
+    ("method", "endpoint"),
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
+ALLOCATION_ATTEMPTS = Counter("allocator_allocation_attempts_total", "Agones GameServer allocation attempts.")
+ALLOCATION_SUCCESSES = Counter("allocator_allocation_successes_total", "Agones GameServer allocation successes.")
+ALLOCATION_FAILURES = Counter("allocator_allocation_failures_total", "Agones GameServer allocation failures.", ("reason",))
+ACTIVE_MATCH_SERVER_ASSIGNMENTS = Gauge(
+    "allocator_active_match_server_assignments",
+    "Active persisted tournament match server assignments.",
+)
+RCON_COMMAND_ATTEMPTS = Counter("allocator_rcon_command_attempts_total", "RCON command attempts.", ("command",))
+RCON_COMMAND_FAILURES = Counter("allocator_rcon_command_failures_total", "RCON command failures.", ("command", "reason"))
+MAP_MODE_VERIFICATION_SUCCESSES = Counter(
+    "allocator_map_mode_verification_successes_total",
+    "Successful requested map/mode verifications after server configuration.",
+    ("requested_game_mode", "requested_map"),
+)
+MAP_MODE_VERIFICATION_FAILURES = Counter(
+    "allocator_map_mode_verification_failures_total",
+    "Failed requested map/mode verifications after server configuration.",
+    ("requested_game_mode", "requested_map", "reason"),
+)
 
 AGONES_NAMESPACE = os.environ.get("AGONES_NAMESPACE", "xonotic-agones")
 FLEET_NAME = os.environ.get("FLEET_NAME", "xonotic-fleet")
@@ -113,6 +145,22 @@ def handle_unexpected_error(exc: Exception):
 
     APP.logger.exception("Unhandled backend exception")
     return jsonify({"error": "internal_server_error", "message": "unexpected backend error"}), 500
+
+
+@APP.before_request
+def start_request_metrics_timer():
+    g.metrics_started_at = time.perf_counter()
+
+
+@APP.after_request
+def record_request_metrics(response):
+    if request.path != "/metrics":
+        endpoint = request.url_rule.rule if request.url_rule else request.path
+        HTTP_REQUEST_COUNT.labels(request.method, endpoint, str(response.status_code)).inc()
+        started_at = getattr(g, "metrics_started_at", None)
+        if started_at is not None:
+            HTTP_REQUEST_LATENCY_SECONDS.labels(request.method, endpoint).observe(time.perf_counter() - started_at)
+    return response
 
 
 ADMIN_ALLOWED_MAPS = tuple(sorted({map_name for config in GAME_CONFIG_OPTIONS.values() for map_name in config["verified_maps"] + config["experimental_maps"]}))
@@ -418,6 +466,24 @@ def db_connect():
             },
             503,
         ) from exc
+
+
+def active_match_server_assignment_count() -> float:
+    if not db_configured():
+        return 0
+
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS count FROM match_server_assignments WHERE status = 'active'")
+                row = cur.fetchone()
+                return float(row["count"] if row else 0)
+    except Exception:
+        APP.logger.warning("Failed to collect active match server assignment metric", exc_info=True)
+        return 0
+
+
+ACTIVE_MATCH_SERVER_ASSIGNMENTS.set_function(active_match_server_assignment_count)
 
 
 def row_to_json(row: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1144,7 +1210,7 @@ def request_rcon_challenge(sock: socket.socket, address: str, port: int, command
     return challenge
 
 
-def send_rcon_command(
+def _send_rcon_command(
     address: str,
     port: int,
     command: str,
@@ -1245,6 +1311,30 @@ def send_rcon_command(
         },
         500,
     )
+
+
+def send_rcon_command(
+    address: str,
+    port: int,
+    command: str,
+    *,
+    expect_response: bool,
+    preferred_protocol: str | None = None,
+) -> dict[str, Any]:
+    command_name = command.split(" ", 1)[0] if command else "unknown"
+    RCON_COMMAND_ATTEMPTS.labels(command_name).inc()
+
+    try:
+        return _send_rcon_command(
+            address,
+            port,
+            command,
+            expect_response=expect_response,
+            preferred_protocol=preferred_protocol,
+        )
+    except BackendApiError as exc:
+        RCON_COMMAND_FAILURES.labels(command_name, exc.payload.get("error", "backend_api_error")).inc()
+        raise
 
 
 def run_rcon_smoke_test(allocated_server: dict[str, Any], *, include_say: bool) -> dict[str, Any]:
@@ -1820,6 +1910,15 @@ def configure_allocated_server(
             failure_reason = verification_error.get("message")
         failure_reason = failure_reason or "Allocated server was configured, but live status did not verify the requested map/mode."
 
+    if verified:
+        MAP_MODE_VERIFICATION_SUCCESSES.labels(requested_game_mode, requested_map).inc()
+    else:
+        verification_error = verification.get("error")
+        reason = "live_config_verification_failed"
+        if isinstance(verification_error, dict):
+            reason = verification_error.get("error") or reason
+        MAP_MODE_VERIFICATION_FAILURES.labels(requested_game_mode, requested_map, reason).inc()
+
     return {
         "ok": verified,
         "rcon_sent": True,
@@ -1862,84 +1961,93 @@ def wait_for_allocation(name: str) -> dict:
 
 
 def allocate_gameserver() -> dict:
-    request_body = build_allocation_manifest()
     try:
-        allocation = custom_objects_api.create_namespaced_custom_object(
-            group=ALLOCATION_GROUP,
-            version=ALLOCATION_VERSION,
-            namespace=AGONES_NAMESPACE,
-            plural=ALLOCATION_PLURAL,
-            body=request_body,
-        )
-    except ApiException as exc:
-        raise_kubernetes_api_error(
-            operation="create",
-            resource_type=ALLOCATION_RESOURCE_KIND,
-            namespace=AGONES_NAMESPACE,
-            name=request_body.get("metadata", {}).get("name") or request_body.get("metadata", {}).get("generateName"),
-            request_context=request_body,
-            exc=exc,
-        )
-    except Exception as exc:
-        raise BackendApiError({"error": "allocation_create_failed", "message": str(exc)}, 500)
+        ALLOCATION_ATTEMPTS.inc()
+        request_body = build_allocation_manifest()
+        try:
+            allocation = custom_objects_api.create_namespaced_custom_object(
+                group=ALLOCATION_GROUP,
+                version=ALLOCATION_VERSION,
+                namespace=AGONES_NAMESPACE,
+                plural=ALLOCATION_PLURAL,
+                body=request_body,
+            )
+        except ApiException as exc:
+            raise_kubernetes_api_error(
+                operation="create",
+                resource_type=ALLOCATION_RESOURCE_KIND,
+                namespace=AGONES_NAMESPACE,
+                name=request_body.get("metadata", {}).get("name") or request_body.get("metadata", {}).get("generateName"),
+                request_context=request_body,
+                exc=exc,
+            )
+        except Exception as exc:
+            raise BackendApiError({"error": "allocation_create_failed", "message": str(exc)}, 500)
 
-    allocation_name = allocation.get("metadata", {}).get("name")
-    try:
-        return extract_allocation_response(allocation)
-    except ValueError:
-        pass
+        allocation_name = allocation.get("metadata", {}).get("name")
+        try:
+            allocation_response = extract_allocation_response(allocation)
+            ALLOCATION_SUCCESSES.inc()
+            return allocation_response
+        except ValueError:
+            pass
 
-    if not allocation_name:
-        raise BackendApiError(
-            {
-                "error": "allocation_create_failed",
-                "message": "allocation request name missing from create response",
-                "resource_type": ALLOCATION_RESOURCE_KIND,
-                "namespace": AGONES_NAMESPACE,
-                "request_context": request_body,
-            },
-            500,
-        )
+        if not allocation_name:
+            raise BackendApiError(
+                {
+                    "error": "allocation_create_failed",
+                    "message": "allocation request name missing from create response",
+                    "resource_type": ALLOCATION_RESOURCE_KIND,
+                    "namespace": AGONES_NAMESPACE,
+                    "request_context": request_body,
+                },
+                500,
+            )
 
-    try:
-        return wait_for_allocation(allocation_name)
-    except TimeoutError as exc:
-        raise BackendApiError(
-            {
-                "error": "allocation_timeout",
-                "message": str(exc),
-                "allocation_request_name": allocation_name,
-            },
-            504,
-        ) from exc
-    except ApiException as exc:
-        raise_kubernetes_api_error(
-            operation="get",
-            resource_type=ALLOCATION_RESOURCE_KIND,
-            namespace=AGONES_NAMESPACE,
-            name=allocation_name,
-            request_context={"allocation_request_name": allocation_name},
-            exc=exc,
-            allocation_request_name=allocation_name,
-        )
-    except ValueError as exc:
-        raise BackendApiError(
-            {
-                "error": "allocation_invalid",
-                "message": str(exc),
-                "allocation_request_name": allocation_name,
-            },
-            502,
-        ) from exc
-    except Exception as exc:
-        raise BackendApiError(
-            {
-                "error": "allocation_read_failed",
-                "message": str(exc),
-                "allocation_request_name": allocation_name,
-            },
-            500,
-        ) from exc
+        try:
+            allocation_response = wait_for_allocation(allocation_name)
+            ALLOCATION_SUCCESSES.inc()
+            return allocation_response
+        except TimeoutError as exc:
+            raise BackendApiError(
+                {
+                    "error": "allocation_timeout",
+                    "message": str(exc),
+                    "allocation_request_name": allocation_name,
+                },
+                504,
+            ) from exc
+        except ApiException as exc:
+            raise_kubernetes_api_error(
+                operation="get",
+                resource_type=ALLOCATION_RESOURCE_KIND,
+                namespace=AGONES_NAMESPACE,
+                name=allocation_name,
+                request_context={"allocation_request_name": allocation_name},
+                exc=exc,
+                allocation_request_name=allocation_name,
+            )
+        except ValueError as exc:
+            raise BackendApiError(
+                {
+                    "error": "allocation_invalid",
+                    "message": str(exc),
+                    "allocation_request_name": allocation_name,
+                },
+                502,
+            ) from exc
+        except Exception as exc:
+            raise BackendApiError(
+                {
+                    "error": "allocation_read_failed",
+                    "message": str(exc),
+                    "allocation_request_name": allocation_name,
+                },
+                500,
+            ) from exc
+    except BackendApiError as exc:
+        ALLOCATION_FAILURES.labels(exc.payload.get("error", "backend_api_error")).inc()
+        raise
 
 
 def delete_gameserver(name: str) -> dict[str, Any]:
@@ -3972,6 +4080,11 @@ def healthz():
     if DB_MIGRATION_ERROR:
         response["database"]["last_error"] = DB_MIGRATION_ERROR
     return jsonify(response)
+
+
+@APP.get("/metrics")
+def metrics():
+    return Response(generate_latest(), content_type=CONTENT_TYPE_LATEST)
 
 
 @APP.get("/game-config/options")

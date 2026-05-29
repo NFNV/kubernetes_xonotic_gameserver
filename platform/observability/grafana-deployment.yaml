@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xonotic-grafana
+  namespace: xonotic-observability
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: xonotic-grafana
+  template:
+    metadata:
+      labels:
+        app: xonotic-grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:13.0.1-security-01
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: admin
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboard
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+      volumes:
+        - name: datasources
+          configMap:
+            name: xonotic-grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: xonotic-grafana-dashboard-provider
+        - name: dashboard
+          configMap:
+            name: xonotic-grafana-dashboard
