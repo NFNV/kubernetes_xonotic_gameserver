@@ -539,6 +539,13 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.player-connect-box p {
+  margin: 0;
+  color: #a8e9d7;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
 .player-connect-box code {
   color: #dffbff;
   overflow-wrap: anywhere;
@@ -553,6 +560,16 @@ button:disabled {
   margin: 0;
   color: #8fa8bc;
   font-size: 0.88rem;
+}
+
+.player-status-note {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 177, 74, 0.24);
+  border-radius: 14px;
+  background: rgba(255, 177, 74, 0.08);
+  color: #ffd391;
+  font-weight: 900;
 }
 
 .dashboard-layout {
@@ -707,6 +724,7 @@ button:disabled {
 }
 
 .match-rooms-panel {
+  border-style: dashed;
   border-color: rgba(126, 176, 211, 0.18);
   background:
     linear-gradient(180deg, rgba(21, 32, 52, 0.98), rgba(9, 14, 25, 0.96));
@@ -715,9 +733,39 @@ button:disabled {
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.match-rooms-panel .panel-header h2 {
+.match-rooms-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  cursor: pointer;
+  list-style: none;
+}
+
+.match-rooms-summary::-webkit-details-marker {
+  display: none;
+}
+
+.match-rooms-summary > span:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.match-rooms-summary strong {
   color: #dffbff;
+  font-size: 1rem;
   text-shadow: none;
+}
+
+.match-rooms-summary small {
+  color: #83a2b9;
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.match-rooms-panel[open] .match-rooms-summary {
+  margin-bottom: 16px;
 }
 
 .tournament-panel {

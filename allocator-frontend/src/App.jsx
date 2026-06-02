@@ -427,6 +427,43 @@ function gameModeLabel(gameConfigOptions, modeName) {
   return mode?.label || humanizeIdentifier(modeName);
 }
 
+function compactFallback(value, emptyLabel = "TBD") {
+  if (value === null || value === undefined || value === "") {
+    return emptyLabel;
+  }
+
+  const text = String(value);
+  return text.length > 8 ? shortId(text) : text;
+}
+
+function teamDisplayName(teamNameById, teamId, emptyLabel = "TBD") {
+  if (!teamId) {
+    return emptyLabel;
+  }
+
+  const key = String(teamId);
+  return teamNameById[key] || compactFallback(key, emptyLabel);
+}
+
+function summaryTeamDisplayName(teamNameById, team, fallbackTeamId, emptyLabel = "Winner pending") {
+  const teamId = team?.id || fallbackTeamId;
+  if (team?.name && String(team.name) !== String(teamId || "")) {
+    return team.name;
+  }
+
+  return teamDisplayName(teamNameById, teamId, emptyLabel);
+}
+
+function tournamentChampionDisplayName(summary, teamNameById, emptyLabel = "Winner pending") {
+  return summaryTeamDisplayName(teamNameById, summary?.winner_team, summary?.tournament?.winner_team_id, "")
+    || summaryTeamDisplayName(teamNameById, summary?.champion_team, summary?.final_match?.winner_team_id, "")
+    || emptyLabel;
+}
+
+function matchScoreLabel(match) {
+  return tournamentMatchHasResult(match) ? `${match.team_a_score}\u2013${match.team_b_score}` : "";
+}
+
 function selectableGameModes(gameConfigOptions) {
   const validMapsByMode = gameConfigOptions.valid_maps_by_mode || {};
   const modesByName = new Map();
@@ -506,6 +543,7 @@ function PlayerTournamentView({
   selectedTournament,
   tournamentLoading,
   tournamentDetailLoading,
+  tournamentTeamCount,
   tournamentRounds,
   tournamentMatches,
   selectedTournamentSummary,
@@ -517,10 +555,17 @@ function PlayerTournamentView({
 }) {
   const roundColumns = tournamentRoundColumns(tournamentRounds, tournamentMatches);
   const summaryCounts = selectedTournamentSummary?.counts || {};
-  const championName = selectedTournamentSummary?.winner_team?.name || selectedTournamentSummary?.champion_team?.name || "";
+  const activeServerCount = Math.max(
+    selectedTournamentSummary?.active_server_assignment_count || 0,
+    tournamentMatches.filter((match) => match.active_server_assignment).length
+  );
+  const championName = selectedTournamentSummary
+    ? tournamentChampionDisplayName(selectedTournamentSummary, teamNameById)
+    : "Winner pending";
+  const tournamentCompleted = selectedTournamentSummary?.completed || selectedTournament?.status === "completed";
 
   function teamName(teamId) {
-    return teamId ? teamNameById[teamId] || `Team ${shortId(teamId)}` : "TBD";
+    return teamDisplayName(teamNameById, teamId);
   }
 
   return (
@@ -561,8 +606,8 @@ function PlayerTournamentView({
         {!selectedTournament ? (
           <div className="player-empty-hero">
             <p className="eyebrow">Player View</p>
-            <h2>Select a tournament</h2>
-            <p>Published matches, scores, winners, and live server endpoints will appear here.</p>
+            <h2>Choose a tournament</h2>
+            <p>Choose a tournament to view matches and results.</p>
           </div>
         ) : (
           <>
@@ -594,14 +639,20 @@ function PlayerTournamentView({
               </div>
               <div>
                 <dt>Active Servers</dt>
-                <dd>{tournamentMatches.filter((match) => match.active_server_assignment).length}</dd>
+                <dd>{activeServerCount}</dd>
               </div>
             </dl>
 
+            {tournamentCompleted && activeServerCount > 0 && (
+              <p className="player-status-note">Tournament completed \u2014 server still active</p>
+            )}
+
             {tournamentDetailLoading ? (
               <p className="empty-state">Loading match list...</p>
+            ) : tournamentTeamCount === 0 ? (
+              <p className="empty-state">Add teams before generating a bracket.</p>
             ) : roundColumns.length === 0 ? (
-              <p className="empty-state">No matches have been published for this tournament yet.</p>
+              <p className="empty-state">Generate a bracket or create a match to begin.</p>
             ) : (
               <div className="player-round-grid">
                 {roundColumns.map(({ round, matches: roundMatches }) => (
@@ -619,11 +670,13 @@ function PlayerTournamentView({
                         const command = connectCommand(endpoint);
                         const status = match.status || "created";
                         const hasRecordedResult = tournamentMatchHasResult(match);
-                        const winnerName = match.winner_team_id ? teamName(match.winner_team_id) : "";
+                        const winnerName = match.winner_team_id ? teamName(match.winner_team_id) : "Winner pending";
                         const teamAName = teamName(match.team_a_id);
                         const teamBName = teamName(match.team_b_id);
+                        const scoreLabel = matchScoreLabel(match);
                         const matchLabel = match.name || (match.bracket_position ? `Match ${match.bracket_position}` : `Match ${shortId(match.id)}`);
                         const isReleased = status === "released";
+                        const showActiveResultNote = endpoint && hasRecordedResult;
 
                         return (
                           <article className={`player-match-card ${isReleased ? "player-match-card-released" : ""}`} key={match.id}>
@@ -647,11 +700,15 @@ function PlayerTournamentView({
                                 <dt>Result</dt>
                                 <dd>
                                   {hasRecordedResult ? (
-                                    <span className="player-score">{match.team_a_score} - {match.team_b_score}{winnerName ? ` · Winner: ${winnerName}` : ""}</span>
+                                    <span className="player-score">{scoreLabel}</span>
                                   ) : (
-                                    <span className="muted-endpoint">Not recorded</span>
+                                    <span className="muted-endpoint">Result not recorded yet.</span>
                                   )}
                                 </dd>
+                              </div>
+                              <div>
+                                <dt>Winner</dt>
+                                <dd>{hasRecordedResult ? winnerName : "Winner pending."}</dd>
                               </div>
                             </dl>
 
@@ -659,6 +716,7 @@ function PlayerTournamentView({
                               <div className="player-connect-box">
                                 <span>Active server</span>
                                 <strong>{endpoint}</strong>
+                                {showActiveResultNote && <p>Match result recorded; server still available for players.</p>}
                                 <code>{command}</code>
                                 <CopyButton text={command} label="Copy connect" onCopy={onCopy} />
                               </div>
@@ -1921,7 +1979,7 @@ export default function App() {
   const latestEndpoint = allocationEndpoint(latestAllocation);
   const latestCommand = connectCommand(latestEndpoint);
   const selectedTournament = tournaments.find((tournament) => tournament.id === selectedTournamentId) || null;
-  const teamNameById = Object.fromEntries(tournamentTeams.map((team) => [team.id, team.name]));
+  const teamNameById = Object.fromEntries(tournamentTeams.map((team) => [String(team.id), team.name || compactFallback(team.id)]));
   const roundNameById = Object.fromEntries(tournamentRounds.map((round) => [round.id, round.name]));
   const bracketConfig = normalizeGameConfig(tournamentMatchForm, gameConfigOptions);
   const bracketColumns = bracketRoundColumns(tournamentRounds, tournamentMatches);
@@ -1934,7 +1992,7 @@ export default function App() {
   const selectedTournamentSummary = selectedTournament ? tournamentSummaryData : null;
   const summaryCounts = selectedTournamentSummary?.counts || {};
   const summaryBracket = selectedTournamentSummary?.bracket || {};
-  const summaryWinnerName = selectedTournamentSummary?.winner_team?.name || selectedTournamentSummary?.champion_team?.name || "";
+  const summaryWinnerName = selectedTournamentSummary ? tournamentChampionDisplayName(selectedTournamentSummary, teamNameById) : "";
   const summaryFinalizeBlocker = selectedTournamentSummary?.finalize_blockers?.[0] || "";
   const summaryActiveServerCount = selectedTournamentSummary?.active_server_assignment_count || 0;
   const tournamentActiveServerCount = Math.max(
@@ -1997,6 +2055,7 @@ export default function App() {
           selectedTournament={selectedTournament}
           tournamentLoading={tournamentLoading}
           tournamentDetailLoading={tournamentDetailLoading}
+          tournamentTeamCount={tournamentTeams.length}
           tournamentRounds={tournamentRounds}
           tournamentMatches={tournamentMatches}
           selectedTournamentSummary={selectedTournamentSummary}
@@ -2143,7 +2202,7 @@ export default function App() {
               <div className="no-selection-state">
                 <p className="eyebrow">Selected Tournament Details</p>
                 <h3>No tournament selected</h3>
-                <p>Create a new tournament above, or select an existing tournament from the list to manage teams, rounds, and matches.</p>
+                <p>Choose a tournament to view matches and results.</p>
                 <div className="empty-detail-grid">
                   <div className="empty-detail-card">
                     <strong>Teams</strong>
@@ -2178,7 +2237,9 @@ export default function App() {
                       <p className="summary-story">{selectedTournamentSummary.story}</p>
                       {tournamentActiveServerCount > 0 && (
                         <p className="summary-note">
-                          {tournamentActiveServerCount} active server assignment{tournamentActiveServerCount === 1 ? "" : "s"} still need{tournamentActiveServerCount === 1 ? "s" : ""} to be released.
+                          {selectedTournamentSummary.completed
+                            ? "Tournament completed \u2014 server still active."
+                            : `${tournamentActiveServerCount} active server assignment${tournamentActiveServerCount === 1 ? "" : "s"} still need${tournamentActiveServerCount === 1 ? "s" : ""} to be released.`}
                         </p>
                       )}
                       {summaryFinalizeBlocker && !selectedTournamentSummary.completed && (
@@ -2305,7 +2366,7 @@ export default function App() {
                           </button>
                         </form>
                         {tournamentTeams.length === 0 ? (
-                          <p className="empty-state">No teams yet.</p>
+                          <p className="empty-state">Add teams before generating a bracket.</p>
                         ) : (
                           <div className="record-list">
                             {tournamentTeams.map((team) => (
@@ -2393,9 +2454,9 @@ export default function App() {
                               </div>
                               <div className="bracket-match-stack">
                                 {roundMatches.map((match) => {
-                                  const teamAName = match.team_a_id ? teamNameById[match.team_a_id] || shortId(match.team_a_id) : "TBD";
-                                  const teamBName = match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "TBD";
-                                  const winnerName = match.winner_team_id ? teamNameById[match.winner_team_id] || shortId(match.winner_team_id) : "";
+                                  const teamAName = teamDisplayName(teamNameById, match.team_a_id);
+                                  const teamBName = teamDisplayName(teamNameById, match.team_b_id);
+                                  const winnerName = match.winner_team_id ? teamDisplayName(teamNameById, match.winner_team_id, "Winner pending") : "";
                                   const hasScore = tournamentMatchHasResult(match);
 
                                   return (
@@ -2551,7 +2612,7 @@ export default function App() {
                       </form>
 
                       {tournamentMatches.length === 0 ? (
-                        <p className="empty-state">No tournament matches yet.</p>
+                        <p className="empty-state">Generate a bracket or create a match to begin.</p>
                       ) : (
                         <div className="tournament-match-grid">
                           {tournamentMatches.map((match) => {
@@ -2566,9 +2627,10 @@ export default function App() {
                             const isRecordingResult = Boolean(recordingTournamentResults[match.id]);
                             const assignmentVerified = status !== "failed";
                             const resultForm = tournamentResultForm(match);
-                            const teamAName = match.team_a_id ? teamNameById[match.team_a_id] || shortId(match.team_a_id) : "TBD";
-                            const teamBName = match.team_b_id ? teamNameById[match.team_b_id] || shortId(match.team_b_id) : "TBD";
-                            const winnerName = match.winner_team_id ? teamNameById[match.winner_team_id] || `Team ${shortId(match.winner_team_id)}` : "";
+                            const teamAName = teamDisplayName(teamNameById, match.team_a_id);
+                            const teamBName = teamDisplayName(teamNameById, match.team_b_id);
+                            const winnerName = match.winner_team_id ? teamDisplayName(teamNameById, match.winner_team_id, "Winner pending") : "Winner pending";
+                            const scoreLabel = matchScoreLabel(match);
                             const hasRecordedResult = tournamentMatchHasResult(match);
                             const canShowResultForm = tournamentMatchCanShowResultForm(match);
                             const canRecordResult = tournamentMatchCanRecordResult(match);
@@ -2582,7 +2644,7 @@ export default function App() {
                             const resultActionMessage = hasRecordedResult
                               ? "Result recorded."
                               : TERMINAL_TOURNAMENT_MATCH_STATUSES.has(status)
-                                ? "No result recorded."
+                                ? "Result not recorded yet."
                                 : "Assign both teams before recording a result.";
                             const matchLabel = match.bracket_position
                               ? `Match ${match.bracket_position}`
@@ -2617,7 +2679,7 @@ export default function App() {
                                       ) : isReleased ? (
                                         <span className="muted-endpoint">Server released</span>
                                       ) : (
-                                        <span className="muted-endpoint">No active assignment</span>
+                                        <span className="muted-endpoint">No active server assigned.</span>
                                       )}
                                     </dd>
                                   </div>
@@ -2625,9 +2687,9 @@ export default function App() {
                                     <dt>Result</dt>
                                     <dd>
                                       {hasRecordedResult ? (
-                                        <span>{match.team_a_score} - {match.team_b_score}{winnerName ? ` · ${winnerName}` : ""}</span>
+                                        <span>{scoreLabel} · Winner: {winnerName}</span>
                                       ) : (
-                                        <span className="muted-endpoint">Not recorded</span>
+                                        <span className="muted-endpoint">Result not recorded yet.</span>
                                       )}
                                     </dd>
                                   </div>
@@ -2817,11 +2879,14 @@ export default function App() {
       </section>
 
       <aside className="right-rail">
-      <section className="panel match-rooms-panel">
-        <div className="panel-header">
-          <h2>Advanced / Debug Match Rooms</h2>
+      <details className="panel match-rooms-panel">
+        <summary className="match-rooms-summary">
+          <span>
+            <strong>Advanced / Debug Match Rooms</strong>
+            <small>Lower-level/manual infrastructure testing. Normal tournament workflow uses Tournament Matches.</small>
+          </span>
           <span className="panel-meta">{matches.length} in-memory rooms</span>
-        </div>
+        </summary>
 
         <form className="match-form" onSubmit={(event) => void createMatch(event)}>
           <label>
@@ -3110,7 +3175,7 @@ export default function App() {
             })}
           </div>
         )}
-      </section>
+      </details>
 
       <section className="grid metrics rail-metrics">
         <MetricCard label="Fleet Desired" value={fleetStatus.desired_replicas} />
