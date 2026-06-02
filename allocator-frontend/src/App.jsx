@@ -1198,8 +1198,15 @@ export default function App() {
       return;
     }
 
-    const championName = tournamentSummaryData.champion_team?.name || "the recorded winner";
-    const confirmed = window.confirm(`Finalize this tournament with ${championName} as winner? Match results will remain visible and server release stays separate.`);
+    const championName = tournamentChampionDisplayName(tournamentSummaryData, teamNameById, "the recorded winner");
+    const activeServerCount = Math.max(
+      tournamentSummaryData?.active_server_assignment_count || 0,
+      tournamentMatches.filter((match) => match.active_server_assignment).length
+    );
+    const releaseWarning = activeServerCount > 0
+      ? "\n\nThis tournament still has active match servers. Finalizing will release them."
+      : "";
+    const confirmed = window.confirm(`Finalize this tournament with ${championName} as winner? Match results will remain visible.${releaseWarning}`);
     if (!confirmed) {
       return;
     }
@@ -1217,7 +1224,12 @@ export default function App() {
       if (result.summary) {
         setTournamentSummaryData(result.summary);
       }
-      setCopyMessage(`${result.summary?.winner_team?.name || championName} finalized as tournament winner.`);
+      await loadTournamentDetails(selectedTournamentId, { silent: true });
+      const releasedCount = result.released_count || 0;
+      const releaseMessage = releasedCount > 0
+        ? ` Released ${releasedCount} active server${releasedCount === 1 ? "" : "s"}.`
+        : "";
+      setCopyMessage(`Tournament finalized.${releaseMessage}`);
       window.setTimeout(() => setCopyMessage(""), 2400);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
@@ -2239,7 +2251,7 @@ export default function App() {
                         <p className="summary-note">
                           {selectedTournamentSummary.completed
                             ? "Tournament completed \u2014 server still active."
-                            : `${tournamentActiveServerCount} active server assignment${tournamentActiveServerCount === 1 ? "" : "s"} still need${tournamentActiveServerCount === 1 ? "s" : ""} to be released.`}
+                            : `${tournamentActiveServerCount} active match server${tournamentActiveServerCount === 1 ? "" : "s"} will be released when the tournament is finalized.`}
                         </p>
                       )}
                       {summaryFinalizeBlocker && !selectedTournamentSummary.completed && (

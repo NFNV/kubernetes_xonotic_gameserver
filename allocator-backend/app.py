@@ -2606,6 +2606,129 @@ def fetch_active_tournament_server_assignments(cur, tournament_id: str) -> list[
     return cur.fetchall()
 
 
+def mark_tournament_assignments_released(
+    tournament_id: str,
+    released_attempts: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not released_attempts:
+        return [], []
+
+    assignment_ids = [attempt["assignment"]["id"] for attempt in released_attempts]
+    match_ids = list({attempt["assignment"]["match_id"] for attempt in released_attempts})
+    assignment_placeholders = ", ".join(["%s"] * len(assignment_ids))
+    match_placeholders = ", ".join(["%s"] * len(match_ids))
+
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE match_server_assignments
+                SET status = 'released', released_at = now(), updated_at = now()
+                WHERE id IN ({assignment_placeholders})
+                RETURNING
+                  id, tournament_id, match_id, allocated_game_server_name,
+                  allocation_request_name, address, port, status, created_at,
+                  released_at, updated_at
+                """,
+                assignment_ids,
+            )
+            released_assignments = cur.fetchall()
+            cur.execute(
+                f"""
+                UPDATE matches
+                SET status = 'released', finished_at = COALESCE(finished_at, now()), updated_at = now()
+                WHERE tournament_id = %s AND id IN ({match_placeholders})
+                RETURNING
+                  id, tournament_id, round_id, team_a_id, team_b_id, status,
+                  scheduled_at, started_at, finished_at, winner_team_id,
+                  team_a_score, team_b_score, result_notes, requested_map,
+                  requested_game_mode, bracket_position, next_match_id,
+                  next_match_slot, created_at, updated_at
+                """,
+                [tournament_id, *match_ids],
+            )
+            released_matches = cur.fetchall()
+        conn.commit()
+
+    return released_assignments, released_matches
+
+
+def release_active_tournament_server_assignments(tournament_id: str) -> dict[str, Any]:
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            fetch_tournament(cur, tournament_id)
+            active_assignments = fetch_active_tournament_server_assignments(cur, tournament_id)
+
+    released_attempts = []
+    failed = []
+    release_warnings = []
+
+    for assignment in active_assignments:
+        assignment_json = assignment_response(assignment, include_live_status=False)
+        gameserver_name = assignment["allocated_game_server_name"]
+        try:
+            release_result = delete_gameserver(gameserver_name)
+            clear_status_cache(assignment.get("address"), assignment.get("port"))
+            if release_result.get("already_missing"):
+                message = f"GameServer {gameserver_name} was already gone; assignment marked released."
+                APP.logger.warning(
+                    "Tournament server assignment already missing tournament_id=%s assignment_id=%s match_id=%s gameserver=%s",
+                    tournament_id,
+                    assignment["id"],
+                    assignment["match_id"],
+                    gameserver_name,
+                )
+                release_warnings.append(
+                    {
+                        "assignment": assignment_json,
+                        "gameserver_name": gameserver_name,
+                        "message": message,
+                    }
+                )
+            released_attempts.append({"assignment": assignment, "release_result": release_result})
+        except BackendApiError as exc:
+            failed.append(
+                {
+                    "assignment": assignment_json,
+                    "error": exc.payload,
+                    "message": exc.payload.get("message", "failed to release server assignment"),
+                }
+            )
+
+    try:
+        released_assignments, released_matches = mark_tournament_assignments_released(tournament_id, released_attempts)
+    except psycopg.Error as exc:
+        raise BackendApiError(
+            {
+                "error": "server_assignment_release_update_failed",
+                "message": "servers were deleted, but failed to update tournament assignment release state",
+            },
+            500,
+        ) from exc
+
+    release_result_by_assignment_id = {
+        str(attempt["assignment"]["id"]): attempt["release_result"]
+        for attempt in released_attempts
+    }
+    match_by_id = {str(match["id"]): match for match in released_matches}
+    released = [
+        {
+            "assignment": assignment_response(assignment, include_live_status=False),
+            "match": row_to_json(match_by_id.get(str(assignment["match_id"]))),
+            "release_result": release_result_by_assignment_id.get(str(assignment["id"])),
+        }
+        for assignment in released_assignments
+    ]
+
+    return {
+        "active_count_before": len(active_assignments),
+        "released_count": len(released),
+        "failed_count": len(failed),
+        "released": released,
+        "failed": failed,
+        "release_warnings": release_warnings,
+    }
+
 def assignment_response(assignment: dict[str, Any], *, include_live_status: bool = True) -> dict[str, Any]:
     response = row_to_json(assignment) or {}
     address = assignment.get("address")
@@ -3231,6 +3354,20 @@ def finalize_tournament(tournament_id: str):
                     ), 409
 
                 winner_team_id = summary["champion_team"]["id"]
+
+        release_summary = release_active_tournament_server_assignments(tournament_id)
+        if release_summary["failed_count"] > 0:
+            return jsonify(
+                {
+                    "error": "tournament_finalize_release_failed",
+                    "message": "failed to release one or more active match servers before finalizing tournament",
+                    "release": release_summary,
+                    "summary": summary,
+                }
+            ), 502
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
                 cur.execute(
                     """
                     UPDATE tournaments
@@ -3253,7 +3390,16 @@ def finalize_tournament(tournament_id: str):
     except psycopg.Error as exc:
         return db_exception_response(exc, fallback_error="tournament_finalize_failed", fallback_message="failed to finalize tournament")
 
-    return jsonify({"tournament": row_to_json(tournament), "summary": summary})
+    return jsonify(
+        {
+            "tournament": row_to_json(tournament),
+            "status": tournament["status"],
+            "summary": summary,
+            "released_count": release_summary["released_count"],
+            "release_warnings": release_summary["release_warnings"],
+            "release": release_summary,
+        }
+    )
 
 
 @APP.post("/tournaments/<tournament_id>/teams")
