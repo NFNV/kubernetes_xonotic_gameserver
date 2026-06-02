@@ -279,6 +279,36 @@ function bracketRoundColumns(rounds, matches) {
     .filter((column) => column.matches.length > 0);
 }
 
+function tournamentRoundColumns(rounds, matches) {
+  const knownRoundIds = new Set(rounds.map((round) => round.id));
+  const columns = [...rounds]
+    .sort((left, right) => numericValue(left.round_order) - numericValue(right.round_order))
+    .map((round) => ({
+      round,
+      matches: matches
+        .filter((match) => match.round_id === round.id)
+        .sort(compareByBracketOrder),
+    }))
+    .filter((column) => column.matches.length > 0);
+
+  const unassignedMatches = matches
+    .filter((match) => !match.round_id || !knownRoundIds.has(match.round_id))
+    .sort(compareByBracketOrder);
+
+  if (unassignedMatches.length > 0) {
+    columns.push({
+      round: {
+        id: "unassigned",
+        name: "Unassigned Round",
+        round_order: "-",
+      },
+      matches: unassignedMatches,
+    });
+  }
+
+  return columns;
+}
+
 function assignmentEndpoint(assignment) {
   if (!assignment) {
     return "";
@@ -388,6 +418,15 @@ function humanizeIdentifier(value) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function gameModeLabel(gameConfigOptions, modeName) {
+  if (!modeName) {
+    return "mode unset";
+  }
+
+  const mode = (gameConfigOptions.modes || []).find((candidate) => candidate.mode === modeName);
+  return mode?.label || humanizeIdentifier(modeName);
+}
+
 function selectableGameModes(gameConfigOptions) {
   const validMapsByMode = gameConfigOptions.valid_maps_by_mode || {};
   const modesByName = new Map();
@@ -461,6 +500,188 @@ function emptyTournamentMatchForm(gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIO
   };
 }
 
+function PlayerTournamentView({
+  tournaments,
+  selectedTournamentId,
+  selectedTournament,
+  tournamentLoading,
+  tournamentDetailLoading,
+  tournamentRounds,
+  tournamentMatches,
+  selectedTournamentSummary,
+  teamNameById,
+  gameConfigOptions,
+  onSelectTournament,
+  onRefreshTournaments,
+  onCopy,
+}) {
+  const roundColumns = tournamentRoundColumns(tournamentRounds, tournamentMatches);
+  const summaryCounts = selectedTournamentSummary?.counts || {};
+  const championName = selectedTournamentSummary?.winner_team?.name || selectedTournamentSummary?.champion_team?.name || "";
+
+  function teamName(teamId) {
+    return teamId ? teamNameById[teamId] || `Team ${shortId(teamId)}` : "TBD";
+  }
+
+  return (
+    <section className="player-view">
+      <aside className="player-tournament-rail">
+        <div className="player-section-header">
+          <div>
+            <p className="eyebrow">Tournament</p>
+            <h2>Choose Event</h2>
+          </div>
+          <button className="copy-button" type="button" onClick={onRefreshTournaments} disabled={tournamentLoading}>
+            {tournamentLoading ? "Loading..." : "Refresh"}
+          </button>
+        </div>
+
+        {tournamentLoading ? (
+          <p className="empty-state">Loading tournaments...</p>
+        ) : tournaments.length === 0 ? (
+          <p className="empty-state">No tournaments are published yet.</p>
+        ) : (
+          <div className="player-tournament-list">
+            {tournaments.map((tournament) => (
+              <button
+                className={`player-tournament-option ${tournament.id === selectedTournamentId ? "player-tournament-option-active" : ""}`}
+                key={tournament.id}
+                type="button"
+                onClick={() => onSelectTournament(tournament.id)}
+              >
+                <strong>{tournament.name}</strong>
+                <span>{humanizeIdentifier(tournament.status)} · {shortId(tournament.id)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </aside>
+
+      <section className="player-main">
+        {!selectedTournament ? (
+          <div className="player-empty-hero">
+            <p className="eyebrow">Player View</p>
+            <h2>Select a tournament</h2>
+            <p>Published matches, scores, winners, and live server endpoints will appear here.</p>
+          </div>
+        ) : (
+          <>
+            <article className="player-tournament-hero">
+              <div>
+                <p className="eyebrow">Player Tournament View</p>
+                <h2>{selectedTournament.name}</h2>
+                <p>{selectedTournament.description || "Match information and join targets for players and spectators."}</p>
+              </div>
+              <div className="player-hero-status">
+                <span className="state-badge">{humanizeIdentifier(selectedTournament.status)}</span>
+                <strong>{championName || "Champion pending"}</strong>
+                <span>{selectedTournamentSummary?.completed_at ? `Completed ${formatTimestamp(selectedTournamentSummary.completed_at)}` : "Live bracket"}</span>
+              </div>
+            </article>
+
+            <dl className="player-summary-grid">
+              <div>
+                <dt>Champion</dt>
+                <dd>{championName || "pending"}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{humanizeIdentifier(selectedTournament.status)}</dd>
+              </div>
+              <div>
+                <dt>Progress</dt>
+                <dd>{summaryCounts.finished_matches || 0}/{summaryCounts.matches || tournamentMatches.length} matches</dd>
+              </div>
+              <div>
+                <dt>Active Servers</dt>
+                <dd>{tournamentMatches.filter((match) => match.active_server_assignment).length}</dd>
+              </div>
+            </dl>
+
+            {tournamentDetailLoading ? (
+              <p className="empty-state">Loading match list...</p>
+            ) : roundColumns.length === 0 ? (
+              <p className="empty-state">No matches have been published for this tournament yet.</p>
+            ) : (
+              <div className="player-round-grid">
+                {roundColumns.map(({ round, matches: roundMatches }) => (
+                  <section className="player-round-column" key={round.id}>
+                    <div className="player-round-header">
+                      <div>
+                        <h3>{round.name}</h3>
+                        <span>{roundMatches.length} match{roundMatches.length === 1 ? "" : "es"}</span>
+                      </div>
+                    </div>
+                    <div className="player-match-stack">
+                      {roundMatches.map((match) => {
+                        const activeAssignment = match.active_server_assignment;
+                        const endpoint = assignmentEndpoint(activeAssignment);
+                        const command = connectCommand(endpoint);
+                        const status = match.status || "created";
+                        const hasRecordedResult = tournamentMatchHasResult(match);
+                        const winnerName = match.winner_team_id ? teamName(match.winner_team_id) : "";
+                        const teamAName = teamName(match.team_a_id);
+                        const teamBName = teamName(match.team_b_id);
+                        const matchLabel = match.name || (match.bracket_position ? `Match ${match.bracket_position}` : `Match ${shortId(match.id)}`);
+                        const isReleased = status === "released";
+
+                        return (
+                          <article className={`player-match-card ${isReleased ? "player-match-card-released" : ""}`} key={match.id}>
+                            <div className="player-match-header">
+                              <strong>{matchLabel}</strong>
+                              <span className={tournamentMatchStatusClass(status)}>{tournamentMatchStatusLabel(status)}</span>
+                            </div>
+
+                            <div className="player-versus">
+                              <span className={`player-team ${match.winner_team_id === match.team_a_id ? "player-team-winner" : ""}`}>{teamAName}</span>
+                              <span>vs</span>
+                              <span className={`player-team ${match.winner_team_id === match.team_b_id ? "player-team-winner" : ""}`}>{teamBName}</span>
+                            </div>
+
+                            <dl className="player-match-details">
+                              <div>
+                                <dt>Map / Mode</dt>
+                                <dd>{match.requested_map || "map unset"} / {gameModeLabel(gameConfigOptions, match.requested_game_mode)}</dd>
+                              </div>
+                              <div>
+                                <dt>Result</dt>
+                                <dd>
+                                  {hasRecordedResult ? (
+                                    <span className="player-score">{match.team_a_score} - {match.team_b_score}{winnerName ? ` · Winner: ${winnerName}` : ""}</span>
+                                  ) : (
+                                    <span className="muted-endpoint">Not recorded</span>
+                                  )}
+                                </dd>
+                              </div>
+                            </dl>
+
+                            {endpoint ? (
+                              <div className="player-connect-box">
+                                <span>Active server</span>
+                                <strong>{endpoint}</strong>
+                                <code>{command}</code>
+                                <CopyButton text={command} label="Copy connect" onCopy={onCopy} />
+                              </div>
+                            ) : (
+                              <p className="player-server-muted">{isReleased ? "Server released." : "No active server assigned."}</p>
+                            )}
+
+                            {match.result_notes && <p className="player-note">{match.result_notes}</p>}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    </section>
+  );
+}
+
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
@@ -487,6 +708,7 @@ export default function App() {
   const [copyMessage, setCopyMessage] = useState("");
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState("");
+  const [viewMode, setViewMode] = useState("admin");
   const [tournaments, setTournaments] = useState([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
   const [tournamentTeams, setTournamentTeams] = useState([]);
@@ -1720,6 +1942,74 @@ export default function App() {
     tournamentMatches.filter((match) => match.active_server_assignment).length
   );
 
+  function refreshPlayerTournamentView() {
+    void loadTournaments({ silent: true });
+    if (selectedTournamentId) {
+      void loadTournamentDetails(selectedTournamentId, { silent: true });
+    }
+  }
+
+  if (viewMode === "player") {
+    return (
+      <main className="page player-page">
+        <section className="hero player-hero">
+          <div>
+            <p className="eyebrow">Xonotic Tournament</p>
+            <h1>Player View</h1>
+            <p className="subtitle">
+              Follow tournament rounds, results, winners, and active join targets without admin controls or infrastructure debug panels.
+            </p>
+          </div>
+          <div className="hero-actions">
+            <div className="view-toggle" aria-label="Dashboard view">
+              <button className="secondary" type="button" onClick={() => setViewMode("admin")}>
+                Admin View
+              </button>
+              <button className="secondary toggle-active" type="button" aria-current="page">
+                Player View
+              </button>
+            </div>
+            <button className="secondary" type="button" onClick={refreshPlayerTournamentView} disabled={tournamentLoading || tournamentDetailLoading}>
+              {tournamentLoading || tournamentDetailLoading ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+        </section>
+
+        {error && (
+          <section className="error-banner">
+            <strong>{error.title}</strong>
+            <span>{error.message}</span>
+          </section>
+        )}
+
+        {copyMessage && <section className="copy-banner">{copyMessage}</section>}
+
+        {tournamentError && (
+          <section className="error-banner">
+            <strong>{tournamentError.title}</strong>
+            <span>{tournamentError.message}</span>
+          </section>
+        )}
+
+        <PlayerTournamentView
+          tournaments={tournaments}
+          selectedTournamentId={selectedTournamentId}
+          selectedTournament={selectedTournament}
+          tournamentLoading={tournamentLoading}
+          tournamentDetailLoading={tournamentDetailLoading}
+          tournamentRounds={tournamentRounds}
+          tournamentMatches={tournamentMatches}
+          selectedTournamentSummary={selectedTournamentSummary}
+          teamNameById={teamNameById}
+          gameConfigOptions={gameConfigOptions}
+          onSelectTournament={setSelectedTournamentId}
+          onRefreshTournaments={() => void loadTournaments({ silent: true })}
+          onCopy={copyText}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className="page">
       <section className="hero">
@@ -1731,6 +2021,14 @@ export default function App() {
           </p>
         </div>
         <div className="hero-actions">
+          <div className="view-toggle" aria-label="Dashboard view">
+            <button className="secondary toggle-active" type="button" aria-current="page">
+              Admin View
+            </button>
+            <button className="secondary" type="button" onClick={() => setViewMode("player")}>
+              Player View
+            </button>
+          </div>
           <StatusPill ok={backendHealthy} label={backendHealthy ? "Backend Healthy" : "Backend Unhealthy"} />
           <button
             className={`secondary ${autoRefresh ? "toggle-active" : ""}`}
