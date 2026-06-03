@@ -55,6 +55,21 @@ MAP_MODE_VERIFICATION_FAILURES = Counter(
 AGONES_NAMESPACE = os.environ.get("AGONES_NAMESPACE", "xonotic-agones")
 FLEET_NAME = os.environ.get("FLEET_NAME", "xonotic-fleet")
 GAME_LABEL = os.environ.get("GAME_LABEL", "xonotic")
+DEFAULT_SERVER_POOL_ID = "south-america-default"
+SERVER_POOLS = (
+    {
+        "id": DEFAULT_SERVER_POOL_ID,
+        "display_name": "South America - Default",
+        "region": "south-america",
+        "provider": "gcp",
+        "gcp_region": "southamerica-west1",
+        "cluster_name": "xonotic-mvp",
+        "agones_namespace": "xonotic-agones",
+        "fleet_name": "xonotic-fleet",
+        "enabled": True,
+        "default": True,
+    },
+)
 ALLOCATION_TIMEOUT_SECONDS = int(os.environ.get("ALLOCATION_TIMEOUT_SECONDS", "5"))
 ALLOCATION_POLL_INTERVAL_SECONDS = float(os.environ.get("ALLOCATION_POLL_INTERVAL_SECONDS", "0.25"))
 XONOTIC_STATUS_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_STATUS_TIMEOUT_SECONDS", "1"))
@@ -295,6 +310,8 @@ DB_MIGRATIONS = (
           result_notes text,
           requested_map text,
           requested_game_mode text,
+          requested_region text,
+          requested_server_pool_id text,
           bracket_position integer,
           next_match_id uuid REFERENCES matches(id) ON DELETE SET NULL,
           next_match_slot text,
@@ -319,6 +336,13 @@ DB_MIGRATIONS = (
           allocation_request_name text,
           address text NOT NULL,
           port integer NOT NULL,
+          server_pool_id text,
+          region text,
+          provider text,
+          gcp_region text,
+          cluster_name text,
+          agones_namespace text,
+          fleet_name text,
           status text NOT NULL DEFAULT 'active',
           created_at timestamptz NOT NULL DEFAULT now(),
           released_at timestamptz,
@@ -405,6 +429,48 @@ DB_MIGRATIONS = (
         "005_tournament_completed_at",
         """
         ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+        """,
+    ),
+    (
+        "006_server_pool_metadata",
+        """
+        ALTER TABLE matches ADD COLUMN IF NOT EXISTS requested_region text;
+        ALTER TABLE matches ADD COLUMN IF NOT EXISTS requested_server_pool_id text;
+
+        UPDATE matches
+        SET requested_region = COALESCE(requested_region, 'south-america'),
+            requested_server_pool_id = COALESCE(requested_server_pool_id, 'south-america-default')
+        WHERE requested_region IS NULL OR requested_server_pool_id IS NULL;
+
+        ALTER TABLE match_server_assignments ADD COLUMN IF NOT EXISTS server_pool_id text;
+        ALTER TABLE match_server_assignments ADD COLUMN IF NOT EXISTS region text;
+        ALTER TABLE match_server_assignments ADD COLUMN IF NOT EXISTS provider text;
+        ALTER TABLE match_server_assignments ADD COLUMN IF NOT EXISTS gcp_region text;
+        ALTER TABLE match_server_assignments ADD COLUMN IF NOT EXISTS cluster_name text;
+        ALTER TABLE match_server_assignments ADD COLUMN IF NOT EXISTS agones_namespace text;
+        ALTER TABLE match_server_assignments ADD COLUMN IF NOT EXISTS fleet_name text;
+
+        UPDATE match_server_assignments
+        SET server_pool_id = COALESCE(server_pool_id, 'south-america-default'),
+            region = COALESCE(region, 'south-america'),
+            provider = COALESCE(provider, 'gcp'),
+            gcp_region = COALESCE(gcp_region, 'southamerica-west1'),
+            cluster_name = COALESCE(cluster_name, 'xonotic-mvp'),
+            agones_namespace = COALESCE(agones_namespace, 'xonotic-agones'),
+            fleet_name = COALESCE(fleet_name, 'xonotic-fleet')
+        WHERE server_pool_id IS NULL
+           OR region IS NULL
+           OR provider IS NULL
+           OR gcp_region IS NULL
+           OR cluster_name IS NULL
+           OR agones_namespace IS NULL
+           OR fleet_name IS NULL;
+
+        CREATE INDEX IF NOT EXISTS matches_requested_server_pool_idx
+          ON matches (requested_server_pool_id);
+
+        CREATE INDEX IF NOT EXISTS match_server_assignments_server_pool_idx
+          ON match_server_assignments (server_pool_id);
         """,
     ),
 )
@@ -504,6 +570,161 @@ def row_to_json(row: dict[str, Any] | None) -> dict[str, Any] | None:
 
 def rows_to_json(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row_to_json(row) for row in rows if row is not None]
+
+
+def enabled_server_pools() -> list[dict[str, Any]]:
+    return [pool.copy() for pool in SERVER_POOLS if pool.get("enabled")]
+
+
+def default_server_pool() -> dict[str, Any]:
+    for pool in enabled_server_pools():
+        if pool.get("default"):
+            return pool
+
+    pools = enabled_server_pools()
+    if not pools:
+        raise BackendApiError(
+            {
+                "error": "server_pool_unavailable",
+                "message": "no enabled server pools are configured",
+            },
+            503,
+        )
+    return pools[0]
+
+
+def server_pool_response(pool: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": pool["id"],
+        "display_name": pool["display_name"],
+        "region": pool["region"],
+        "provider": pool["provider"],
+        "gcp_region": pool["gcp_region"],
+        "cluster_name": pool["cluster_name"],
+        "agones_namespace": pool["agones_namespace"],
+        "fleet_name": pool["fleet_name"],
+        "enabled": bool(pool.get("enabled")),
+        "default": bool(pool.get("default")),
+    }
+
+
+def server_pool_metadata(pool: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "server_pool_id": pool["id"],
+        "region": pool["region"],
+        "provider": pool["provider"],
+        "gcp_region": pool["gcp_region"],
+        "cluster_name": pool["cluster_name"],
+        "agones_namespace": pool["agones_namespace"],
+        "fleet_name": pool["fleet_name"],
+    }
+
+
+def find_server_pool_by_id(server_pool_id: str) -> dict[str, Any] | None:
+    return next((pool.copy() for pool in SERVER_POOLS if pool["id"] == server_pool_id), None)
+
+
+def validate_requested_region(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_region", "message": "requested_region must be a string"}, 400)
+
+    region = value.strip().lower()
+    if not region:
+        return None
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,80}[a-z0-9]", region):
+        raise BackendApiError({"error": "invalid_region", "message": "requested_region contains unsupported characters"}, 400)
+    return region
+
+
+def validate_requested_server_pool_id(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise BackendApiError({"error": "invalid_server_pool", "message": "requested_server_pool_id must be a string"}, 400)
+
+    server_pool_id = value.strip()
+    if not server_pool_id:
+        return None
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,100}[a-z0-9]", server_pool_id):
+        raise BackendApiError({"error": "invalid_server_pool", "message": "requested_server_pool_id contains unsupported characters"}, 400)
+    return server_pool_id
+
+
+def resolve_server_pool(
+    requested_server_pool_id: Any = None,
+    requested_region: Any = None,
+) -> dict[str, Any]:
+    server_pool_id = validate_requested_server_pool_id(requested_server_pool_id)
+    region = validate_requested_region(requested_region)
+
+    if server_pool_id:
+        pool = find_server_pool_by_id(server_pool_id)
+        if not pool:
+            raise BackendApiError(
+                {
+                    "error": "unknown_server_pool",
+                    "message": f"server pool {server_pool_id} is not configured",
+                    "requested_server_pool_id": server_pool_id,
+                },
+                400,
+            )
+        if not pool.get("enabled"):
+            raise BackendApiError(
+                {
+                    "error": "disabled_server_pool",
+                    "message": f"server pool {server_pool_id} is disabled",
+                    "requested_server_pool_id": server_pool_id,
+                },
+                400,
+            )
+        if region and pool["region"] != region:
+            raise BackendApiError(
+                {
+                    "error": "server_pool_region_mismatch",
+                    "message": f"server pool {server_pool_id} belongs to {pool['region']}, not {region}",
+                    "requested_server_pool_id": server_pool_id,
+                    "requested_region": region,
+                    "server_pool_region": pool["region"],
+                },
+                400,
+            )
+        return pool
+
+    if region:
+        region_pools = [pool for pool in enabled_server_pools() if pool["region"] == region]
+        if not region_pools:
+            raise BackendApiError(
+                {
+                    "error": "unknown_region_server_pool",
+                    "message": f"no enabled server pool is configured for region {region}",
+                    "requested_region": region,
+                },
+                400,
+            )
+        return next((pool for pool in region_pools if pool.get("default")), region_pools[0])
+
+    return default_server_pool()
+
+
+def default_server_pool_metadata() -> dict[str, Any]:
+    return server_pool_metadata(default_server_pool())
+
+
+def tournament_match_response(match: dict[str, Any] | None) -> dict[str, Any] | None:
+    response = row_to_json(match)
+    if response is None:
+        return None
+
+    default_metadata = default_server_pool_metadata()
+    response["requested_region"] = response.get("requested_region") or default_metadata["region"]
+    response["requested_server_pool_id"] = response.get("requested_server_pool_id") or default_metadata["server_pool_id"]
+    return response
+
+
+def tournament_match_rows_response(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [response for response in (tournament_match_response(match) for match in matches) if response is not None]
 
 
 def run_db_migrations() -> None:
@@ -606,20 +827,21 @@ if db_configured():
         APP.logger.warning("PostgreSQL is configured but not ready; tournament endpoints will retry migrations on demand", exc_info=True)
 
 
-def build_allocation_manifest() -> dict:
+def build_allocation_manifest(server_pool: dict[str, Any] | None = None) -> dict:
+    pool = server_pool or default_server_pool()
     return {
         "apiVersion": f"{ALLOCATION_GROUP}/{ALLOCATION_VERSION}",
         "kind": "GameServerAllocation",
         "metadata": {
             "generateName": "xonotic-allocation-",
-            "namespace": AGONES_NAMESPACE,
+            "namespace": pool["agones_namespace"],
         },
         "spec": {
             "scheduling": "Packed",
             "selectors": [
                 {
                     "matchLabels": {
-                        "agones.dev/fleet": FLEET_NAME,
+                        "agones.dev/fleet": pool["fleet_name"],
                         "game": GAME_LABEL,
                     }
                 }
@@ -737,27 +959,31 @@ def raise_kubernetes_api_error(
     )
 
 
-def read_fleet_status() -> dict[str, Any]:
+def read_fleet_status(server_pool: dict[str, Any] | None = None) -> dict[str, Any]:
+    pool = server_pool or default_server_pool()
     fleet = custom_objects_api.get_namespaced_custom_object(
         group="agones.dev",
         version="v1",
-        namespace=AGONES_NAMESPACE,
+        namespace=pool["agones_namespace"],
         plural="fleets",
-        name=FLEET_NAME,
+        name=pool["fleet_name"],
     )
-    return extract_fleet_status(fleet)
+    status = extract_fleet_status(fleet)
+    status["server_pool"] = server_pool_response(pool)
+    return status
 
 
-def ensure_ready_gameserver_capacity() -> dict[str, Any]:
+def ensure_ready_gameserver_capacity(server_pool: dict[str, Any] | None = None) -> dict[str, Any]:
+    pool = server_pool or default_server_pool()
     try:
-        fleet = read_fleet_status()
+        fleet = read_fleet_status(pool)
     except ApiException as exc:
         raise_kubernetes_api_error(
             operation="get",
             resource_type=FLEET_RESOURCE_KIND,
-            namespace=AGONES_NAMESPACE,
-            name=FLEET_NAME,
-            request_context={"fleet_name": FLEET_NAME},
+            namespace=pool["agones_namespace"],
+            name=pool["fleet_name"],
+            request_context={"server_pool": server_pool_response(pool)},
             exc=exc,
         )
     except Exception as exc:
@@ -769,6 +995,7 @@ def ensure_ready_gameserver_capacity() -> dict[str, Any]:
                 "error": "no_ready_servers",
                 "message": "no Ready Xonotic servers are available yet; wait for FleetAutoscaler to replenish capacity",
                 "fleet": fleet,
+                "server_pool": server_pool_response(pool),
             },
             409,
         )
@@ -1669,7 +1896,7 @@ def run_tournament_admin_broadcast(tournament_id: str, match_id: str, message: s
         expect_response=False,
     )
 
-    response_match = row_to_json(match)
+    response_match = tournament_match_response(match)
     response_match["active_server_assignment"] = assignment_response(assignment, include_live_status=False)
     return {
         "ok": True,
@@ -1846,7 +2073,7 @@ def run_tournament_admin_change_map(tournament_id: str, match_id: str, map_name:
     verification = verify_change_map_status(address, port, map_name)
     live_status = verification.get("live_status")
 
-    response_match = row_to_json(match)
+    response_match = tournament_match_response(match)
     response_match["active_server_assignment"] = assignment_response(assignment, include_live_status=False)
     return {
         "ok": verification.get("verified") is True,
@@ -1941,14 +2168,14 @@ def configure_allocated_server(
     }
 
 
-def wait_for_allocation(name: str) -> dict:
+def wait_for_allocation(name: str, server_pool: dict[str, Any]) -> dict:
     deadline = time.time() + ALLOCATION_TIMEOUT_SECONDS
 
     while time.time() < deadline:
         allocation = custom_objects_api.get_namespaced_custom_object(
             group=ALLOCATION_GROUP,
             version=ALLOCATION_VERSION,
-            namespace=AGONES_NAMESPACE,
+            namespace=server_pool["agones_namespace"],
             plural=ALLOCATION_PLURAL,
             name=name,
         )
@@ -1961,15 +2188,16 @@ def wait_for_allocation(name: str) -> dict:
     raise TimeoutError(f"allocation {name} did not return address/port before timeout")
 
 
-def allocate_gameserver() -> dict:
+def allocate_gameserver(server_pool: dict[str, Any] | None = None) -> dict:
+    pool = server_pool or default_server_pool()
     try:
         ALLOCATION_ATTEMPTS.inc()
-        request_body = build_allocation_manifest()
+        request_body = build_allocation_manifest(pool)
         try:
             allocation = custom_objects_api.create_namespaced_custom_object(
                 group=ALLOCATION_GROUP,
                 version=ALLOCATION_VERSION,
-                namespace=AGONES_NAMESPACE,
+                namespace=pool["agones_namespace"],
                 plural=ALLOCATION_PLURAL,
                 body=request_body,
             )
@@ -1977,9 +2205,9 @@ def allocate_gameserver() -> dict:
             raise_kubernetes_api_error(
                 operation="create",
                 resource_type=ALLOCATION_RESOURCE_KIND,
-                namespace=AGONES_NAMESPACE,
+                namespace=pool["agones_namespace"],
                 name=request_body.get("metadata", {}).get("name") or request_body.get("metadata", {}).get("generateName"),
-                request_context=request_body,
+                request_context={"server_pool": server_pool_response(pool), "allocation": request_body},
                 exc=exc,
             )
         except Exception as exc:
@@ -1988,6 +2216,7 @@ def allocate_gameserver() -> dict:
         allocation_name = allocation.get("metadata", {}).get("name")
         try:
             allocation_response = extract_allocation_response(allocation)
+            allocation_response["server_pool"] = server_pool_response(pool)
             ALLOCATION_SUCCESSES.inc()
             return allocation_response
         except ValueError:
@@ -1999,14 +2228,15 @@ def allocate_gameserver() -> dict:
                     "error": "allocation_create_failed",
                     "message": "allocation request name missing from create response",
                     "resource_type": ALLOCATION_RESOURCE_KIND,
-                    "namespace": AGONES_NAMESPACE,
-                    "request_context": request_body,
+                    "namespace": pool["agones_namespace"],
+                    "request_context": {"server_pool": server_pool_response(pool), "allocation": request_body},
                 },
                 500,
             )
 
         try:
-            allocation_response = wait_for_allocation(allocation_name)
+            allocation_response = wait_for_allocation(allocation_name, pool)
+            allocation_response["server_pool"] = server_pool_response(pool)
             ALLOCATION_SUCCESSES.inc()
             return allocation_response
         except TimeoutError as exc:
@@ -2022,9 +2252,9 @@ def allocate_gameserver() -> dict:
             raise_kubernetes_api_error(
                 operation="get",
                 resource_type=ALLOCATION_RESOURCE_KIND,
-                namespace=AGONES_NAMESPACE,
+                namespace=pool["agones_namespace"],
                 name=allocation_name,
-                request_context={"allocation_request_name": allocation_name},
+                request_context={"allocation_request_name": allocation_name, "server_pool": server_pool_response(pool)},
                 exc=exc,
                 allocation_request_name=allocation_name,
             )
@@ -2051,12 +2281,13 @@ def allocate_gameserver() -> dict:
         raise
 
 
-def delete_gameserver(name: str) -> dict[str, Any]:
+def delete_gameserver(name: str, *, agones_namespace: str | None = None) -> dict[str, Any]:
+    namespace = agones_namespace or AGONES_NAMESPACE
     try:
         custom_objects_api.delete_namespaced_custom_object(
             group="agones.dev",
             version="v1",
-            namespace=AGONES_NAMESPACE,
+            namespace=namespace,
             plural="gameservers",
             name=name,
         )
@@ -2066,7 +2297,7 @@ def delete_gameserver(name: str) -> dict[str, Any]:
         raise_kubernetes_api_error(
             operation="delete",
             resource_type=GAMESERVER_RESOURCE_KIND,
-            namespace=AGONES_NAMESPACE,
+            namespace=namespace,
             name=name,
             request_context={"gameserver_name": name},
             exc=exc,
@@ -2392,7 +2623,8 @@ def fetch_tournament_matches(cur, tournament_id: str) -> list[dict[str, Any]]:
           m.id, m.tournament_id, m.round_id, m.team_a_id, m.team_b_id, m.status,
           m.scheduled_at, m.started_at, m.finished_at, m.winner_team_id,
           m.team_a_score, m.team_b_score, m.result_notes, m.requested_map,
-          m.requested_game_mode, m.bracket_position, m.next_match_id,
+          m.requested_game_mode, m.requested_region, m.requested_server_pool_id,
+          m.bracket_position, m.next_match_id,
           m.next_match_slot, m.created_at, m.updated_at
         FROM matches m
         LEFT JOIN rounds r ON r.id = m.round_id
@@ -2560,7 +2792,8 @@ def fetch_tournament_match(cur, tournament_id: str, match_id: str) -> dict[str, 
           id, tournament_id, round_id, team_a_id, team_b_id, status,
           scheduled_at, started_at, finished_at, winner_team_id,
           team_a_score, team_b_score, result_notes, requested_map,
-          requested_game_mode, bracket_position, next_match_id,
+          requested_game_mode, requested_region, requested_server_pool_id,
+          bracket_position, next_match_id,
           next_match_slot, created_at, updated_at
         FROM matches
         WHERE id = %s AND tournament_id = %s
@@ -2578,8 +2811,9 @@ def fetch_active_server_assignment(cur, tournament_id: str, match_id: str) -> di
         """
         SELECT
           id, tournament_id, match_id, allocated_game_server_name,
-          allocation_request_name, address, port, status, created_at,
-          released_at, updated_at
+          allocation_request_name, address, port, server_pool_id, region,
+          provider, gcp_region, cluster_name, agones_namespace, fleet_name,
+          status, created_at, released_at, updated_at
         FROM match_server_assignments
         WHERE tournament_id = %s AND match_id = %s AND status = 'active'
         ORDER BY created_at DESC
@@ -2595,8 +2829,9 @@ def fetch_active_tournament_server_assignments(cur, tournament_id: str) -> list[
         """
         SELECT
           id, tournament_id, match_id, allocated_game_server_name,
-          allocation_request_name, address, port, status, created_at,
-          released_at, updated_at
+          allocation_request_name, address, port, server_pool_id, region,
+          provider, gcp_region, cluster_name, agones_namespace, fleet_name,
+          status, created_at, released_at, updated_at
         FROM match_server_assignments
         WHERE tournament_id = %s AND status = 'active'
         ORDER BY created_at
@@ -2627,8 +2862,9 @@ def mark_tournament_assignments_released(
                 WHERE id IN ({assignment_placeholders})
                 RETURNING
                   id, tournament_id, match_id, allocated_game_server_name,
-                  allocation_request_name, address, port, status, created_at,
-                  released_at, updated_at
+                  allocation_request_name, address, port, server_pool_id, region,
+                  provider, gcp_region, cluster_name, agones_namespace, fleet_name,
+                  status, created_at, released_at, updated_at
                 """,
                 assignment_ids,
             )
@@ -2642,7 +2878,8 @@ def mark_tournament_assignments_released(
                   id, tournament_id, round_id, team_a_id, team_b_id, status,
                   scheduled_at, started_at, finished_at, winner_team_id,
                   team_a_score, team_b_score, result_notes, requested_map,
-                  requested_game_mode, bracket_position, next_match_id,
+                  requested_game_mode, requested_region, requested_server_pool_id,
+                  bracket_position, next_match_id,
                   next_match_slot, created_at, updated_at
                 """,
                 [tournament_id, *match_ids],
@@ -2667,7 +2904,7 @@ def release_active_tournament_server_assignments(tournament_id: str) -> dict[str
         assignment_json = assignment_response(assignment, include_live_status=False)
         gameserver_name = assignment["allocated_game_server_name"]
         try:
-            release_result = delete_gameserver(gameserver_name)
+            release_result = delete_gameserver(gameserver_name, agones_namespace=assignment.get("agones_namespace"))
             clear_status_cache(assignment.get("address"), assignment.get("port"))
             if release_result.get("already_missing"):
                 message = f"GameServer {gameserver_name} was already gone; assignment marked released."
@@ -2714,7 +2951,7 @@ def release_active_tournament_server_assignments(tournament_id: str) -> dict[str
     released = [
         {
             "assignment": assignment_response(assignment, include_live_status=False),
-            "match": row_to_json(match_by_id.get(str(assignment["match_id"]))),
+            "match": tournament_match_response(match_by_id.get(str(assignment["match_id"]))),
             "release_result": release_result_by_assignment_id.get(str(assignment["id"])),
         }
         for assignment in released_assignments
@@ -2731,6 +2968,19 @@ def release_active_tournament_server_assignments(tournament_id: str) -> dict[str
 
 def assignment_response(assignment: dict[str, Any], *, include_live_status: bool = True) -> dict[str, Any]:
     response = row_to_json(assignment) or {}
+    default_metadata = default_server_pool_metadata()
+    for key, value in default_metadata.items():
+        response[key] = response.get(key) or value
+
+    response["server_pool"] = {
+        "id": response.get("server_pool_id"),
+        "region": response.get("region"),
+        "provider": response.get("provider"),
+        "gcp_region": response.get("gcp_region"),
+        "cluster_name": response.get("cluster_name"),
+        "agones_namespace": response.get("agones_namespace"),
+        "fleet_name": response.get("fleet_name"),
+    }
     address = assignment.get("address")
     port = assignment.get("port")
     response["endpoint"] = f"{address}:{port}" if address and port else None
@@ -2751,8 +3001,9 @@ def attach_active_assignments_to_matches(cur, matches: list[dict[str, Any]]) -> 
         f"""
         SELECT
           id, tournament_id, match_id, allocated_game_server_name,
-          allocation_request_name, address, port, status, created_at,
-          released_at, updated_at
+          allocation_request_name, address, port, server_pool_id, region,
+          provider, gcp_region, cluster_name, agones_namespace, fleet_name,
+          status, created_at, released_at, updated_at
         FROM match_server_assignments
         WHERE status = 'active' AND match_id IN ({placeholders})
         ORDER BY created_at DESC
@@ -2765,7 +3016,7 @@ def attach_active_assignments_to_matches(cur, matches: list[dict[str, Any]]) -> 
 
     enriched = []
     for match in matches:
-        match_json = row_to_json(match) or {}
+        match_json = tournament_match_response(match) or {}
         active_assignment = assignment_by_match_id.get(str(match["id"]))
         match_json["active_server_assignment"] = assignment_response(active_assignment, include_live_status=False) if active_assignment else None
         enriched.append(match_json)
@@ -2958,7 +3209,8 @@ def advance_bracket_winner(cur, tournament_id: str, match: dict[str, Any], winne
           id, tournament_id, round_id, team_a_id, team_b_id, status,
           scheduled_at, started_at, finished_at, winner_team_id,
           team_a_score, team_b_score, result_notes, requested_map,
-          requested_game_mode, bracket_position, next_match_id,
+          requested_game_mode, requested_region, requested_server_pool_id,
+          bracket_position, next_match_id,
           next_match_slot, created_at, updated_at
         """,
         (winner_team_id, next_match_id, tournament_id),
@@ -3116,6 +3368,8 @@ def build_bracket_rows(
     round_id_by_order: dict[int, str],
     requested_map: str,
     requested_game_mode: str,
+    requested_region: str,
+    requested_server_pool_id: str,
 ) -> list[dict[str, Any]]:
     first_round_pairs = BRACKET_SEED_PAIRS[bracket_size]
     match_rows = []
@@ -3142,6 +3396,8 @@ def build_bracket_rows(
                 "next_match_slot": None,
                 "requested_map": requested_map,
                 "requested_game_mode": requested_game_mode,
+                "requested_region": requested_region,
+                "requested_server_pool_id": requested_server_pool_id,
             }
             matches_by_round[round_index].append(match_row)
             match_rows.append(match_row)
@@ -3533,6 +3789,8 @@ def generate_tournament_bracket(tournament_id: str):
             body.get("requested_map", body.get("map")),
             body.get("requested_game_mode", body.get("game_mode")),
         )
+        server_pool = resolve_server_pool(body.get("requested_server_pool_id"), body.get("requested_region"))
+        pool_metadata = server_pool_metadata(server_pool)
 
         with db_connect() as conn:
             with conn.cursor() as cur:
@@ -3577,21 +3835,25 @@ def generate_tournament_bracket(tournament_id: str):
                     round_id_by_order=round_id_by_order,
                     requested_map=requested_map,
                     requested_game_mode=requested_game_mode,
+                    requested_region=pool_metadata["region"],
+                    requested_server_pool_id=pool_metadata["server_pool_id"],
                 )
                 for match_row in bracket_match_rows:
                     cur.execute(
                         """
                         INSERT INTO matches (
                           id, tournament_id, round_id, team_a_id, team_b_id,
-                          requested_map, requested_game_mode, bracket_position,
-                          next_match_id, next_match_slot
+                          requested_map, requested_game_mode, requested_region,
+                          requested_server_pool_id, bracket_position, next_match_id,
+                          next_match_slot
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING
                           id, tournament_id, round_id, team_a_id, team_b_id, status,
                           scheduled_at, started_at, finished_at, winner_team_id,
                           team_a_score, team_b_score, result_notes, requested_map,
-                          requested_game_mode, bracket_position, next_match_id,
+                          requested_game_mode, requested_region, requested_server_pool_id,
+                          bracket_position, next_match_id,
                           next_match_slot, created_at, updated_at
                         """,
                         (
@@ -3602,6 +3864,8 @@ def generate_tournament_bracket(tournament_id: str):
                             match_row["team_b_id"],
                             match_row["requested_map"],
                             match_row["requested_game_mode"],
+                            match_row["requested_region"],
+                            match_row["requested_server_pool_id"],
                             match_row["bracket_position"],
                             None,
                             None,
@@ -3628,7 +3892,8 @@ def generate_tournament_bracket(tournament_id: str):
                       m.id, m.tournament_id, m.round_id, m.team_a_id, m.team_b_id, m.status,
                       m.scheduled_at, m.started_at, m.finished_at, m.winner_team_id,
                       m.team_a_score, m.team_b_score, m.result_notes, m.requested_map,
-                      m.requested_game_mode, m.bracket_position, m.next_match_id,
+                      m.requested_game_mode, m.requested_region, m.requested_server_pool_id,
+                      m.bracket_position, m.next_match_id,
                       m.next_match_slot, m.created_at, m.updated_at
                     FROM matches m
                     LEFT JOIN rounds r ON r.id = m.round_id
@@ -3664,7 +3929,7 @@ def generate_tournament_bracket(tournament_id: str):
         {
             "tournament": row_to_json(tournament),
             "rounds": rows_to_json(round_rows),
-            "matches": rows_to_json(match_rows),
+            "matches": tournament_match_rows_response(match_rows),
             "replaced_existing": replace_existing,
         }
     ), 200 if replace_existing else 201
@@ -3691,6 +3956,8 @@ def create_tournament_match(tournament_id: str):
             body.get("requested_game_mode", body.get("game_mode")),
             allow_experimental=allow_experimental,
         )
+        server_pool = resolve_server_pool(body.get("requested_server_pool_id"), body.get("requested_region"))
+        pool_metadata = server_pool_metadata(server_pool)
 
         with db_connect() as conn:
             with conn.cursor() as cur:
@@ -3702,17 +3969,31 @@ def create_tournament_match(tournament_id: str):
                     """
                     INSERT INTO matches (
                       id, tournament_id, round_id, team_a_id, team_b_id, status,
-                      scheduled_at, requested_map, requested_game_mode
+                      scheduled_at, requested_map, requested_game_mode,
+                      requested_region, requested_server_pool_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING
                       id, tournament_id, round_id, team_a_id, team_b_id, status,
                       scheduled_at, started_at, finished_at, winner_team_id,
                       team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, bracket_position, next_match_id,
+                      requested_game_mode, requested_region, requested_server_pool_id,
+                      bracket_position, next_match_id,
                       next_match_slot, created_at, updated_at
                     """,
-                    (match_id, tournament_id, round_id, team_a_id, team_b_id, status, scheduled_at, requested_map, requested_game_mode),
+                    (
+                        match_id,
+                        tournament_id,
+                        round_id,
+                        team_a_id,
+                        team_b_id,
+                        status,
+                        scheduled_at,
+                        requested_map,
+                        requested_game_mode,
+                        pool_metadata["region"],
+                        pool_metadata["server_pool_id"],
+                    ),
                 )
                 match_row = cur.fetchone()
             conn.commit()
@@ -3721,7 +4002,7 @@ def create_tournament_match(tournament_id: str):
     except psycopg.Error as exc:
         return db_exception_response(exc, fallback_error="tournament_match_create_failed", fallback_message="failed to create tournament match")
 
-    return jsonify(row_to_json(match_row)), 201
+    return jsonify(tournament_match_response(match_row)), 201
 
 
 @APP.get("/tournaments/<tournament_id>/matches")
@@ -3739,7 +4020,8 @@ def list_tournament_matches(tournament_id: str):
                       m.id, m.tournament_id, m.round_id, m.team_a_id, m.team_b_id, m.status,
                       m.scheduled_at, m.started_at, m.finished_at, m.winner_team_id,
                       m.team_a_score, m.team_b_score, m.result_notes, m.requested_map,
-                      m.requested_game_mode, m.bracket_position, m.next_match_id,
+                      m.requested_game_mode, m.requested_region, m.requested_server_pool_id,
+                      m.bracket_position, m.next_match_id,
                       m.next_match_slot, m.created_at, m.updated_at
                     FROM matches m
                     LEFT JOIN rounds r ON r.id = m.round_id
@@ -3791,7 +4073,8 @@ def record_tournament_match_result(tournament_id: str, match_id: str):
                       id, tournament_id, round_id, team_a_id, team_b_id, status,
                       scheduled_at, started_at, finished_at, winner_team_id,
                       team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, bracket_position, next_match_id,
+                      requested_game_mode, requested_region, requested_server_pool_id,
+                      bracket_position, next_match_id,
                       next_match_slot, created_at, updated_at
                     """,
                     (team_a_score, team_b_score, winner_team_id, result_notes, match_id, tournament_id),
@@ -3809,9 +4092,9 @@ def record_tournament_match_result(tournament_id: str, match_id: str):
             fallback_message="failed to record tournament match result",
         )
 
-    response = row_to_json(updated_match)
+    response = tournament_match_response(updated_match)
     response["active_server_assignment"] = assignment_response(active_assignment) if active_assignment else None
-    response["advanced_match"] = row_to_json(advanced_match) if advanced_match else None
+    response["advanced_match"] = tournament_match_response(advanced_match) if advanced_match else None
     return jsonify(response)
 
 
@@ -3829,9 +4112,10 @@ def list_tournament_match_server_assignments(tournament_id: str, match_id: str):
                 cur.execute(
                     """
                     SELECT
-                      id, tournament_id, match_id, allocated_game_server_name,
-                      allocation_request_name, address, port, status, created_at,
-                      released_at, updated_at
+          id, tournament_id, match_id, allocated_game_server_name,
+          allocation_request_name, address, port, server_pool_id, region,
+          provider, gcp_region, cluster_name, agones_namespace, fleet_name,
+          status, created_at, released_at, updated_at
                     FROM match_server_assignments
                     WHERE tournament_id = %s AND match_id = %s
                     ORDER BY created_at DESC
@@ -3874,21 +4158,25 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                     match.get("requested_game_mode"),
                     allow_experimental=allow_experimental,
                 )
+                server_pool = resolve_server_pool(match.get("requested_server_pool_id"), match.get("requested_region"))
                 active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
 
                 if active_assignment and not force_replace:
                     return jsonify(
                         {
                             "reused_existing_assignment": True,
-                            "match": row_to_json(match),
+                            "match": tournament_match_response(match),
                             "assignment": assignment_response(active_assignment),
                         }
                     )
 
-                ensure_ready_gameserver_capacity()
+                ensure_ready_gameserver_capacity(server_pool)
 
                 if active_assignment and force_replace:
-                    release_result = delete_gameserver(active_assignment["allocated_game_server_name"])
+                    release_result = delete_gameserver(
+                        active_assignment["allocated_game_server_name"],
+                        agones_namespace=active_assignment.get("agones_namespace"),
+                    )
                     cur.execute(
                         """
                         UPDATE match_server_assignments
@@ -3925,7 +4213,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
 
     allocation = None
     try:
-        allocation = allocate_gameserver()
+        allocation = allocate_gameserver(server_pool)
         assignment_id = new_db_id()
         with db_connect() as conn:
             with conn.cursor() as cur:
@@ -3933,12 +4221,12 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                 match = fetch_tournament_match(cur, tournament_id, match_id)
                 active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
                 if active_assignment:
-                    delete_gameserver(allocation["allocated_game_server_name"])
+                    delete_gameserver(allocation["allocated_game_server_name"], agones_namespace=server_pool["agones_namespace"])
                     return jsonify(
                         {
                             "reused_existing_assignment": True,
                             "message": "another active assignment was created while this allocation was in progress",
-                            "match": row_to_json(match),
+                            "match": tournament_match_response(match),
                             "assignment": assignment_response(active_assignment),
                         }
                     ), 409
@@ -3947,13 +4235,15 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                     """
                     INSERT INTO match_server_assignments (
                       id, tournament_id, match_id, allocated_game_server_name,
-                      allocation_request_name, address, port, status
+                      allocation_request_name, address, port, server_pool_id, region,
+                      provider, gcp_region, cluster_name, agones_namespace, fleet_name, status
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'active')
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active')
                     RETURNING
                       id, tournament_id, match_id, allocated_game_server_name,
-                      allocation_request_name, address, port, status, created_at,
-                      released_at, updated_at
+                      allocation_request_name, address, port, server_pool_id, region,
+                      provider, gcp_region, cluster_name, agones_namespace, fleet_name,
+                      status, created_at, released_at, updated_at
                     """,
                     (
                         assignment_id,
@@ -3963,6 +4253,13 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                         allocation.get("allocation_request_name"),
                         allocation["address"],
                         allocation["port"],
+                        server_pool["id"],
+                        server_pool["region"],
+                        server_pool["provider"],
+                        server_pool["gcp_region"],
+                        server_pool["cluster_name"],
+                        server_pool["agones_namespace"],
+                        server_pool["fleet_name"],
                     ),
                 )
                 assignment = cur.fetchone()
@@ -3970,7 +4267,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
     except BackendApiError as exc:
         if allocation:
             try:
-                delete_gameserver(allocation["allocated_game_server_name"])
+                delete_gameserver(allocation["allocated_game_server_name"], agones_namespace=server_pool["agones_namespace"])
             except BackendApiError:
                 APP.logger.warning("allocated GameServer cleanup failed after tournament assignment error", exc_info=True)
         mark_tournament_match_allocation_failed(tournament_id, match_id)
@@ -3978,7 +4275,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
     except psycopg.Error as exc:
         if allocation:
             try:
-                delete_gameserver(allocation["allocated_game_server_name"])
+                delete_gameserver(allocation["allocated_game_server_name"], agones_namespace=server_pool["agones_namespace"])
             except BackendApiError:
                 APP.logger.warning("allocated GameServer cleanup failed after tournament assignment DB error", exc_info=True)
         mark_tournament_match_allocation_failed(tournament_id, match_id)
@@ -4042,7 +4339,8 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                       id, tournament_id, round_id, team_a_id, team_b_id, status,
                       scheduled_at, started_at, finished_at, winner_team_id,
                       team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, bracket_position, next_match_id,
+                      requested_game_mode, requested_region, requested_server_pool_id,
+                      bracket_position, next_match_id,
                       next_match_slot, created_at, updated_at
                     """,
                     (next_status, match_id, tournament_id),
@@ -4060,7 +4358,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
     response_status = 201 if config_result.get("verified") else 202
     return jsonify(
         {
-            "match": row_to_json(match),
+            "match": tournament_match_response(match),
             "assignment": assignment_response(assignment),
             "configuration": config_result,
             "warning": None
@@ -4091,7 +4389,10 @@ def release_tournament_match_server(tournament_id: str, match_id: str):
                         404,
                     )
 
-        release_result = delete_gameserver(active_assignment["allocated_game_server_name"])
+        release_result = delete_gameserver(
+            active_assignment["allocated_game_server_name"],
+            agones_namespace=active_assignment.get("agones_namespace"),
+        )
         clear_status_cache(active_assignment.get("address"), active_assignment.get("port"))
 
         with db_connect() as conn:
@@ -4103,8 +4404,9 @@ def release_tournament_match_server(tournament_id: str, match_id: str):
                     WHERE id = %s
                     RETURNING
                       id, tournament_id, match_id, allocated_game_server_name,
-                      allocation_request_name, address, port, status, created_at,
-                      released_at, updated_at
+                      allocation_request_name, address, port, server_pool_id, region,
+                      provider, gcp_region, cluster_name, agones_namespace, fleet_name,
+                      status, created_at, released_at, updated_at
                     """,
                     (active_assignment["id"],),
                 )
@@ -4118,7 +4420,8 @@ def release_tournament_match_server(tournament_id: str, match_id: str):
                       id, tournament_id, round_id, team_a_id, team_b_id, status,
                       scheduled_at, started_at, finished_at, winner_team_id,
                       team_a_score, team_b_score, result_notes, requested_map,
-                      requested_game_mode, bracket_position, next_match_id,
+                      requested_game_mode, requested_region, requested_server_pool_id,
+                      bracket_position, next_match_id,
                       next_match_slot, created_at, updated_at
                     """,
                     (match_id, tournament_id),
@@ -4134,7 +4437,7 @@ def release_tournament_match_server(tournament_id: str, match_id: str):
             fallback_message="failed to release tournament match server assignment",
         )
 
-    return jsonify({"match": row_to_json(match), "assignment": assignment_response(assignment, include_live_status=False), "release_result": release_result})
+    return jsonify({"match": tournament_match_response(match), "assignment": assignment_response(assignment, include_live_status=False), "release_result": release_result})
 
 
 @APP.post("/tournaments/<tournament_id>/server-assignments/release-all")
@@ -4161,7 +4464,10 @@ def release_all_tournament_match_servers(tournament_id: str):
     for assignment in active_assignments:
         assignment_json = assignment_response(assignment, include_live_status=False)
         try:
-            release_result = delete_gameserver(assignment["allocated_game_server_name"])
+            release_result = delete_gameserver(
+                assignment["allocated_game_server_name"],
+                agones_namespace=assignment.get("agones_namespace"),
+            )
             clear_status_cache(assignment.get("address"), assignment.get("port"))
             released_attempts.append({"assignment": assignment, "release_result": release_result})
         except BackendApiError as exc:
@@ -4191,8 +4497,9 @@ def release_all_tournament_match_servers(tournament_id: str):
                         WHERE id IN ({assignment_placeholders})
                         RETURNING
                           id, tournament_id, match_id, allocated_game_server_name,
-                          allocation_request_name, address, port, status, created_at,
-                          released_at, updated_at
+                          allocation_request_name, address, port, server_pool_id, region,
+                          provider, gcp_region, cluster_name, agones_namespace, fleet_name,
+                          status, created_at, released_at, updated_at
                         """,
                         assignment_ids,
                     )
@@ -4206,7 +4513,8 @@ def release_all_tournament_match_servers(tournament_id: str):
                           id, tournament_id, round_id, team_a_id, team_b_id, status,
                           scheduled_at, started_at, finished_at, winner_team_id,
                           team_a_score, team_b_score, result_notes, requested_map,
-                          requested_game_mode, bracket_position, next_match_id,
+                          requested_game_mode, requested_region, requested_server_pool_id,
+                          bracket_position, next_match_id,
                           next_match_slot, created_at, updated_at
                         """,
                         [tournament_id, *match_ids],
@@ -4228,7 +4536,7 @@ def release_all_tournament_match_servers(tournament_id: str):
     released = [
         {
             "assignment": assignment_response(assignment, include_live_status=False),
-            "match": row_to_json(match_by_id.get(str(assignment["match_id"]))),
+            "match": tournament_match_response(match_by_id.get(str(assignment["match_id"]))),
             "release_result": release_result_by_assignment_id.get(str(assignment["id"])),
         }
         for assignment in released_assignments
@@ -4313,17 +4621,32 @@ def game_config_options():
     return jsonify(game_config_options_response())
 
 
+@APP.get("/server-pools")
+def server_pools():
+    pools = [server_pool_response(pool) for pool in enabled_server_pools()]
+    default_pool = default_server_pool()
+    return jsonify(
+        {
+            "items": pools,
+            "default_server_pool_id": default_pool["id"],
+            "default_region": default_pool["region"],
+            "note": "Server pools are an application-level abstraction for future multi-region allocation.",
+        }
+    )
+
+
 @APP.get("/fleet-status")
 def fleet_status():
+    pool = default_server_pool()
     try:
-        fleet = read_fleet_status()
+        fleet = read_fleet_status(pool)
     except ApiException as exc:
         return kubernetes_api_error_response(
             operation="get",
             resource_type=FLEET_RESOURCE_KIND,
-            namespace=AGONES_NAMESPACE,
-            name=FLEET_NAME,
-            request_context={"fleet_name": FLEET_NAME},
+            namespace=pool["agones_namespace"],
+            name=pool["fleet_name"],
+            request_context={"server_pool": server_pool_response(pool)},
             exc=exc,
         )
     except Exception as exc:
@@ -4334,12 +4657,13 @@ def fleet_status():
 
 @APP.get("/gameservers")
 def gameservers():
-    label_selector = f"agones.dev/fleet={FLEET_NAME},game={GAME_LABEL}"
+    pool = default_server_pool()
+    label_selector = f"agones.dev/fleet={pool['fleet_name']},game={GAME_LABEL}"
     try:
         response = custom_objects_api.list_namespaced_custom_object(
             group="agones.dev",
             version="v1",
-            namespace=AGONES_NAMESPACE,
+            namespace=pool["agones_namespace"],
             plural="gameservers",
             label_selector=label_selector,
         )
@@ -4347,9 +4671,9 @@ def gameservers():
         return kubernetes_api_error_response(
             operation="list",
             resource_type=GAMESERVER_RESOURCE_KIND,
-            namespace=AGONES_NAMESPACE,
+            namespace=pool["agones_namespace"],
             name=None,
-            request_context={"fleet_name": FLEET_NAME, "label_selector": label_selector},
+            request_context={"server_pool": server_pool_response(pool), "label_selector": label_selector},
             exc=exc,
         )
     except Exception as exc:
@@ -4659,7 +4983,9 @@ def terminate_allocated_server(gameserver_name: str):
 @APP.post("/allocate")
 def allocate():
     try:
-        return jsonify(allocate_gameserver())
+        body = parse_json_body()
+        server_pool = resolve_server_pool(body.get("requested_server_pool_id"), body.get("requested_region"))
+        return jsonify(allocate_gameserver(server_pool))
     except BackendApiError as exc:
         return jsonify(exc.payload), exc.status_code
 

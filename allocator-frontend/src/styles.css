@@ -1184,6 +1184,10 @@ button:disabled {
   grid-column: span 1;
 }
 
+.tournament-match-form .server-pool-field {
+  grid-column: span 2;
+}
+
 .tournament-match-form button {
   justify-self: start;
   width: auto;

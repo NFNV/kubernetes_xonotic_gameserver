@@ -88,6 +88,25 @@ const FALLBACK_GAME_CONFIG_OPTIONS = {
   experimental_probe_enabled: false,
   note: VERIFIED_CONFIG_NOTE,
 };
+const FALLBACK_SERVER_POOL_OPTIONS = {
+  default_server_pool_id: "south-america-default",
+  default_region: "south-america",
+  items: [
+    {
+      id: "south-america-default",
+      display_name: "South America - Default",
+      region: "south-america",
+      provider: "gcp",
+      gcp_region: "southamerica-west1",
+      cluster_name: "xonotic-mvp",
+      agones_namespace: "xonotic-agones",
+      fleet_name: "xonotic-fleet",
+      enabled: true,
+      default: true,
+    },
+  ],
+  note: "Server pools are an application-level abstraction for future multi-region allocation.",
+};
 
 class ApiError extends Error {
   constructor(message, { status = 0, data = null, path = "" } = {}) {
@@ -505,6 +524,64 @@ function validMapsForMode(gameConfigOptions, modeName) {
   return mode ? mode.verified_maps : [];
 }
 
+function enabledServerPools(serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS) {
+  return (serverPoolOptions.items || []).filter((pool) => pool.enabled !== false);
+}
+
+function defaultServerPool(serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS) {
+  const pools = enabledServerPools(serverPoolOptions);
+  return pools.find((pool) => pool.id === serverPoolOptions.default_server_pool_id)
+    || pools.find((pool) => pool.default)
+    || pools[0]
+    || FALLBACK_SERVER_POOL_OPTIONS.items[0];
+}
+
+function serverPoolById(serverPoolOptions, serverPoolId) {
+  return enabledServerPools(serverPoolOptions).find((pool) => pool.id === serverPoolId) || null;
+}
+
+function normalizeServerPool(values = {}, serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS) {
+  const fallback = defaultServerPool(serverPoolOptions);
+  const selected = serverPoolById(serverPoolOptions, values.requested_server_pool_id)
+    || enabledServerPools(serverPoolOptions).find((pool) => pool.region === values.requested_region)
+    || fallback;
+
+  return {
+    requested_server_pool_id: selected.id,
+    requested_region: selected.region,
+  };
+}
+
+function serverPoolLabel(pool) {
+  return pool?.display_name || humanizeIdentifier(pool?.id || "default pool");
+}
+
+function regionLabel(region) {
+  return humanizeIdentifier(String(region || "default region").replace(/-/g, "_"));
+}
+
+function matchServerPool(match, assignment, serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS) {
+  const poolId = assignment?.server_pool_id || match?.requested_server_pool_id;
+  const knownPool = serverPoolById(serverPoolOptions, poolId);
+
+  if (knownPool) {
+    return knownPool;
+  }
+
+  const fallback = defaultServerPool(serverPoolOptions);
+  return {
+    ...fallback,
+    id: poolId || fallback.id,
+    display_name: assignment?.server_pool?.display_name || assignment?.server_pool_id || match?.requested_server_pool_id || fallback.display_name,
+    region: assignment?.region || assignment?.server_pool?.region || match?.requested_region || fallback.region,
+    provider: assignment?.provider || assignment?.server_pool?.provider || fallback.provider,
+    gcp_region: assignment?.gcp_region || assignment?.server_pool?.gcp_region || fallback.gcp_region,
+    cluster_name: assignment?.cluster_name || assignment?.server_pool?.cluster_name || fallback.cluster_name,
+    agones_namespace: assignment?.agones_namespace || assignment?.server_pool?.agones_namespace || fallback.agones_namespace,
+    fleet_name: assignment?.fleet_name || assignment?.server_pool?.fleet_name || fallback.fleet_name,
+  };
+}
+
 function normalizeGameConfig(values, gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
   const fallback = defaultGameConfig(gameConfigOptions);
   const firstMode = selectableGameModes(gameConfigOptions)[0];
@@ -527,13 +604,17 @@ function emptyMatchRoomForm(gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
   };
 }
 
-function emptyTournamentMatchForm(gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS) {
+function emptyTournamentMatchForm(
+  gameConfigOptions = FALLBACK_GAME_CONFIG_OPTIONS,
+  serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS,
+) {
   return {
     name: "",
     round_id: "",
     team_a_id: "",
     team_b_id: "",
     ...normalizeGameConfig({}, gameConfigOptions),
+    ...normalizeServerPool({}, serverPoolOptions),
   };
 }
 
@@ -549,6 +630,7 @@ function PlayerTournamentView({
   selectedTournamentSummary,
   teamNameById,
   gameConfigOptions,
+  serverPoolOptions,
   onSelectTournament,
   onRefreshTournaments,
   onCopy,
@@ -677,6 +759,7 @@ function PlayerTournamentView({
                         const matchLabel = match.name || (match.bracket_position ? `Match ${match.bracket_position}` : `Match ${shortId(match.id)}`);
                         const isReleased = status === "released";
                         const showActiveResultNote = endpoint && hasRecordedResult;
+                        const pool = matchServerPool(match, activeAssignment, serverPoolOptions);
 
                         return (
                           <article className={`player-match-card ${isReleased ? "player-match-card-released" : ""}`} key={match.id}>
@@ -716,6 +799,7 @@ function PlayerTournamentView({
                               <div className="player-connect-box">
                                 <span>Active server</span>
                                 <strong>{endpoint}</strong>
+                                <p>Region: {regionLabel(pool.region)}</p>
                                 {showActiveResultNote && <p>Match result recorded; server still available for players.</p>}
                                 <code>{command}</code>
                                 <CopyButton text={command} label="Copy connect" onCopy={onCopy} />
@@ -746,6 +830,7 @@ export default function App() {
   const [gameservers, setGameservers] = useState([]);
   const [matches, setMatches] = useState([]);
   const [gameConfigOptions, setGameConfigOptions] = useState(FALLBACK_GAME_CONFIG_OPTIONS);
+  const [serverPoolOptions, setServerPoolOptions] = useState(FALLBACK_SERVER_POOL_OPTIONS);
   const [matchForm, setMatchForm] = useState(emptyMatchRoomForm());
   const [latestAllocation, setLatestAllocation] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -847,6 +932,13 @@ export default function App() {
     }));
   }
 
+  function setTournamentServerPool(serverPoolId) {
+    setTournamentMatchForm((current) => ({
+      ...current,
+      ...normalizeServerPool({ ...current, requested_server_pool_id: serverPoolId }, serverPoolOptions),
+    }));
+  }
+
   async function loadGameConfigOptions() {
     try {
       const options = await fetchJson("/api/game-config/options");
@@ -871,6 +963,22 @@ export default function App() {
     } catch (err) {
       setError({
         title: "Game config options failed",
+        message: err.message,
+      });
+    }
+  }
+
+  async function loadServerPools() {
+    try {
+      const options = await fetchJson("/api/server-pools");
+      setServerPoolOptions(options);
+      setTournamentMatchForm((current) => ({
+        ...current,
+        ...normalizeServerPool(current, options),
+      }));
+    } catch (err) {
+      setError({
+        title: "Server pool options failed",
         message: err.message,
       });
     }
@@ -1062,7 +1170,7 @@ export default function App() {
       setTournamentSummaryData(null);
       setTeamForm({ name: "", tag: "", seed: "" });
       setRoundForm({ name: "", round_order: "" });
-      setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions));
+      setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions, serverPoolOptions));
       await loadTournamentDetails(tournament.id, { silent: true });
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
@@ -1164,11 +1272,13 @@ export default function App() {
 
     try {
       const config = normalizeGameConfig(tournamentMatchForm, gameConfigOptions);
+      const serverPool = normalizeServerPool(tournamentMatchForm, serverPoolOptions);
       const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/bracket/generate`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           ...config,
+          ...serverPool,
           replace_existing: replaceExisting || undefined,
         }),
       });
@@ -1250,6 +1360,8 @@ export default function App() {
       team_b_id: tournamentMatchForm.team_b_id || undefined,
       requested_map: tournamentMatchForm.requested_map,
       requested_game_mode: tournamentMatchForm.requested_game_mode,
+      requested_region: tournamentMatchForm.requested_region,
+      requested_server_pool_id: tournamentMatchForm.requested_server_pool_id,
     };
   }
 
@@ -1277,7 +1389,7 @@ export default function App() {
           throw new Error(allocationResult.warning || allocationResult.configuration?.message || "Server allocation finished, but requested map/mode verification failed.");
         }
       }
-      setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions));
+      setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions, serverPoolOptions));
       await loadTournamentDetails(selectedTournamentId, { silent: true });
       await loadDashboard({ silent: true, source: "Tournament match refresh" });
       setCopyMessage(allocate && endpoint ? `Tournament match created and server assigned: ${endpoint}` : "Tournament match created.");
@@ -1963,6 +2075,7 @@ export default function App() {
 
   useEffect(() => {
     void loadGameConfigOptions();
+    void loadServerPools();
     void loadDashboard();
     void loadTournaments();
   }, []);
@@ -1970,7 +2083,7 @@ export default function App() {
   useEffect(() => {
     setTeamForm({ name: "", tag: "", seed: "" });
     setRoundForm({ name: "", round_order: "" });
-    setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions));
+    setTournamentMatchForm(emptyTournamentMatchForm(gameConfigOptions, serverPoolOptions));
     void loadTournamentDetails(selectedTournamentId);
   }, [selectedTournamentId]);
 
@@ -1994,6 +2107,9 @@ export default function App() {
   const teamNameById = Object.fromEntries(tournamentTeams.map((team) => [String(team.id), team.name || compactFallback(team.id)]));
   const roundNameById = Object.fromEntries(tournamentRounds.map((round) => [round.id, round.name]));
   const bracketConfig = normalizeGameConfig(tournamentMatchForm, gameConfigOptions);
+  const serverPools = enabledServerPools(serverPoolOptions);
+  const selectedServerPool = serverPoolById(serverPoolOptions, tournamentMatchForm.requested_server_pool_id)
+    || defaultServerPool(serverPoolOptions);
   const bracketColumns = bracketRoundColumns(tournamentRounds, tournamentMatches);
   const hasBracketMatches = tournamentMatches.some((match) => match.bracket_position !== null && match.bracket_position !== undefined);
   const playableBracketMatches = tournamentMatches.filter(tournamentMatchCanBulkAllocate);
@@ -2073,6 +2189,7 @@ export default function App() {
           selectedTournamentSummary={selectedTournamentSummary}
           teamNameById={teamNameById}
           gameConfigOptions={gameConfigOptions}
+          serverPoolOptions={serverPoolOptions}
           onSelectTournament={setSelectedTournamentId}
           onRefreshTournaments={() => void loadTournaments({ silent: true })}
           onCopy={copyText}
@@ -2602,6 +2719,20 @@ export default function App() {
                             ))}
                           </select>
                         </label>
+                        <label className="server-pool-field">
+                          <span>Deployment Region / Server Pool</span>
+                          <select
+                            value={selectedServerPool.id}
+                            onChange={(event) => setTournamentServerPool(event.target.value)}
+                            disabled={serverPools.length <= 1}
+                          >
+                            {serverPools.map((pool) => (
+                              <option key={pool.id} value={pool.id}>
+                                {regionLabel(pool.region)} / {serverPoolLabel(pool)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                         <div className="tournament-match-actions">
                           <button className="secondary" type="submit" disabled={creatingTournamentMatch}>
                             {creatingTournamentMatch ? "Working..." : "Create Match"}
@@ -2620,6 +2751,7 @@ export default function App() {
                           {hasBracketMatches
                             ? `Use Allocate Playable Matches for generated bracket matches. Manual creation here is for ad hoc matches only. ${VERIFIED_CONFIG_NOTE}`
                             : VERIFIED_CONFIG_NOTE}
+                          {" "}Server pool: {regionLabel(selectedServerPool.region)} / {serverPoolLabel(selectedServerPool)}.
                         </p>
                       </form>
 
@@ -2631,6 +2763,7 @@ export default function App() {
                             const activeAssignment = match.active_server_assignment;
                             const endpoint = assignmentEndpoint(activeAssignment);
                             const command = connectCommand(endpoint);
+                            const pool = matchServerPool(match, activeAssignment, serverPoolOptions);
                             const status = match.status || "created";
                             const isFinished = status === "finished";
                             const isReleased = status === "released";
@@ -2682,6 +2815,10 @@ export default function App() {
                                   <div>
                                     <dt>Map / Mode</dt>
                                     <dd>{match.requested_map || "map unset"} / {match.requested_game_mode || "mode unset"}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Region / Pool</dt>
+                                    <dd>{regionLabel(pool.region)} / {serverPoolLabel(pool)}</dd>
                                   </div>
                                   <div>
                                     <dt>Endpoint</dt>

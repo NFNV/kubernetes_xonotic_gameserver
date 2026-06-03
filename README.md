@@ -53,6 +53,8 @@ Terraform + GKE + firewall rules
 
 The target concept is worldwide tournament server management: operators allocate dedicated servers, configure and verify them, expose player connection commands, record results, and release capacity when matches are complete.
 
+The platform includes a server-pool abstraction designed for multi-region expansion. The current dev deployment uses one South America pool backed by the current GKE/Agones cluster.
+
 ## Game Server Allocation Lifecycle
 
 1. The Agones Fleet keeps Xonotic GameServers warm in the `Ready` state.
