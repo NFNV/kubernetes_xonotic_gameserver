@@ -1,156 +1,103 @@
 # Xonotic Kubernetes Game Server Platform
 
-A Kubernetes-native platform for deploying and operating dedicated Xonotic game servers, using Agones on GKE. The project includes an admin control plane for tournament operations: allocating match servers, configuring map/mode through RCON, verifying live server state, recording results, and cleaning up resources.
+A Kubernetes-native platform for deploying and operating dedicated Xonotic game servers with Agones on GKE. It includes an admin control plane for allocating match servers, configuring map/mode through RCON, verifying live state with `getstatus`, running tournament workflows, observing platform health, and cleaning up resources.
 
-The goal is not to build a generic tournament bracket app; the goal is to demonstrate the infrastructure and operational workflows behind running dedicated multiplayer game servers on Kubernetes. Tournament management is the practical use case that exercises the platform: server allocation, lifecycle automation, live verification, persistence, observability, and resource cleanup.
+The goal is not to build a generic tournament bracket app. The tournament workflow is the practical use case for demonstrating the infrastructure and operations behind dedicated multiplayer game servers on Kubernetes.
 
-## Architecture Overview
+## Architecture
 
 ```text
-Terraform / GKE / firewall rules
+Terraform + GKE + firewall rules
   -> Agones Fleet + FleetAutoscaler
-  -> Ready Xonotic GameServers on dynamic UDP ports
-  -> Allocator Backend
-  -> PostgreSQL
-  -> Admin / Player UI
+  -> Xonotic GameServers on dynamic UDP ports
+  -> Flask allocator backend + PostgreSQL
+  -> React Admin / Player UI
   -> RCON configuration + getstatus verification
-  -> Prometheus metrics
-  -> Grafana dashboard
+  -> Prometheus metrics + Grafana dashboard
 ```
-
-The system is organized into three planes.
 
 ### Infrastructure Plane
 
-- **Terraform** provisions the GKE foundation and cloud networking.
-- **GKE Standard** hosts the platform and Xonotic GameServer workloads.
-- **Agones** manages dedicated GameServer lifecycle.
-- **Fleet/FleetAutoscaler** keep a small buffer of ready Xonotic servers available.
-- **Firewall rules and dynamic UDP ports** allow allocated GameServers to be reached by players.
-- **GHCR** stores the server, backend, and frontend container images.
+- Terraform provisions GKE and cloud networking.
+- Agones manages Xonotic GameServer lifecycle.
+- Fleet/FleetAutoscaler keep a small buffer of ready servers.
+- Dynamic UDP ports and firewall rules expose allocated GameServers.
+- GHCR stores server, backend, and frontend images.
 
 ### Control Plane
 
-- **Allocator backend:** Flask service that talks to Kubernetes/Agones, stores tournament state, configures servers, verifies live state, and exposes operational APIs.
-- **PostgreSQL:** stores tournaments, teams, rounds, matches, results, and match server assignment history.
-- **React Admin UI:** operator interface for allocation, tournament workflow, result recording, finalization, and lower-level debug controls.
-- **React Player View:** read-only tournament view for players/spectators, including live endpoints and copyable `connect IP:PORT` commands.
-- **RCON/getstatus integration:** configures map/mode and verifies that the allocated server is actually running the expected live configuration.
+- Flask allocator backend handles Agones allocation, server release, RCON configuration, `getstatus` verification, and API workflows.
+- PostgreSQL stores tournaments, teams, rounds, matches, results, and server assignment history.
+- React Admin View manages allocation, tournament workflow, result recording, finalization, and debug controls.
+- React Player View exposes read-only match status, results, endpoints, and copyable `connect IP:PORT` commands.
 
 ### Observability Plane
 
-- **Prometheus** scrapes backend metrics.
-- **Grafana** visualizes allocator health and tournament/server operations.
-- **Backend metrics** track request behavior, allocation outcomes, active assignments, RCON failures, and verification failures.
-- **Kubernetes/GameServer capacity visibility** helps debug no-ready-server conditions and resource pressure.
+- Prometheus scrapes backend `/metrics`.
+- Grafana visualizes allocator health and server/tournament operations.
+- Metrics track HTTP behavior, allocation outcomes, active assignments, RCON failures, and map/mode verification.
 
-## What This Project Demonstrates
+## Features
 
-- Kubernetes-native game server deployment
-- Agones Fleet and FleetAutoscaler operation
-- Dynamic UDP GameServer allocation
-- Admin control plane for dedicated server lifecycle
-- Match and tournament workflows as a real operational use case
-- RCON-based server configuration with live `getstatus` verification
-- PostgreSQL-backed platform state and assignment history
+- Kubernetes-native Xonotic dedicated server deployment on GKE
+- Agones Fleet and FleetAutoscaler for warm GameServer capacity
+- Dynamic UDP GameServer allocation through Agones
+- Flask admin control plane for server lifecycle operations
+- PostgreSQL-backed tournament, match, result, and assignment state
+- Verified map/mode selection with RCON configuration and `getstatus` validation
+- React Admin View for operators and read-only Player View for players/spectators
+- Single-elimination tournament workflow with result recording and winner advancement
+- Tournament finalization with automatic active GameServer cleanup
 - Prometheus/Grafana observability for allocation and platform health
-- Terraform, GKE, GHCR, and scripts for infrastructure automation and cost control
+- Terraform, GHCR publishing, and dev scripts for infrastructure automation and cost control
 
-The target concept is worldwide tournament server management: operators can create tournament matches, allocate dedicated servers, configure and verify them, expose connection commands to players, record results, advance winners, and clean up GameServer resources.
+The target concept is worldwide tournament server management: operators allocate dedicated servers, configure and verify them, expose player connection commands, record results, and release capacity when matches are complete.
 
 ## Game Server Allocation Lifecycle
 
-1. The Agones Fleet keeps warm Xonotic GameServers in the `Ready` state.
-2. The admin control plane requests a `GameServerAllocation`.
-3. Agones assigns a ready GameServer and exposes its dynamic UDP endpoint.
+1. The Agones Fleet keeps Xonotic GameServers warm in the `Ready` state.
+2. The control plane requests a `GameServerAllocation`.
+3. Agones assigns a ready server and exposes its dynamic UDP endpoint.
 4. The backend persists the assignment in PostgreSQL.
-5. The backend configures the requested map/mode through whitelisted RCON commands.
-6. The backend verifies the live server state through `getstatus`.
-7. The UI exposes the endpoint and `connect IP:PORT` command only after verification.
-8. The server is released manually or automatically during tournament finalization.
+5. The backend configures map/mode through whitelisted RCON commands.
+6. The backend verifies live server state with `getstatus`.
+7. The UI exposes the endpoint and `connect IP:PORT` only after verification.
+8. The server is released manually or during tournament finalization.
 
-This makes allocation more than “start a pod.” The platform reserves a real dedicated game server, applies match configuration, validates live state, records ownership, and releases capacity when the match or tournament lifecycle is complete.
+Allocation here means reserving, configuring, verifying, tracking, and eventually releasing a real dedicated game server, not merely starting a pod.
 
-## Tournament Operations Built On The Platform
+## Tournament Operations
 
-The tournament system is the operational workflow layered on top of the game server platform.
-
-Current tournament capabilities include:
-
-- Tournament creation
-- Team management with manual seeding
-- Single-elimination bracket generation
-- Persisted rounds and matches
-- Match server allocation through Agones
-- Verified map/mode selection
-- Result recording
-- Winner advancement through the bracket
-- Tournament finalization
-- Automatic active server cleanup on finalize
-- Player-facing read-only tournament view
-- Admin view for allocation, result, release, and debug workflows
-
-Tournament lifecycle:
+Tournament operations are built on top of the game server platform:
 
 ```text
-create tournament
-  -> add teams
-  -> generate bracket
-  -> allocate match server
-  -> configure and verify map/mode
-  -> play match
-  -> record result
-  -> winner advances
-  -> final result recorded
-  -> finalize tournament
-  -> active servers released
+create tournament -> add teams -> generate bracket -> allocate match server
+  -> configure/verify map and mode -> play match -> record result
+  -> advance winner -> finalize tournament -> release active servers
 ```
 
-Finalization is deliberate: the final match must have a recorded winner. If active match server assignments still exist, finalization releases the corresponding Agones GameServers and marks those assignments released before completing the tournament. This prevents completed tournaments from silently consuming Fleet capacity.
+Current tournament features include team management, manual seeding, single-elimination bracket generation, persisted rounds/matches, result recording, winner advancement, finalization, and player-facing read-only match views.
 
-## Admin And Player Experience
-
-The frontend is not the core product by itself; it is the control surface for the platform.
-
-- **Admin View:** focuses on tournament operations, match allocation, result recording, server release, Fleet capacity, and lower-level debugging.
-- **Player View:** read-only presentation of tournament status, rounds, matches, results, winners, active server endpoint, and copyable Xonotic connect command.
-
-Advanced/manual Match Room controls remain available for platform testing, but the normal workflow is persisted tournament matches backed by Agones GameServer assignments.
+Finalization requires a recorded winner for the final match. If active match server assignments still exist, finalization releases the corresponding Agones GameServers and marks those assignments released before completing the tournament, preventing completed events from consuming Fleet capacity.
 
 ## Observability
 
-The allocator backend exposes Prometheus metrics at `/metrics`. Prometheus scrapes the backend, and Grafana provides a lightweight dashboard for platform health.
+The backend exposes Prometheus metrics at `/metrics`, and Grafana provides a lightweight dashboard for platform health. Metrics cover request count/latency, allocation attempts/successes/failures, active match server assignments, RCON command failures, and map/mode verification failures.
 
-Metrics include:
-
-- HTTP request count and latency
-- Allocation attempts, successes, and failures
-- Active match server assignments
-- RCON command attempts and failures
-- Map/mode verification successes and failures
-
-These signals help diagnose operational problems such as:
-
-- no `Ready` Xonotic GameServers available
-- Fleet/FleetAutoscaler capacity lag
-- failed GameServer allocations
-- RCON command failures
-- live map/mode verification failures
-- pod or node resource pressure in a small dev cluster
+These signals help diagnose issues such as no ready GameServers, FleetAutoscaler capacity lag, failed allocations, RCON problems, verification failures, and resource pressure on the small dev cluster.
 
 ## Kubernetes / GKE Setup
 
-The project targets a small GKE Standard development cluster:
+This project targets a small GKE Standard development cluster:
 
-- Terraform provisions the GKE cluster and required firewall rules.
-- Agones manages Xonotic GameServer lifecycle.
-- The Xonotic Fleet uses dynamic UDP ports for allocated servers.
+- Terraform provisions the cluster and firewall rules.
+- Agones runs the Xonotic Fleet with dynamic UDP ports.
 - Backend, frontend, PostgreSQL, Prometheus, and Grafana run as Kubernetes workloads.
 - Images are built and published to GHCR.
-- `scripts/up.sh` and `scripts/down.sh` help bring infrastructure up/down for cost control.
-- Resource requests/limits and `Recreate` rollout strategy are used to fit a constrained single-node dev cluster.
+- `scripts/up.sh` and `scripts/down.sh` help control cloud costs.
+- Resource requests/limits and `Recreate` rollout strategy are used for a constrained single-node dev cluster.
 
-This is a portfolio-grade development platform, not a production-hardened service. The implementation is intentionally scoped to demonstrate platform engineering, game server orchestration, lifecycle automation, and observability without overclaiming production readiness.
+This is a portfolio-grade development platform, not a production-hardened service.
 
 ## Screenshots
 
@@ -164,15 +111,11 @@ This is a portfolio-grade development platform, not a production-hardened servic
 
 ## Local / Dev Usage
 
-Copy the environment template and fill in local project values:
-
 ```bash
 cp scripts/env.sh.example scripts/env.sh
 ```
 
-Configure GCP project, region, zone, and local development values in `scripts/env.sh`. This file is intentionally ignored because it contains machine-specific configuration and secrets.
-
-Bring the dev platform up:
+Configure GCP project, region, zone, and local values in `scripts/env.sh`. This file is intentionally ignored because it contains local configuration and secrets.
 
 ```bash
 source scripts/env.sh
@@ -187,52 +130,46 @@ kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-back
 kubectl port-forward -n xonotic-observability service/xonotic-grafana 3000:3000
 ```
 
-Typical local URLs:
-
 - Frontend: `http://127.0.0.1:18080`
 - Backend: `http://127.0.0.1:18082`
 - Grafana: `http://127.0.0.1:3000`
 
-Tear down cloud resources when finished:
+Tear down cloud resources:
 
 ```bash
 ./scripts/down.sh
 ```
 
-## Tradeoffs / Limitations
+## Limitations
 
-- The current environment targets a single-node GKE development cluster.
-- Concurrent match capacity is limited by Fleet settings and node resources.
-- There is no production authentication or authorization layer yet.
-- There is no public domain or Ingress path yet.
-- PostgreSQL runs in-cluster and is dev-grade.
-- The platform is not multi-region.
-- Alerts and runbooks are minimal.
-- Capacity depends on both Agones Fleet availability and underlying Kubernetes resources.
-- The current implementation demonstrates the control and orchestration workflows before production hardening.
+- Single-node GKE dev cluster
+- Limited concurrent match capacity
+- No production auth yet
+- No public domain or Ingress yet
+- In-cluster PostgreSQL is dev-grade
+- Not multi-region
+- Minimal alerts/runbooks
+- Capacity depends on Fleet/FleetAutoscaler and Kubernetes node resources
 
 ## Future Work
 
 - Admin authentication and role separation
-- Public Ingress and domain setup
-- Managed PostgreSQL or backup/restore workflow
-- Additional tournament formats beyond single elimination
+- Public Ingress/domain
+- Managed PostgreSQL or backups
+- Additional tournament formats
 - Matchmaking or match request queue
-- More advanced Fleet autoscaling and scheduling strategies
-- Alerting for allocation failures, RCON failures, and capacity pressure
+- Improved Fleet autoscaling and scheduling
+- Alerts for allocation, RCON, verification, and capacity issues
 - Multi-node and multi-region support
 - CI/CD deployment automation from GitHub to GKE
 
 ## Repository Map
 
-- `infra/`: Terraform for the GCP/GKE foundation
-- `server/`: Xonotic dedicated server image and runtime configuration
+- `infra/`: Terraform for GCP/GKE
+- `server/`: Xonotic server image and runtime config
 - `allocator-backend/`: Flask allocator and platform API
-- `allocator-frontend/`: React admin/player control surface
-- `platform/agones/`: Agones Fleet and FleetAutoscaler manifests
-- `platform/postgres/`: PostgreSQL development manifests
-- `platform/allocator-backend/`: backend Kubernetes manifests
-- `platform/allocator-frontend/`: frontend Kubernetes manifests
-- `platform/observability/`: lightweight Prometheus/Grafana manifests
-- `docs/`: design notes and verification workflows
-- `scripts/`: local bring-up/tear-down and verification helpers
+- `allocator-frontend/`: React admin/player UI
+- `platform/agones/`: Agones Fleet/FleetAutoscaler manifests
+- `platform/postgres/`: PostgreSQL dev manifests
+- `platform/observability/`: Prometheus/Grafana manifests
+- `scripts/`: local bring-up, tear-down, and verification helpers
