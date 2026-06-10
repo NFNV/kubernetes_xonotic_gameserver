@@ -33,8 +33,14 @@ postgres_pvc_manifest="${repo_root}/platform/postgres/manifests/pvc.yaml"
 postgres_deployment_manifest="${repo_root}/platform/postgres/manifests/deployment.yaml"
 postgres_service_manifest="${repo_root}/platform/postgres/manifests/service.yaml"
 agones_system_namespace="agones-system"
-gameserver_namespace="xonotic-agones"
-fleet_name="xonotic-fleet"
+server_pool_id="${XONOTIC_SERVER_POOL_ID:-south-america-default}"
+server_pool_display_name="${XONOTIC_SERVER_POOL_DISPLAY_NAME:-South America - Default}"
+server_region="${XONOTIC_SERVER_REGION:-south-america}"
+gameserver_namespace="${XONOTIC_AGONES_NAMESPACE:-xonotic-agones}"
+fleet_name="${XONOTIC_FLEET_NAME:-xonotic-fleet}"
+udp_port_range="${XONOTIC_UDP_PORT_RANGE:-7000-7010}"
+udp_min_port="${udp_port_range%-*}"
+udp_max_port="${udp_port_range#*-}"
 # Default to 1 Ready server for the small single-node dev cluster; override for higher-capacity testing.
 required_ready_replicas="${XONOTIC_REQUIRED_READY_REPLICAS:-1}"
 allocator_backend_namespace="xonotic-allocator-backend"
@@ -52,10 +58,23 @@ cd "${infra_dir}"
 
 if [[ ! -f terraform.tfvars ]]; then
   cat > terraform.tfvars <<EOF
-project_id   = "${GCP_PROJECT_ID}"
-region       = "${GCP_REGION}"
-zone         = "${GCP_ZONE}"
-cluster_name = "${GKE_CLUSTER_NAME}"
+project_id = "${GCP_PROJECT_ID}"
+
+default_server_pool_id = "${server_pool_id}"
+
+server_pools = {
+  "${server_pool_id}" = {
+    pool_id          = "${server_pool_id}"
+    display_name     = "${server_pool_display_name}"
+    region           = "${server_region}"
+    gcp_region       = "${GCP_REGION}"
+    gcp_zone         = "${GCP_ZONE}"
+    cluster_name     = "${GKE_CLUSTER_NAME}"
+    agones_namespace = "${gameserver_namespace}"
+    fleet_name       = "${fleet_name}"
+    udp_port_range   = "${udp_port_range}"
+  }
+}
 EOF
 fi
 
@@ -83,8 +102,8 @@ helm upgrade --install agones agones/agones \
   --namespace "${agones_system_namespace}" \
   --create-namespace \
   --set agones.ping.install=false \
-  --set gameservers.minPort=7000 \
-  --set gameservers.maxPort=7010 \
+  --set "gameservers.minPort=${udp_min_port}" \
+  --set "gameservers.maxPort=${udp_max_port}" \
   --set "gameservers.namespaces={${gameserver_namespace}}"
 
 kubectl rollout status deployment/agones-controller -n "${agones_system_namespace}"

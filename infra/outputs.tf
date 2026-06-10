@@ -23,6 +23,21 @@ output "node_pool_name" {
   value       = google_container_node_pool.primary.name
 }
 
+output "default_server_pool_id" {
+  description = "Server pool ID used by this single-cluster deployment."
+  value       = var.default_server_pool_id
+}
+
+output "default_server_pool" {
+  description = "Resolved server pool metadata for the current GKE/Agones deployment."
+  value       = local.default_server_pool
+}
+
+output "server_pools" {
+  description = "Configured server pool metadata. Only the default pool is provisioned in this phase."
+  value       = local.server_pools
+}
+
 output "get_credentials_command" {
   description = "Convenience command for fetching kubeconfig credentials."
   value       = "gcloud container clusters get-credentials ${google_container_cluster.primary.name} --zone ${google_container_cluster.primary.location} --project ${var.project_id}"

@@ -9,7 +9,7 @@ The Terraform in this directory is implemented, but nothing in `infra/` creates 
 Terraform in this directory creates:
 
 - the required GCP APIs for this phase
-- one zonal GKE Standard cluster
+- one zonal GKE Standard cluster described as the default server pool
 - one small node pool for that cluster
 
 It intentionally does not create:
@@ -33,18 +33,19 @@ At minimum, set:
 
 - `project_id`: the existing GCP project ID
 
+The current deployment is represented by `default_server_pool_id` and `server_pools`. The default pool is `south-america-default`, which maps to the South America GKE/Agones setup documented in [`docs/region-server-pools.md`](/Users/n/Documents/Cloud/xonotic/docs/region-server-pools.md).
+
 The other variables have practical defaults for a low-cost MVP and can be overridden if needed:
 
-- `region`: defaults to `southamerica-west1`
-- `zone`: defaults to `southamerica-west1-a`
 - `environment`: defaults to `mvp`
-- `cluster_name`: defaults to `xonotic-mvp`
 - `network_name`: defaults to `default`
 - `subnetwork_name`: defaults to `default`
 - `node_machine_type`: defaults to `e2-medium`
 - `node_disk_size_gb`: defaults to `100`
 - `node_disk_type`: defaults to `pd-standard`
 - `node_count`: defaults to `1`
+
+Compatibility variables `region`, `zone`, and `cluster_name` still exist for older local `terraform.tfvars` files, but new configuration should prefer `server_pools`.
 
 Use [`terraform.tfvars.example`](/Users/n/Documents/Cloud/xonotic/infra/terraform.tfvars.example) as the starting point for local values.
 
@@ -70,6 +71,15 @@ Required environment variables:
 - `GKE_CLUSTER_NAME`
 - `XONOTIC_RCON_PASSWORD`
 
+Optional server-pool environment variables default to the current South America pool:
+
+- `XONOTIC_SERVER_POOL_ID`
+- `XONOTIC_SERVER_POOL_DISPLAY_NAME`
+- `XONOTIC_SERVER_REGION`
+- `XONOTIC_AGONES_NAMESPACE`
+- `XONOTIC_FLEET_NAME`
+- `XONOTIC_UDP_PORT_RANGE`
+
 You can either export them in your shell or copy `scripts/env.sh.example` to `scripts/env.sh` and edit the values there. The scripts source `scripts/env.sh` automatically if it exists.
 
 Bring the infra and the current Agones phase up:
@@ -89,6 +99,13 @@ Bring the infra and the current Agones phase up:
 - applies the allocator backend namespace, RBAC, Deployment, and Service
 - applies the allocator frontend Deployment and Service
 - waits for the Agones controller deployments, Fleet readiness, allocator backend rollout, and allocator frontend rollout, then prints Fleet, `GameServer`, and allocator platform state
+
+Terraform also exposes server-pool metadata for the active deployment:
+
+```bash
+terraform -chdir=infra output default_server_pool
+terraform -chdir=infra output server_pools
+```
 
 Tear the current test path and infra down:
 

@@ -4,15 +4,15 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "Primary GCP region for the project."
+  description = "Compatibility override for the default server pool GCP region. Prefer server_pools for new configuration."
   type        = string
-  default     = "southamerica-west1"
+  default     = null
 }
 
 variable "zone" {
-  description = "Zone for the zonal GKE cluster."
+  description = "Compatibility override for the default server pool GCP zone. Prefer server_pools for new configuration."
   type        = string
-  default     = "southamerica-west1-a"
+  default     = null
 }
 
 variable "environment" {
@@ -22,9 +22,43 @@ variable "environment" {
 }
 
 variable "cluster_name" {
-  description = "Name of the GKE cluster."
+  description = "Compatibility override for the default server pool GKE cluster name. Prefer server_pools for new configuration."
   type        = string
-  default     = "xonotic-mvp"
+  default     = null
+}
+
+variable "default_server_pool_id" {
+  description = "Server pool entry that backs the current single-cluster deployment."
+  type        = string
+  default     = "south-america-default"
+}
+
+variable "server_pools" {
+  description = "Configured game server pools. This MVP provisions only the default pool's GKE cluster."
+  type = map(object({
+    pool_id          = string
+    display_name     = string
+    region           = string
+    gcp_region       = string
+    gcp_zone         = string
+    cluster_name     = string
+    agones_namespace = string
+    fleet_name       = string
+    udp_port_range   = string
+  }))
+  default = {
+    south-america-default = {
+      pool_id          = "south-america-default"
+      display_name     = "South America - Default"
+      region           = "south-america"
+      gcp_region       = "southamerica-west1"
+      gcp_zone         = "southamerica-west1-a"
+      cluster_name     = "xonotic-mvp"
+      agones_namespace = "xonotic-agones"
+      fleet_name       = "xonotic-fleet"
+      udp_port_range   = "7000-7010"
+    }
+  }
 }
 
 variable "network_name" {
