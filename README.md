@@ -64,7 +64,7 @@ The platform includes a server-pool abstraction designed for multi-region expans
 5. The backend configures map/mode through whitelisted RCON commands.
 6. The backend verifies live server state with `getstatus`.
 7. The UI exposes the endpoint and `connect IP:PORT` only after verification.
-8. The server is released manually or during tournament finalization.
+8. The server is released automatically when the match result is recorded, or manually/finalization cleanup handles leftovers.
 
 Allocation here means reserving, configuring, verifying, tracking, and eventually releasing a real dedicated game server, not merely starting a pod.
 
@@ -75,12 +75,12 @@ Tournament operations are built on top of the game server platform:
 ```text
 create tournament -> add teams -> generate bracket -> allocate match server
   -> configure/verify map and mode -> play match -> record result
-  -> advance winner -> finalize tournament -> release active servers
+  -> release match server -> advance winner -> finalize tournament
 ```
 
-Current tournament features include team management, manual seeding, single-elimination bracket generation, persisted rounds/matches, result recording, winner advancement, finalization, and player-facing read-only match views.
+Current tournament features include team management, manual seeding, single-elimination bracket generation, persisted rounds/matches, result recording with automatic match server cleanup, winner advancement, finalization, and player-facing read-only match views.
 
-Finalization requires a recorded winner for the final match. If active match server assignments still exist, finalization releases the corresponding Agones GameServers and marks those assignments released before completing the tournament, preventing completed events from consuming Fleet capacity.
+Finalization requires a recorded winner for the final match. Result recording closes the match server automatically; if active match server assignments still exist, finalization releases the corresponding Agones GameServers and marks those assignments released before completing the tournament, preventing completed events from consuming Fleet capacity.
 
 ## Observability
 

@@ -2966,6 +2966,123 @@ def release_active_tournament_server_assignments(tournament_id: str) -> dict[str
         "release_warnings": release_warnings,
     }
 
+
+def release_match_server_assignment_after_result(
+    tournament_id: str,
+    match_id: str,
+    active_assignment: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not active_assignment:
+        return {
+            "server_released": False,
+            "released_assignment_id": None,
+            "released_assignment": None,
+            "release_result": None,
+            "release_warning": None,
+            "match": None,
+        }
+
+    gameserver_name = active_assignment["allocated_game_server_name"]
+    release_warning = None
+
+    try:
+        release_result = delete_gameserver(
+            gameserver_name,
+            agones_namespace=active_assignment.get("agones_namespace"),
+        )
+        clear_status_cache(active_assignment.get("address"), active_assignment.get("port"))
+        if release_result.get("already_missing"):
+            release_warning = f"GameServer {gameserver_name} was already gone; assignment marked released."
+            APP.logger.warning(
+                "Match result release found missing GameServer tournament_id=%s match_id=%s assignment_id=%s gameserver=%s",
+                tournament_id,
+                match_id,
+                active_assignment["id"],
+                gameserver_name,
+            )
+    except BackendApiError as exc:
+        message = exc.payload.get("message", "failed to release match server after result save")
+        APP.logger.warning(
+            "Match result saved but server release failed tournament_id=%s match_id=%s assignment_id=%s gameserver=%s error=%s",
+            tournament_id,
+            match_id,
+            active_assignment["id"],
+            gameserver_name,
+            exc.payload,
+        )
+        return {
+            "server_released": False,
+            "released_assignment_id": None,
+            "released_assignment": None,
+            "release_result": None,
+            "release_warning": message,
+            "match": None,
+            "active_assignment": assignment_response(active_assignment, include_live_status=False),
+        }
+
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE match_server_assignments
+                    SET status = 'released', released_at = now(), updated_at = now()
+                    WHERE id = %s
+                    RETURNING
+                      id, tournament_id, match_id, allocated_game_server_name,
+                      allocation_request_name, address, port, server_pool_id, region,
+                      provider, gcp_region, cluster_name, agones_namespace, fleet_name,
+                      status, created_at, released_at, updated_at
+                    """,
+                    (active_assignment["id"],),
+                )
+                released_assignment = cur.fetchone()
+                cur.execute(
+                    """
+                    UPDATE matches
+                    SET status = 'released', finished_at = COALESCE(finished_at, now()), updated_at = now()
+                    WHERE id = %s AND tournament_id = %s
+                    RETURNING
+                      id, tournament_id, round_id, team_a_id, team_b_id, status,
+                      scheduled_at, started_at, finished_at, winner_team_id,
+                      team_a_score, team_b_score, result_notes, requested_map,
+                      requested_game_mode, requested_region, requested_server_pool_id,
+                      bracket_position, next_match_id,
+                      next_match_slot, created_at, updated_at
+                    """,
+                    (match_id, tournament_id),
+                )
+                released_match = cur.fetchone()
+            conn.commit()
+    except psycopg.Error as exc:
+        APP.logger.exception(
+            "Match result release deleted GameServer but failed to mark assignment released tournament_id=%s match_id=%s assignment_id=%s",
+            tournament_id,
+            match_id,
+            active_assignment["id"],
+        )
+        return {
+            "server_released": False,
+            "released_assignment_id": None,
+            "released_assignment": None,
+            "release_result": release_result,
+            "release_warning": "match result was saved and GameServer release was requested, but assignment release state could not be stored",
+            "match": None,
+            "active_assignment": assignment_response(active_assignment, include_live_status=False),
+            "error": {"type": type(exc).__name__, "message": str(exc)},
+        }
+
+    return {
+        "server_released": True,
+        "released_assignment_id": str(released_assignment["id"]) if released_assignment else str(active_assignment["id"]),
+        "released_assignment": assignment_response(released_assignment, include_live_status=False) if released_assignment else None,
+        "release_result": release_result,
+        "release_warning": release_warning,
+        "match": released_match,
+        "active_assignment": None,
+    }
+
+
 def assignment_response(assignment: dict[str, Any], *, include_live_status: bool = True) -> dict[str, Any]:
     response = row_to_json(assignment) or {}
     default_metadata = default_server_pool_metadata()
@@ -4080,8 +4197,8 @@ def record_tournament_match_result(tournament_id: str, match_id: str):
                     (team_a_score, team_b_score, winner_team_id, result_notes, match_id, tournament_id),
                 )
                 updated_match = cur.fetchone()
-                advanced_match = advance_bracket_winner(cur, tournament_id, updated_match, winner_team_id)
                 active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
+                advanced_match = advance_bracket_winner(cur, tournament_id, updated_match, winner_team_id)
             conn.commit()
     except BackendApiError as exc:
         return jsonify(exc.payload), exc.status_code
@@ -4092,8 +4209,17 @@ def record_tournament_match_result(tournament_id: str, match_id: str):
             fallback_message="failed to record tournament match result",
         )
 
-    response = tournament_match_response(updated_match)
-    response["active_server_assignment"] = assignment_response(active_assignment) if active_assignment else None
+    release_info = release_match_server_assignment_after_result(tournament_id, match_id, active_assignment)
+    response_match = release_info.get("match") or updated_match
+
+    response = tournament_match_response(response_match)
+    response["result_saved"] = True
+    response["server_released"] = release_info.get("server_released", False)
+    response["released_assignment_id"] = release_info.get("released_assignment_id")
+    response["released_assignment"] = release_info.get("released_assignment")
+    response["release_result"] = release_info.get("release_result")
+    response["release_warning"] = release_info.get("release_warning")
+    response["active_server_assignment"] = release_info.get("active_assignment")
     response["advanced_match"] = tournament_match_response(advanced_match) if advanced_match else None
     return jsonify(response)
 

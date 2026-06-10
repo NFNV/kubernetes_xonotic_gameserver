@@ -39,7 +39,7 @@ Allocated Servers are infrastructure allocations. The table can terminate an `Al
 
 The Tournament Management section is the first UI over PostgreSQL-backed tournament APIs. It lets operators create/select tournaments, add teams, add rounds, generate or safely regenerate single-elimination brackets before servers/results exist, and create simple tournament match records. Generated brackets can bulk-allocate currently playable matches, while individual tournament matches can still allocate and release a persisted server assignment that links the match to one allocated Agones `GameServer`.
 
-Tournament matches also support manual result recording: operators enter Team A score, Team B score, a winner, and optional notes. Saving a result marks the persisted match `finished`. Server release remains a separate operator action.
+Tournament matches also support manual result recording: operators enter Team A score, Team B score, a winner, and optional notes. Saving a result records the score/winner, advances the bracket when applicable, and closes the active match server automatically. Manual server release remains available for cleanup/debug cases.
 
 Current tournament limitations:
 

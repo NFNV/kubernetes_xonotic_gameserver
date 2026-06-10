@@ -203,7 +203,7 @@ curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches/$
   -d "{\"team_a_score\":12,\"team_b_score\":8,\"winner_team_id\":\"${TEAM_A_ID}\",\"result_notes\":\"Manual result after referee confirmation\"}" | jq
 ```
 
-Result recording validates non-negative scores and requires the winner to be either `team_a_id` or `team_b_id`. It marks the match `finished`, advances generated bracket winners into their configured next match slot when one exists, and does not release the allocated server. Use `release-server` separately when the operator is ready to clean up the backing Agones `GameServer`.
+Result recording validates non-negative scores and requires the winner to be either `team_a_id` or `team_b_id`. It marks the match result saved, advances generated bracket winners into their configured next match slot when one exists, then releases the active match server assignment when present. If the backing Agones `GameServer` is already gone, the assignment is still marked released and the response includes a warning. The standalone `release-server` endpoint remains available for manual cleanup/debug cases.
 
 The lower-level Match Room API below remains available for manual/operator server sessions and RCON controls.
 

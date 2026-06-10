@@ -760,6 +760,11 @@ function PlayerTournamentView({
                         const isReleased = status === "released";
                         const showActiveResultNote = endpoint && hasRecordedResult;
                         const pool = matchServerPool(match, activeAssignment, serverPoolOptions);
+                        const inactiveServerMessage = hasRecordedResult
+                          ? "Server closed after result."
+                          : isReleased
+                            ? "Server released."
+                            : "No active server assigned.";
 
                         return (
                           <article className={`player-match-card ${isReleased ? "player-match-card-released" : ""}`} key={match.id}>
@@ -805,7 +810,7 @@ function PlayerTournamentView({
                                 <CopyButton text={command} label="Copy connect" onCopy={onCopy} />
                               </div>
                             ) : (
-                              <p className="player-server-muted">{isReleased ? "Server released." : "No active server assigned."}</p>
+                              <p className="player-server-muted">{inactiveServerMessage}</p>
                             )}
 
                             {match.result_notes && <p className="player-note">{match.result_notes}</p>}
@@ -1682,7 +1687,7 @@ export default function App() {
     setTournamentError(null);
 
     try {
-      await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/result`, {
+      const result = await fetchJson(`/api/tournaments/${selectedTournamentId}/matches/${match.id}/result`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -1692,7 +1697,12 @@ export default function App() {
           result_notes: form.result_notes.trim() || undefined,
         }),
       });
-      setCopyMessage("Tournament match result recorded.");
+      const resultMessage = result.server_released
+        ? "Result saved. Match server released."
+        : result.release_warning
+          ? `Result saved. ${result.release_warning}`
+          : "Result saved.";
+      setCopyMessage(resultMessage);
       window.setTimeout(() => setCopyMessage(""), 2400);
       setTournamentResultForms((current) => {
         const next = { ...current };
@@ -1700,6 +1710,7 @@ export default function App() {
         return next;
       });
       await loadTournamentDetails(selectedTournamentId, { silent: true });
+      await loadDashboard({ silent: true, source: "Tournament result refresh", suppressError: true });
     } catch (err) {
       setTournamentError({
         title: "Record result failed",
@@ -2886,7 +2897,7 @@ export default function App() {
                                         <small>Ready capacity: {fleetStatus.ready_replicas}</small>
                                       </>
                                     ) : (
-                                      <small>{isReleased ? "Server assignment released." : "Server allocation unavailable."}</small>
+                                      <small>{hasRecordedResult ? "Server closed after result." : isReleased ? "Server assignment released." : "Server allocation unavailable."}</small>
                                     )}
                                   </div>
 
