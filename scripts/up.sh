@@ -35,7 +35,8 @@ postgres_service_manifest="${repo_root}/platform/postgres/manifests/service.yaml
 agones_system_namespace="agones-system"
 gameserver_namespace="xonotic-agones"
 fleet_name="xonotic-fleet"
-required_ready_replicas="3"
+# Default to 1 Ready server for the small single-node dev cluster; override for higher-capacity testing.
+required_ready_replicas="${XONOTIC_REQUIRED_READY_REPLICAS:-1}"
 allocator_backend_namespace="xonotic-allocator-backend"
 allocator_backend_deployment_name="xonotic-allocator-backend"
 allocator_frontend_deployment_name="xonotic-allocator-frontend"
