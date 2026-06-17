@@ -1904,7 +1904,8 @@ button:disabled {
 }
 
 .server-pool-capacity-card-no-ready-capacity,
-.server-pool-capacity-card-unavailable {
+.server-pool-capacity-card-unavailable,
+.server-pool-capacity-card-not-provisioned {
   border-color: rgba(255, 177, 74, 0.28);
   background: rgba(255, 177, 74, 0.06);
 }
@@ -2376,7 +2377,8 @@ th {
 .state-badge-server_allocating,
 .state-badge-scheduled,
 .state-badge-running,
-.state-badge-no-ready-capacity {
+.state-badge-no-ready-capacity,
+.state-badge-not-provisioned {
   border-color: rgba(255, 177, 74, 0.28);
   background: rgba(255, 177, 74, 0.1);
   color: #ffd391;

@@ -66,8 +66,38 @@ SERVER_POOLS = (
         "cluster_name": "xonotic-mvp",
         "agones_namespace": "xonotic-agones",
         "fleet_name": "xonotic-fleet",
+        "provisioned": True,
         "enabled": True,
         "default": True,
+        "status": "provisioned",
+    },
+    {
+        "id": "europe-simulated",
+        "display_name": "Europe - Simulated",
+        "region": "europe",
+        "provider": "gcp",
+        "gcp_region": None,
+        "cluster_name": None,
+        "agones_namespace": None,
+        "fleet_name": None,
+        "provisioned": False,
+        "enabled": False,
+        "default": False,
+        "status": "not-provisioned",
+    },
+    {
+        "id": "north-america-simulated",
+        "display_name": "North America - Simulated",
+        "region": "north-america",
+        "provider": "gcp",
+        "gcp_region": None,
+        "cluster_name": None,
+        "agones_namespace": None,
+        "fleet_name": None,
+        "provisioned": False,
+        "enabled": False,
+        "default": False,
+        "status": "not-provisioned",
     },
 )
 ALLOCATION_TIMEOUT_SECONDS = int(os.environ.get("ALLOCATION_TIMEOUT_SECONDS", "5"))
@@ -572,8 +602,12 @@ def rows_to_json(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row_to_json(row) for row in rows if row is not None]
 
 
+def configured_server_pools() -> list[dict[str, Any]]:
+    return [pool.copy() for pool in SERVER_POOLS]
+
+
 def enabled_server_pools() -> list[dict[str, Any]]:
-    return [pool.copy() for pool in SERVER_POOLS if pool.get("enabled")]
+    return [pool.copy() for pool in SERVER_POOLS if pool.get("enabled") and pool.get("provisioned", True)]
 
 
 def default_server_pool() -> dict[str, Any]:
@@ -599,12 +633,14 @@ def server_pool_response(pool: dict[str, Any]) -> dict[str, Any]:
         "display_name": pool["display_name"],
         "region": pool["region"],
         "provider": pool["provider"],
-        "gcp_region": pool["gcp_region"],
-        "cluster_name": pool["cluster_name"],
-        "agones_namespace": pool["agones_namespace"],
-        "fleet_name": pool["fleet_name"],
+        "gcp_region": pool.get("gcp_region"),
+        "cluster_name": pool.get("cluster_name"),
+        "agones_namespace": pool.get("agones_namespace"),
+        "fleet_name": pool.get("fleet_name"),
+        "provisioned": bool(pool.get("provisioned", True)),
         "enabled": bool(pool.get("enabled")),
         "default": bool(pool.get("default")),
+        "status": pool.get("status") or ("provisioned" if pool.get("provisioned", True) else "not-provisioned"),
     }
 
 
@@ -670,6 +706,16 @@ def resolve_server_pool(
                 },
                 400,
             )
+        if not pool.get("provisioned", True):
+            raise BackendApiError(
+                {
+                    "error": "server_pool_not_provisioned",
+                    "message": f"Server pool {pool['display_name']} is not provisioned in this dev deployment.",
+                    "requested_server_pool_id": server_pool_id,
+                    "server_pool": server_pool_response(pool),
+                },
+                400,
+            )
         if not pool.get("enabled"):
             raise BackendApiError(
                 {
@@ -693,8 +739,20 @@ def resolve_server_pool(
         return pool
 
     if region:
+        configured_region_pools = [pool for pool in configured_server_pools() if pool["region"] == region]
         region_pools = [pool for pool in enabled_server_pools() if pool["region"] == region]
         if not region_pools:
+            simulated_pool = next((pool for pool in configured_region_pools if not pool.get("provisioned", True)), None)
+            if simulated_pool:
+                raise BackendApiError(
+                    {
+                        "error": "server_pool_not_provisioned",
+                        "message": f"Server pool {simulated_pool['display_name']} is not provisioned in this dev deployment.",
+                        "requested_region": region,
+                        "server_pool": server_pool_response(simulated_pool),
+                    },
+                    400,
+                )
             raise BackendApiError(
                 {
                     "error": "unknown_region_server_pool",
@@ -984,6 +1042,8 @@ def server_pool_capacity_response(pool: dict[str, Any]) -> dict[str, Any]:
         "cluster_name": pool_response["cluster_name"],
         "agones_namespace": pool_response["agones_namespace"],
         "fleet_name": pool_response["fleet_name"],
+        "provisioned": pool_response["provisioned"],
+        "enabled": pool_response["enabled"],
         "desired_replicas": None,
         "current_replicas": None,
         "ready_replicas": None,
@@ -992,6 +1052,14 @@ def server_pool_capacity_response(pool: dict[str, Any]) -> dict[str, Any]:
         "status": "unavailable",
         "error": None,
     }
+
+    if not pool.get("provisioned", True):
+        capacity["status"] = "not-provisioned"
+        capacity["error"] = {
+            "error": "server_pool_not_provisioned",
+            "message": f"Server pool {pool['display_name']} is planned but not provisioned in this dev deployment.",
+        }
+        return capacity
 
     try:
         fleet = read_fleet_status(pool)
@@ -4817,21 +4885,21 @@ def game_config_options():
 
 @APP.get("/server-pools")
 def server_pools():
-    pools = [server_pool_response(pool) for pool in enabled_server_pools()]
+    pools = [server_pool_response(pool) for pool in configured_server_pools()]
     default_pool = default_server_pool()
     return jsonify(
         {
             "items": pools,
             "default_server_pool_id": default_pool["id"],
             "default_region": default_pool["region"],
-            "note": "Server pools are an application-level abstraction for future multi-region allocation.",
+            "note": "Server pools include the active South America pool plus planned simulated regions for future multi-region allocation.",
         }
     )
 
 
 @APP.get("/server-pools/capacity")
 def server_pool_capacity():
-    pools = enabled_server_pools()
+    pools = configured_server_pools()
     default_pool = default_server_pool()
     return jsonify(
         {

@@ -101,8 +101,30 @@ const FALLBACK_SERVER_POOL_OPTIONS = {
       cluster_name: "xonotic-mvp",
       agones_namespace: "xonotic-agones",
       fleet_name: "xonotic-fleet",
+      provisioned: true,
       enabled: true,
       default: true,
+      status: "provisioned",
+    },
+    {
+      id: "europe-simulated",
+      display_name: "Europe - Simulated",
+      region: "europe",
+      provider: "gcp",
+      provisioned: false,
+      enabled: false,
+      default: false,
+      status: "not-provisioned",
+    },
+    {
+      id: "north-america-simulated",
+      display_name: "North America - Simulated",
+      region: "north-america",
+      provider: "gcp",
+      provisioned: false,
+      enabled: false,
+      default: false,
+      status: "not-provisioned",
     },
   ],
   note: "Server pools are an application-level abstraction for future multi-region allocation.",
@@ -530,7 +552,7 @@ function validMapsForMode(gameConfigOptions, modeName) {
 }
 
 function enabledServerPools(serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS) {
-  return (serverPoolOptions.items || []).filter((pool) => pool.enabled !== false);
+  return (serverPoolOptions.items || []).filter((pool) => pool.enabled !== false && pool.provisioned !== false);
 }
 
 function defaultServerPool(serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS) {
@@ -598,6 +620,10 @@ function capacityForServerPool(pool, serverPoolCapacity, fleetStatus = EMPTY_FLE
 function serverPoolCapacityHint(pool, capacity) {
   const region = regionLabel(capacity?.region || pool?.region);
 
+  if (capacity?.status === "not-provisioned" || pool?.provisioned === false) {
+    return `${region} is planned, not provisioned`;
+  }
+
   if (!capacity || capacity.status === "unavailable") {
     return `Capacity unavailable in ${region}`;
   }
@@ -613,6 +639,7 @@ function serverPoolCapacityStatusLabel(status) {
     available: "Available",
     "no-ready-capacity": "No Ready Capacity",
     unavailable: "Unavailable",
+    "not-provisioned": "Not Provisioned",
   }[status] || humanizeIdentifier(status || "unknown");
 }
 
@@ -635,6 +662,8 @@ function matchServerPool(match, assignment, serverPoolOptions = FALLBACK_SERVER_
     cluster_name: assignment?.cluster_name || assignment?.server_pool?.cluster_name || fallback.cluster_name,
     agones_namespace: assignment?.agones_namespace || assignment?.server_pool?.agones_namespace || fallback.agones_namespace,
     fleet_name: assignment?.fleet_name || assignment?.server_pool?.fleet_name || fallback.fleet_name,
+    provisioned: assignment?.server_pool?.provisioned ?? fallback.provisioned,
+    enabled: assignment?.server_pool?.enabled ?? fallback.enabled,
   };
 }
 
@@ -3433,7 +3462,7 @@ export default function App() {
                     <div className="server-pool-capacity-header">
                       <div>
                         <h3>{pool.display_name || serverPoolLabel(pool)}</h3>
-                        <span>{regionLabel(pool.region)} · {pool.gcp_region}</span>
+                        <span>{regionLabel(pool.region)} · {pool.gcp_region || "planned GCP region"}</span>
                       </div>
                       <span className={`state-badge state-badge-${status}`}>{serverPoolCapacityStatusLabel(status)}</span>
                     </div>
@@ -3456,8 +3485,13 @@ export default function App() {
                       </div>
                     </dl>
                     <p className="server-pool-target">
-                      {pool.cluster_name} · {pool.agones_namespace}/{pool.fleet_name}
+                      {status === "not-provisioned"
+                        ? "Planned region; no GKE/Agones cluster deployed."
+                        : `${pool.cluster_name} · ${pool.agones_namespace}/${pool.fleet_name}`}
                     </p>
+                    {status === "not-provisioned" && (
+                      <p className="capacity-warning">Simulation only. This pool cannot allocate match servers.</p>
+                    )}
                     {status === "no-ready-capacity" && (
                       <p className="capacity-warning">No Ready servers available in {regionLabel(pool.region)}.</p>
                     )}
