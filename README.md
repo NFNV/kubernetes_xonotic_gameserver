@@ -46,6 +46,7 @@ Terraform + GKE + firewall rules
 - PostgreSQL-backed tournament, match, result, and assignment state
 - Verified map/mode selection with RCON configuration and `getstatus` validation
 - React Admin View for operators and read-only Player View for players/spectators
+- Admin server-pool capacity visibility for Ready/Allocated regional game server capacity
 - Single-elimination tournament workflow with result recording and winner advancement
 - Tournament finalization with automatic active GameServer cleanup
 - Prometheus/Grafana observability for allocation and platform health

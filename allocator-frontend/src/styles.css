@@ -1212,6 +1212,10 @@ button:disabled {
   font-weight: 800;
 }
 
+.capacity-hint-warning {
+  color: #ffd391;
+}
+
 .tournament-match-actions .primary,
 .tournament-match-actions .secondary {
   flex: 0 0 auto;
@@ -1885,6 +1889,95 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.server-pool-capacity-list {
+  display: grid;
+  gap: 12px;
+}
+
+.server-pool-capacity-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(126, 176, 211, 0.14);
+  border-radius: 14px;
+  background: rgba(5, 12, 21, 0.34);
+}
+
+.server-pool-capacity-card-no-ready-capacity,
+.server-pool-capacity-card-unavailable {
+  border-color: rgba(255, 177, 74, 0.28);
+  background: rgba(255, 177, 74, 0.06);
+}
+
+.server-pool-capacity-card-unavailable {
+  border-color: rgba(255, 91, 74, 0.28);
+  background: rgba(255, 91, 74, 0.06);
+}
+
+.server-pool-capacity-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.server-pool-capacity-header h3 {
+  margin: 0 0 4px;
+  color: #f7fbff;
+  font-size: 1rem;
+}
+
+.server-pool-capacity-header span:not(.state-badge),
+.server-pool-target {
+  color: #8fa8bc;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.server-pool-capacity-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.server-pool-capacity-metrics div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.server-pool-capacity-metrics dt {
+  color: #83a2b9;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.server-pool-capacity-metrics dd {
+  margin: 0;
+  color: #eef8ff;
+  font-weight: 900;
+}
+
+.server-pool-target,
+.capacity-warning,
+.capacity-ok {
+  margin: 0;
+}
+
+.capacity-warning {
+  color: #ffd391;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.capacity-ok {
+  color: #74ffd5;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
 .empty-state {
   margin: 0;
   color: #8fa8bc;
@@ -2256,6 +2349,12 @@ th {
   color: #74ffd5;
 }
 
+.state-badge-available {
+  border-color: rgba(0, 255, 180, 0.3);
+  background: rgba(0, 255, 180, 0.12);
+  color: #74ffd5;
+}
+
 .state-badge-released {
   border-color: rgba(126, 176, 211, 0.16);
   background: rgba(126, 176, 211, 0.06);
@@ -2268,9 +2367,16 @@ th {
   color: #ff9a8d;
 }
 
+.state-badge-unavailable {
+  border-color: rgba(255, 91, 74, 0.34);
+  background: rgba(255, 91, 74, 0.14);
+  color: #ff9a8d;
+}
+
 .state-badge-server_allocating,
 .state-badge-scheduled,
-.state-badge-running {
+.state-badge-running,
+.state-badge-no-ready-capacity {
   border-color: rgba(255, 177, 74, 0.28);
   background: rgba(255, 177, 74, 0.1);
   color: #ffd391;

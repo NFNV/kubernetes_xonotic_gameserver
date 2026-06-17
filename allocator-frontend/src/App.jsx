@@ -107,6 +107,11 @@ const FALLBACK_SERVER_POOL_OPTIONS = {
   ],
   note: "Server pools are an application-level abstraction for future multi-region allocation.",
 };
+const EMPTY_SERVER_POOL_CAPACITY = {
+  items: [],
+  default_server_pool_id: FALLBACK_SERVER_POOL_OPTIONS.default_server_pool_id,
+  default_region: FALLBACK_SERVER_POOL_OPTIONS.default_region,
+};
 
 class ApiError extends Error {
   constructor(message, { status = 0, data = null, path = "" } = {}) {
@@ -560,6 +565,57 @@ function regionLabel(region) {
   return humanizeIdentifier(String(region || "default region").replace(/-/g, "_"));
 }
 
+function serverPoolCapacityById(serverPoolCapacity) {
+  return Object.fromEntries(
+    (serverPoolCapacity.items || []).map((pool) => [pool.server_pool_id || pool.id, pool])
+  );
+}
+
+function capacityForServerPool(pool, serverPoolCapacity, fleetStatus = EMPTY_FLEET) {
+  const capacity = serverPoolCapacityById(serverPoolCapacity)[pool?.id];
+  if (capacity) {
+    return capacity;
+  }
+
+  return {
+    server_pool_id: pool?.id,
+    display_name: pool?.display_name,
+    region: pool?.region,
+    provider: pool?.provider,
+    gcp_region: pool?.gcp_region,
+    cluster_name: pool?.cluster_name,
+    agones_namespace: pool?.agones_namespace,
+    fleet_name: pool?.fleet_name,
+    desired_replicas: fleetStatus.desired_replicas,
+    current_replicas: fleetStatus.current_replicas ?? fleetStatus.replicas,
+    ready_replicas: fleetStatus.ready_replicas,
+    allocated_replicas: fleetStatus.allocated_replicas,
+    reserved_replicas: fleetStatus.reserved_replicas,
+    status: (fleetStatus.ready_replicas || 0) > 0 ? "available" : "no-ready-capacity",
+  };
+}
+
+function serverPoolCapacityHint(pool, capacity) {
+  const region = regionLabel(capacity?.region || pool?.region);
+
+  if (!capacity || capacity.status === "unavailable") {
+    return `Capacity unavailable in ${region}`;
+  }
+
+  const ready = Number(capacity.ready_replicas || 0);
+  return ready > 0
+    ? `${ready} Ready server${ready === 1 ? "" : "s"} available in ${region}`
+    : `No Ready servers available in ${region}`;
+}
+
+function serverPoolCapacityStatusLabel(status) {
+  return {
+    available: "Available",
+    "no-ready-capacity": "No Ready Capacity",
+    unavailable: "Unavailable",
+  }[status] || humanizeIdentifier(status || "unknown");
+}
+
 function matchServerPool(match, assignment, serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS) {
   const poolId = assignment?.server_pool_id || match?.requested_server_pool_id;
   const knownPool = serverPoolById(serverPoolOptions, poolId);
@@ -836,6 +892,7 @@ export default function App() {
   const [matches, setMatches] = useState([]);
   const [gameConfigOptions, setGameConfigOptions] = useState(FALLBACK_GAME_CONFIG_OPTIONS);
   const [serverPoolOptions, setServerPoolOptions] = useState(FALLBACK_SERVER_POOL_OPTIONS);
+  const [serverPoolCapacity, setServerPoolCapacity] = useState(EMPTY_SERVER_POOL_CAPACITY);
   const [matchForm, setMatchForm] = useState(emptyMatchRoomForm());
   const [latestAllocation, setLatestAllocation] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -999,15 +1056,17 @@ export default function App() {
     setError(null);
 
     try {
-      const [health, fleet, gameserverResponse, matchResponse] = await Promise.all([
+      const [health, fleet, serverPoolCapacityResponse, gameserverResponse, matchResponse] = await Promise.all([
         fetchJson("/api/healthz"),
         fetchJson("/api/fleet-status"),
+        fetchJson("/api/server-pools/capacity"),
         fetchJson("/api/gameservers"),
         fetchJson("/api/matches"),
       ]);
 
       setBackendHealthy(health.status === "ok");
       setFleetStatus(fleet);
+      setServerPoolCapacity(serverPoolCapacityResponse);
       setGameservers(gameserverResponse.items || []);
       setMatches(matchResponse.items || []);
       setLastUpdated(new Date().toLocaleTimeString());
@@ -2121,6 +2180,11 @@ export default function App() {
   const serverPools = enabledServerPools(serverPoolOptions);
   const selectedServerPool = serverPoolById(serverPoolOptions, tournamentMatchForm.requested_server_pool_id)
     || defaultServerPool(serverPoolOptions);
+  const selectedServerPoolCapacity = capacityForServerPool(selectedServerPool, serverPoolCapacity, fleetStatus);
+  const selectedServerPoolCapacityText = serverPoolCapacityHint(selectedServerPool, selectedServerPoolCapacity);
+  const serverPoolCapacityRows = (serverPoolCapacity.items || []).length > 0
+    ? serverPoolCapacity.items
+    : serverPools.map((pool) => capacityForServerPool(pool, serverPoolCapacity, fleetStatus));
   const bracketColumns = bracketRoundColumns(tournamentRounds, tournamentMatches);
   const hasBracketMatches = tournamentMatches.some((match) => match.bracket_position !== null && match.bracket_position !== undefined);
   const playableBracketMatches = tournamentMatches.filter(tournamentMatchCanBulkAllocate);
@@ -2581,7 +2645,7 @@ export default function App() {
                               {allocatingPlayableMatches ? bulkAllocationProgress || "Allocating..." : "Allocate Playable Matches"}
                             </button>
                             <small>
-                              {playableBracketMatches.length} playable now · Ready capacity: {fleetStatus.ready_replicas} · allocates one at a time
+                              {playableBracketMatches.length} playable now · {selectedServerPoolCapacityText} · allocates one at a time
                             </small>
                           </div>
                         </div>
@@ -2756,7 +2820,9 @@ export default function App() {
                           >
                             {creatingTournamentMatch ? "Working..." : hasBracketMatches ? "Create Ad Hoc & Allocate" : "Create & Allocate Server"}
                           </button>
-                          <span className="capacity-hint">Ready capacity: {fleetStatus.ready_replicas}</span>
+                          <span className={`capacity-hint ${selectedServerPoolCapacity.status !== "available" ? "capacity-hint-warning" : ""}`}>
+                            {selectedServerPoolCapacityText}
+                          </span>
                         </div>
                         <p className="deferred-note">
                           {hasBracketMatches
@@ -2791,6 +2857,8 @@ export default function App() {
                             const canShowResultForm = tournamentMatchCanShowResultForm(match);
                             const canRecordResult = tournamentMatchCanRecordResult(match);
                             const canAllocateServer = tournamentMatchCanAllocateServer(match);
+                            const matchPoolCapacity = capacityForServerPool(pool, serverPoolCapacity, fleetStatus);
+                            const matchPoolCapacityText = serverPoolCapacityHint(pool, matchPoolCapacity);
                             const adminId = tournamentAdminId(match.id);
                             const broadcastValue = broadcastForms[adminId] || "";
                             const selectedMap = changeMapForms[adminId] || (ADMIN_MAPS.includes(match.requested_map) ? match.requested_map : ADMIN_MAPS[0]);
@@ -2894,7 +2962,7 @@ export default function App() {
                                         >
                                           {isAllocatingServer ? "Allocating..." : "Allocate Server"}
                                         </button>
-                                        <small>Ready capacity: {fleetStatus.ready_replicas}</small>
+                                        <small className={matchPoolCapacity.status !== "available" ? "warning-text" : ""}>{matchPoolCapacityText}</small>
                                       </>
                                     ) : (
                                       <small>{hasRecordedResult ? "Server closed after result." : isReleased ? "Server assignment released." : "Server allocation unavailable."}</small>
@@ -3346,6 +3414,66 @@ export default function App() {
       </section>
 
       <section className="grid panels rail-panels">
+        <article className="panel server-pools-panel">
+          <div className="panel-header">
+            <h2>Server Pools</h2>
+            <span className="panel-meta">Regional Capacity</span>
+          </div>
+          {serverPoolCapacityRows.length === 0 ? (
+            <p className="empty-state">Waiting for server pool capacity.</p>
+          ) : (
+            <div className="server-pool-capacity-list">
+              {serverPoolCapacityRows.map((pool) => {
+                const ready = Number(pool.ready_replicas || 0);
+                const status = pool.status || "unavailable";
+                const poolKey = pool.server_pool_id || pool.id;
+
+                return (
+                  <article className={`server-pool-capacity-card server-pool-capacity-card-${status}`} key={poolKey}>
+                    <div className="server-pool-capacity-header">
+                      <div>
+                        <h3>{pool.display_name || serverPoolLabel(pool)}</h3>
+                        <span>{regionLabel(pool.region)} · {pool.gcp_region}</span>
+                      </div>
+                      <span className={`state-badge state-badge-${status}`}>{serverPoolCapacityStatusLabel(status)}</span>
+                    </div>
+                    <dl className="server-pool-capacity-metrics">
+                      <div>
+                        <dt>Ready</dt>
+                        <dd>{pool.ready_replicas ?? "n/a"}</dd>
+                      </div>
+                      <div>
+                        <dt>Allocated</dt>
+                        <dd>{pool.allocated_replicas ?? "n/a"}</dd>
+                      </div>
+                      <div>
+                        <dt>Desired</dt>
+                        <dd>{pool.desired_replicas ?? "n/a"}</dd>
+                      </div>
+                      <div>
+                        <dt>Current</dt>
+                        <dd>{pool.current_replicas ?? "n/a"}</dd>
+                      </div>
+                    </dl>
+                    <p className="server-pool-target">
+                      {pool.cluster_name} · {pool.agones_namespace}/{pool.fleet_name}
+                    </p>
+                    {status === "no-ready-capacity" && (
+                      <p className="capacity-warning">No Ready servers available in {regionLabel(pool.region)}.</p>
+                    )}
+                    {status === "unavailable" && (
+                      <p className="capacity-warning">{pool.error?.message || "Pool capacity could not be queried."}</p>
+                    )}
+                    {status === "available" && (
+                      <p className="capacity-ok">{ready} Ready server{ready === 1 ? "" : "s"} available.</p>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </article>
+
         <article className="panel">
           <div className="panel-header">
             <h2>Fleet Summary</h2>
@@ -3362,7 +3490,7 @@ export default function App() {
             </div>
             <div>
               <dt>Standby Buffer</dt>
-              <dd>{fleetStatus.ready_replicas} / 3 ready</dd>
+              <dd>{fleetStatus.ready_replicas} / {fleetStatus.desired_replicas || "?"} ready</dd>
             </div>
           </dl>
         </article>

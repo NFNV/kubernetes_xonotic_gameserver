@@ -973,6 +973,73 @@ def read_fleet_status(server_pool: dict[str, Any] | None = None) -> dict[str, An
     return status
 
 
+def server_pool_capacity_response(pool: dict[str, Any]) -> dict[str, Any]:
+    pool_response = server_pool_response(pool)
+    capacity = {
+        "server_pool_id": pool_response["id"],
+        "display_name": pool_response["display_name"],
+        "region": pool_response["region"],
+        "provider": pool_response["provider"],
+        "gcp_region": pool_response["gcp_region"],
+        "cluster_name": pool_response["cluster_name"],
+        "agones_namespace": pool_response["agones_namespace"],
+        "fleet_name": pool_response["fleet_name"],
+        "desired_replicas": None,
+        "current_replicas": None,
+        "ready_replicas": None,
+        "allocated_replicas": None,
+        "reserved_replicas": None,
+        "status": "unavailable",
+        "error": None,
+    }
+
+    try:
+        fleet = read_fleet_status(pool)
+    except ApiException as exc:
+        log_kubernetes_api_error(
+            operation="get",
+            resource_type=FLEET_RESOURCE_KIND,
+            namespace=pool["agones_namespace"],
+            name=pool["fleet_name"],
+            request_context={"server_pool": pool_response},
+            exc=exc,
+        )
+        capacity["error"] = kubernetes_api_error_payload(
+            resource_type=FLEET_RESOURCE_KIND,
+            namespace=pool["agones_namespace"],
+            name=pool["fleet_name"],
+            request_context={"server_pool": pool_response},
+            exc=exc,
+        )
+        return capacity
+    except Exception as exc:
+        APP.logger.warning(
+            "Server pool capacity read failed pool_id=%s namespace=%s fleet=%s error=%s",
+            pool["id"],
+            pool["agones_namespace"],
+            pool["fleet_name"],
+            exc,
+        )
+        capacity["error"] = {
+            "error": "fleet_status_read_failed",
+            "message": str(exc),
+        }
+        return capacity
+
+    ready_replicas = int(fleet.get("ready_replicas") or 0)
+    capacity.update(
+        {
+            "desired_replicas": fleet.get("desired_replicas"),
+            "current_replicas": fleet.get("current_replicas", fleet.get("replicas")),
+            "ready_replicas": ready_replicas,
+            "allocated_replicas": fleet.get("allocated_replicas"),
+            "reserved_replicas": fleet.get("reserved_replicas"),
+            "status": "available" if ready_replicas > 0 else "no-ready-capacity",
+        }
+    )
+    return capacity
+
+
 def ensure_ready_gameserver_capacity(server_pool: dict[str, Any] | None = None) -> dict[str, Any]:
     pool = server_pool or default_server_pool()
     try:
@@ -1042,6 +1109,7 @@ def extract_fleet_status(fleet: dict) -> dict:
         "namespace": metadata.get("namespace"),
         "desired_replicas": spec.get("replicas", 0),
         "replicas": status.get("replicas", 0),
+        "current_replicas": status.get("replicas", 0),
         "ready_replicas": status.get("readyReplicas", 0),
         "allocated_replicas": status.get("allocatedReplicas", 0),
         "reserved_replicas": status.get("reservedReplicas", 0),
@@ -4757,6 +4825,20 @@ def server_pools():
             "default_server_pool_id": default_pool["id"],
             "default_region": default_pool["region"],
             "note": "Server pools are an application-level abstraction for future multi-region allocation.",
+        }
+    )
+
+
+@APP.get("/server-pools/capacity")
+def server_pool_capacity():
+    pools = enabled_server_pools()
+    default_pool = default_server_pool()
+    return jsonify(
+        {
+            "items": [server_pool_capacity_response(pool) for pool in pools],
+            "default_server_pool_id": default_pool["id"],
+            "default_region": default_pool["region"],
+            "note": "Capacity is read from the configured Agones Fleet for each enabled server pool.",
         }
     )
 

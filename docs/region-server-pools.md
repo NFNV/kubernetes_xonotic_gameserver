@@ -40,6 +40,8 @@ terraform -chdir=infra output server_pools
 
 `scripts/up.sh` and `scripts/down.sh` use the same pool defaults when they generate a local `infra/terraform.tfvars` file. By default, they still target the existing South America GKE/Agones setup and do not increase Fleet capacity.
 
+The Admin View also surfaces runtime capacity per enabled server pool. The backend reads the configured Agones Fleet for each pool and reports Desired, Current, Ready, Allocated, and Reserved replicas so operators can see when a region has no Ready servers before attempting match allocation.
+
 ## Adding Another Region Later
 
 Adding Europe or North America later would require more than adding another entry to `server_pools`. A real multi-region phase should add:
