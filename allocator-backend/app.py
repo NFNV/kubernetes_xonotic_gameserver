@@ -1050,11 +1050,17 @@ def server_pool_capacity_response(pool: dict[str, Any]) -> dict[str, Any]:
         "allocated_replicas": None,
         "reserved_replicas": None,
         "status": "unavailable",
+        "capacity_state": "unavailable",
+        "warning_message": "Server pool capacity could not be queried.",
+        "operator_action": "Check backend Kubernetes access and Agones Fleet health for this pool.",
         "error": None,
     }
 
     if not pool.get("provisioned", True):
         capacity["status"] = "not-provisioned"
+        capacity["capacity_state"] = "not-provisioned"
+        capacity["warning_message"] = "This server pool is planned but not provisioned in this dev deployment."
+        capacity["operator_action"] = "Create regional infrastructure before enabling this pool."
         capacity["error"] = {
             "error": "server_pool_not_provisioned",
             "message": f"Server pool {pool['display_name']} is planned but not provisioned in this dev deployment.",
@@ -1095,6 +1101,7 @@ def server_pool_capacity_response(pool: dict[str, Any]) -> dict[str, Any]:
         return capacity
 
     ready_replicas = int(fleet.get("ready_replicas") or 0)
+    capacity_state = "available" if ready_replicas > 0 else "no-ready-capacity"
     capacity.update(
         {
             "desired_replicas": fleet.get("desired_replicas"),
@@ -1102,7 +1109,14 @@ def server_pool_capacity_response(pool: dict[str, Any]) -> dict[str, Any]:
             "ready_replicas": ready_replicas,
             "allocated_replicas": fleet.get("allocated_replicas"),
             "reserved_replicas": fleet.get("reserved_replicas"),
-            "status": "available" if ready_replicas > 0 else "no-ready-capacity",
+            "status": capacity_state,
+            "capacity_state": capacity_state,
+            "warning_message": None if ready_replicas > 0 else "No Ready GameServers are available in this pool.",
+            "operator_action": (
+                "Ready to allocate match servers."
+                if ready_replicas > 0
+                else "Wait for FleetAutoscaler, release an active match server, or increase pool capacity."
+            ),
         }
     )
     return capacity

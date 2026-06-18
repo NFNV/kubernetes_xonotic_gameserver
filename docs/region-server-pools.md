@@ -54,6 +54,19 @@ terraform -chdir=infra output server_pools
 
 The Admin View also surfaces runtime capacity per configured server pool. For the South America pool, the backend reads the configured Agones Fleet and reports Desired, Current, Ready, Allocated, and Reserved replicas so operators can see when the region has no Ready servers before attempting match allocation. For simulated pools, the backend returns `not-provisioned` and does not query Kubernetes.
 
+## Capacity States
+
+`Ready` means Agones has warm GameServers available for allocation. `Allocated` means GameServers are already assigned to active match/session infrastructure and are consuming Fleet capacity.
+
+The capacity endpoint reports these operator-facing states:
+
+| State | Meaning | Operator action |
+| --- | --- | --- |
+| `available` | The pool is provisioned and has at least one Ready GameServer. | Ready to allocate match servers. |
+| `no-ready-capacity` | The pool is provisioned, but Ready GameServers are currently `0`. | Wait for FleetAutoscaler, release an active match server, or increase pool capacity. |
+| `not-provisioned` | The pool is planned/simulated and has no deployed regional infrastructure. | Create regional infrastructure before enabling this pool. |
+| `unavailable` | The backend could not query the configured Agones Fleet. | Check backend Kubernetes access and Agones Fleet health for this pool. |
+
 ## Simulation Mode
 
 Simulation mode lets the control-plane UX show future regional server pools without deploying more clusters or increasing cloud cost. Europe and North America are intentionally visible as planned regions, but they are not allocatable and do not have fake capacity, fake endpoints, or fake GameServers.

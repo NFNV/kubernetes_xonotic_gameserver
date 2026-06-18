@@ -1963,7 +1963,8 @@ button:disabled {
 
 .server-pool-target,
 .capacity-warning,
-.capacity-ok {
+.capacity-ok,
+.capacity-action {
   margin: 0;
 }
 
@@ -1977,6 +1978,16 @@ button:disabled {
   color: #74ffd5;
   font-size: 0.82rem;
   font-weight: 900;
+}
+
+.capacity-action {
+  padding: 9px 10px;
+  border: 1px solid rgba(126, 176, 211, 0.12);
+  border-radius: 10px;
+  background: rgba(5, 12, 21, 0.38);
+  color: #c6d8e6;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .empty-state {

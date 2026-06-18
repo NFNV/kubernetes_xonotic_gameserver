@@ -567,6 +567,10 @@ function serverPoolById(serverPoolOptions, serverPoolId) {
   return enabledServerPools(serverPoolOptions).find((pool) => pool.id === serverPoolId) || null;
 }
 
+function configuredServerPoolById(serverPoolOptions, serverPoolId) {
+  return (serverPoolOptions.items || []).find((pool) => pool.id === serverPoolId) || null;
+}
+
 function normalizeServerPool(values = {}, serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS) {
   const fallback = defaultServerPool(serverPoolOptions);
   const selected = serverPoolById(serverPoolOptions, values.requested_server_pool_id)
@@ -614,24 +618,30 @@ function capacityForServerPool(pool, serverPoolCapacity, fleetStatus = EMPTY_FLE
     allocated_replicas: fleetStatus.allocated_replicas,
     reserved_replicas: fleetStatus.reserved_replicas,
     status: (fleetStatus.ready_replicas || 0) > 0 ? "available" : "no-ready-capacity",
+    capacity_state: (fleetStatus.ready_replicas || 0) > 0 ? "available" : "no-ready-capacity",
+    warning_message: (fleetStatus.ready_replicas || 0) > 0 ? null : "No Ready GameServers are available in this pool.",
+    operator_action: (fleetStatus.ready_replicas || 0) > 0
+      ? "Ready to allocate match servers."
+      : "Wait for FleetAutoscaler, release an active match server, or increase pool capacity.",
   };
 }
 
 function serverPoolCapacityHint(pool, capacity) {
   const region = regionLabel(capacity?.region || pool?.region);
+  const state = capacity?.capacity_state || capacity?.status;
 
-  if (capacity?.status === "not-provisioned" || pool?.provisioned === false) {
-    return `${region} is planned, not provisioned`;
+  if (state === "not-provisioned" || pool?.provisioned === false) {
+    return `${region} is not provisioned in this dev deployment.`;
   }
 
-  if (!capacity || capacity.status === "unavailable") {
-    return `Capacity unavailable in ${region}`;
+  if (!capacity || state === "unavailable") {
+    return `Capacity unavailable in ${region}.`;
   }
 
   const ready = Number(capacity.ready_replicas || 0);
   return ready > 0
-    ? `${ready} Ready server${ready === 1 ? "" : "s"} available in ${region}`
-    : `No Ready servers available in ${region}`;
+    ? `${ready} Ready server${ready === 1 ? "" : "s"} available in ${region}.`
+    : `No Ready servers available in ${region}.`;
 }
 
 function serverPoolCapacityStatusLabel(status) {
@@ -645,7 +655,7 @@ function serverPoolCapacityStatusLabel(status) {
 
 function matchServerPool(match, assignment, serverPoolOptions = FALLBACK_SERVER_POOL_OPTIONS) {
   const poolId = assignment?.server_pool_id || match?.requested_server_pool_id;
-  const knownPool = serverPoolById(serverPoolOptions, poolId);
+  const knownPool = configuredServerPoolById(serverPoolOptions, poolId);
 
   if (knownPool) {
     return knownPool;
@@ -3454,8 +3464,26 @@ export default function App() {
             <div className="server-pool-capacity-list">
               {serverPoolCapacityRows.map((pool) => {
                 const ready = Number(pool.ready_replicas || 0);
-                const status = pool.status || "unavailable";
+                const status = pool.capacity_state || pool.status || "unavailable";
                 const poolKey = pool.server_pool_id || pool.id;
+                const guidance = pool.operator_action || (
+                  status === "available"
+                    ? "Ready to allocate match servers."
+                    : status === "not-provisioned"
+                      ? "Create regional infrastructure before enabling this pool."
+                      : status === "no-ready-capacity"
+                        ? "Wait for FleetAutoscaler, release an active match server, or increase pool capacity."
+                        : "Check backend Kubernetes access and Agones Fleet health for this pool."
+                );
+                const warningMessage = pool.warning_message || (
+                  status === "not-provisioned"
+                    ? "This server pool is planned but not provisioned in this dev deployment."
+                    : status === "no-ready-capacity"
+                      ? "No Ready GameServers are available in this pool."
+                      : status === "unavailable"
+                        ? pool.error?.message || "Pool capacity could not be queried."
+                        : null
+                );
 
                 return (
                   <article className={`server-pool-capacity-card server-pool-capacity-card-${status}`} key={poolKey}>
@@ -3490,17 +3518,18 @@ export default function App() {
                         : `${pool.cluster_name} · ${pool.agones_namespace}/${pool.fleet_name}`}
                     </p>
                     {status === "not-provisioned" && (
-                      <p className="capacity-warning">Simulation only. This pool cannot allocate match servers.</p>
+                      <p className="capacity-warning">{warningMessage}</p>
                     )}
                     {status === "no-ready-capacity" && (
-                      <p className="capacity-warning">No Ready servers available in {regionLabel(pool.region)}.</p>
+                      <p className="capacity-warning">{warningMessage}</p>
                     )}
                     {status === "unavailable" && (
-                      <p className="capacity-warning">{pool.error?.message || "Pool capacity could not be queried."}</p>
+                      <p className="capacity-warning">{warningMessage}</p>
                     )}
                     {status === "available" && (
                       <p className="capacity-ok">{ready} Ready server{ready === 1 ? "" : "s"} available.</p>
                     )}
+                    <p className="capacity-action">{guidance}</p>
                   </article>
                 );
               })}

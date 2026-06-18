@@ -74,6 +74,12 @@ The Grafana dashboard is provisioned into the `Xonotic` folder as `Xonotic Alloc
 - `allocator_map_mode_verification_successes_total`: count of map/mode verification successes by requested mode and map.
 - `allocator_map_mode_verification_failures_total`: count of map/mode verification failures by requested mode, map, and reason.
 
+## Regional Capacity Dashboard Note
+
+The current Grafana dashboard already shows allocation failures and active match assignments. Full Ready/Allocated GameServer panels by server pool or region are intentionally deferred because the current Prometheus metrics do not yet label capacity by `server_pool_id` or `region`. Do not fake those series in Grafana.
+
+TODO: add backend Prometheus gauges for server-pool capacity with pool/region labels, such as Ready, Allocated, Desired, and Current replicas, then add regional panels to the dashboard.
+
 ## Resource Impact
 
 Prometheus requests `25m` CPU and `128Mi` memory, limits at `200m` CPU and `256Mi` memory, keeps only `6h` of data, and caps TSDB size at `256MB` on a `512Mi` ephemeral volume.
