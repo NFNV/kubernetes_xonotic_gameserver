@@ -117,13 +117,22 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH", "").strip()
 ADMIN_SESSION_SECRET = os.environ.get("ADMIN_SESSION_SECRET", "").strip()
 ADMIN_AUTH_INSECURE_DEV = os.environ.get("ADMIN_AUTH_INSECURE_DEV", "0") == "1"
+ADMIN_PASSWORD_HASH_FORMAT = "pbkdf2:sha256:<iterations>$<salt>$<hex-digest> or a Werkzeug-supported scrypt hash"
+ADMIN_AUTH_SETUP_MESSAGE = (
+    "Admin auth is not configured. Generate ADMIN_PASSWORD_HASH and ADMIN_SESSION_SECRET, "
+    "update scripts/env.sh, then rerun scripts/up.sh or recreate the Kubernetes Secret."
+)
 XONOTIC_RCON_PROTOCOLS = tuple(
     protocol.strip()
     for protocol in os.environ.get("XONOTIC_RCON_PROTOCOLS", "secure-challenge,secure-time,plaintext").split(",")
     if protocol.strip()
 )
 
-if not ADMIN_AUTH_INSECURE_DEV:
+def validate_admin_auth_startup() -> None:
+    if ADMIN_AUTH_INSECURE_DEV:
+        APP.logger.warning("ADMIN_AUTH_INSECURE_DEV=1; mutating admin endpoints are not password protected")
+        return
+
     missing_admin_auth = [
         name
         for name, value in (
@@ -134,7 +143,24 @@ if not ADMIN_AUTH_INSECURE_DEV:
     ]
     if missing_admin_auth:
         missing_names = ", ".join(missing_admin_auth)
-        raise RuntimeError(f"admin auth is not configured; set {missing_names} or set ADMIN_AUTH_INSECURE_DEV=1 for explicit local development")
+        APP.logger.critical("%s Missing: %s", ADMIN_AUTH_SETUP_MESSAGE, missing_names)
+        raise RuntimeError(f"{ADMIN_AUTH_SETUP_MESSAGE} Missing: {missing_names}")
+
+    try:
+        check_password_hash(ADMIN_PASSWORD_HASH, "__startup_validation_probe__")
+    except ValueError as exc:
+        APP.logger.critical(
+            "ADMIN_PASSWORD_HASH is not a valid Werkzeug password hash. Expected %s",
+            ADMIN_PASSWORD_HASH_FORMAT,
+        )
+        raise RuntimeError(f"ADMIN_PASSWORD_HASH is invalid. Expected {ADMIN_PASSWORD_HASH_FORMAT}.") from exc
+
+    if len(ADMIN_SESSION_SECRET) < 32:
+        APP.logger.critical("ADMIN_SESSION_SECRET must be at least 32 characters")
+        raise RuntimeError("ADMIN_SESSION_SECRET must be at least 32 characters")
+
+
+validate_admin_auth_startup()
 
 APP.secret_key = ADMIN_SESSION_SECRET or "insecure-local-dev-admin-session"
 APP.config.update(
@@ -247,6 +273,7 @@ def admin_session_payload() -> dict[str, Any]:
         "username": username,
         "auth_configured": admin_auth_configured(),
         "auth_mode": "insecure-dev" if ADMIN_AUTH_INSECURE_DEV else "password",
+        "hash_format": ADMIN_PASSWORD_HASH_FORMAT,
     }
 
 
@@ -279,7 +306,7 @@ def require_admin_auth_for_mutating_requests():
         return jsonify(
             {
                 "error": "admin_auth_not_configured",
-                "message": "Admin authentication is not configured on the backend.",
+                "message": ADMIN_AUTH_SETUP_MESSAGE,
             }
         ), 503
     if session.get("admin_authenticated") is True:
@@ -4999,7 +5026,15 @@ def healthz():
     if db_configured():
         db_status = "ok" if DB_MIGRATIONS_READY else "unavailable"
 
-    response = {"status": "ok", "database": {"configured": db_configured(), "status": db_status}}
+    response = {
+        "status": "ok",
+        "database": {"configured": db_configured(), "status": db_status},
+        "auth": {
+            "admin_auth_configured": admin_auth_configured(),
+            "status": "insecure-dev" if ADMIN_AUTH_INSECURE_DEV else "configured",
+            "mode": "insecure-dev" if ADMIN_AUTH_INSECURE_DEV else "password",
+        },
+    }
     if DB_MIGRATION_ERROR:
         response["database"]["last_error"] = DB_MIGRATION_ERROR
     return jsonify(response)

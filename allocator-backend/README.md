@@ -73,6 +73,9 @@ Use `docs/tournament-map-mode-verification.md` and `scripts/verify-tournament-ma
 ## API
 
 - `GET /healthz`
+- `GET /admin/session`
+- `POST /admin/login`
+- `POST /admin/logout`
 - `GET /game-config/options`
 - `GET /fleet-status`
 - `GET /gameservers`
@@ -105,10 +108,19 @@ Use `docs/tournament-map-mode-verification.md` and `scripts/verify-tournament-ma
 
 `POST /allocate` remains available as a direct/manual allocation test endpoint. The operator UI should prefer Match Rooms; direct allocation is an advanced/debug path.
 
+Mutating endpoints require an admin session cookie:
+
+```bash
+ADMIN_COOKIE="$(mktemp)"
+curl -fsS -c "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/admin/login \
+  -H "content-type: application/json" \
+  -d '{"username":"admin","password":"admin"}'
+```
+
 Create tournament records:
 
 ```bash
-TOURNAMENT_ID="$(curl -fsS -X POST http://127.0.0.1:18080/tournaments \
+TOURNAMENT_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/tournaments \
   -H "content-type: application/json" \
   -d '{"name":"Spring Arena Cup","description":"Manual MVP tournament"}' | jq -r .id)"
 
@@ -119,7 +131,7 @@ curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}" | jq
 Create teams, a round, and a tournament match:
 
 ```bash
-TEAM_A_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
+TEAM_A_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
   -H "content-type: application/json" \
   -d '{"name":"Blue Rockets","tag":"BLUE","seed":1}' | jq -r .id)"
 

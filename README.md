@@ -123,11 +123,17 @@ Configure GCP project, region, zone, and local values in `scripts/env.sh`. This 
 Generate admin auth values locally and place them in `scripts/env.sh`:
 
 ```bash
-python3 -c 'from werkzeug.security import generate_password_hash; from getpass import getpass; print(generate_password_hash(getpass("Admin password: ")))'
-python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+scripts/generate-admin-auth.sh --username admin --password admin
 ```
 
-Set `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, and `ADMIN_SESSION_SECRET` from those values. `scripts/up.sh` recreates the `xonotic-admin-auth` Kubernetes Secret in the allocator namespace on every deploy, so Admin View auth survives backend/frontend Pod restarts and is restored after down/up cycles. Player View remains public and read-only.
+Paste the generated `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, and `ADMIN_SESSION_SECRET` export lines into `scripts/env.sh`. Keep the generated single quotes around `ADMIN_PASSWORD_HASH`; Werkzeug hashes contain `$` separators. `scripts/up.sh` validates these values before deployment and recreates the `xonotic-admin-auth` Kubernetes Secret in the allocator namespace on every deploy, so Admin View auth survives backend/frontend Pod restarts and is restored after down/up cycles. Player View remains public and read-only.
+
+Verify the Secret exists without printing secret values:
+
+```bash
+kubectl get secret xonotic-admin-auth -n xonotic-allocator-backend \
+  -o go-template='{{range $k, $_ := .data}}{{println $k}}{{end}}'
+```
 
 ```bash
 source scripts/env.sh

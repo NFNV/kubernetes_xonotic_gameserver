@@ -20,6 +20,7 @@ const BULK_ALLOCATION_BACKEND_RETRY_MS = 5000;
 const VERIFIED_CONFIG_NOTE = "Only verified map/mode combinations are shown.";
 const SUPPORTED_BRACKET_SIZES = [2, 4, 8];
 const ADMIN_AUTH_EVENT = "xonotic-admin-auth-required";
+const ADMIN_AUTH_NOT_CONFIGURED_MESSAGE = "Admin auth is not configured. Generate ADMIN_PASSWORD_HASH and ADMIN_SESSION_SECRET, update scripts/env.sh, then rerun scripts/up.sh or recreate the Kubernetes Secret.";
 const FALLBACK_GAME_CONFIG_OPTIONS = {
   default: {
     requested_game_mode: "dm",
@@ -219,6 +220,13 @@ function connectCommand(endpoint) {
 
 function StatusPill({ ok, label }) {
   return <span className={`status-pill ${ok ? "ok" : "error"}`}>{label}</span>;
+}
+
+function adminLoginErrorMessage(err) {
+  if (err?.data?.error === "admin_auth_not_configured" || err?.status === 503) {
+    return ADMIN_AUTH_NOT_CONFIGURED_MESSAGE;
+  }
+  return err?.message || "Admin login failed";
 }
 
 function MetricCard({ label, value }) {
@@ -1081,7 +1089,7 @@ export default function App() {
         loading: false,
       });
       if (!silent) {
-        setAdminLoginError(err.message);
+        setAdminLoginError(adminLoginErrorMessage(err));
       }
     }
   }
@@ -1112,7 +1120,7 @@ export default function App() {
       await loadDashboard({ silent: true, source: "Admin login refresh", suppressError: true });
       await loadTournaments({ silent: true });
     } catch (err) {
-      setAdminLoginError(err.message);
+      setAdminLoginError(adminLoginErrorMessage(err));
     } finally {
       setLoggingIn(false);
     }
@@ -2493,7 +2501,7 @@ export default function App() {
             </label>
             {adminLoginError && <p className="admin-login-error">{adminLoginError}</p>}
             {!adminSession.authConfigured && (
-              <p className="admin-login-error">Admin auth is not configured on the backend.</p>
+              <p className="admin-login-error">{ADMIN_AUTH_NOT_CONFIGURED_MESSAGE}</p>
             )}
             <button className="primary" type="submit" disabled={loggingIn || adminSession.loading}>
               {loggingIn ? "Unlocking..." : "Unlock Admin View"}

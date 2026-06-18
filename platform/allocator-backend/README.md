@@ -150,6 +150,7 @@ Apply the namespace, PostgreSQL Secret, PostgreSQL manifests, and RBAC:
 
 ```bash
 kubectl apply -f platform/allocator-backend/manifests/namespace.yaml
+eval "$(scripts/generate-admin-auth.sh --username admin --password admin)"
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret
@@ -161,6 +162,18 @@ stringData:
   POSTGRES_DB: ${XONOTIC_POSTGRES_DB}
   POSTGRES_USER: ${XONOTIC_POSTGRES_USER}
   POSTGRES_PASSWORD: ${XONOTIC_POSTGRES_PASSWORD}
+EOF
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: xonotic-admin-auth
+  namespace: xonotic-allocator-backend
+type: Opaque
+stringData:
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+  ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH}
+  ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET}
 EOF
 kubectl apply -f platform/postgres/manifests/pvc.yaml
 kubectl apply -f platform/postgres/manifests/service.yaml
@@ -191,6 +204,8 @@ Verify it:
 ```bash
 kubectl get pods -n xonotic-allocator-backend
 kubectl get service -n xonotic-allocator-backend
+kubectl get deployment xonotic-allocator-backend -n xonotic-allocator-backend -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'
+kubectl get secret xonotic-admin-auth -n xonotic-allocator-backend -o go-template='{{range $k, $_ := .data}}{{println $k}}{{end}}'
 kubectl logs deployment/xonotic-allocator-backend -n xonotic-allocator-backend --tail=100
 ```
 
@@ -206,17 +221,21 @@ Then call the API:
 
 ```bash
 curl -fsS http://127.0.0.1:18080/healthz
-curl -fsS -X POST http://127.0.0.1:18080/allocate
+ADMIN_COOKIE="$(mktemp)"
+curl -fsS -c "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/admin/login \
+  -H "content-type: application/json" \
+  -d '{"username":"admin","password":"admin"}'
+curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/allocate
 ```
 
 Create persisted tournament records:
 
 ```bash
-TOURNAMENT_ID="$(curl -fsS -X POST http://127.0.0.1:18080/tournaments \
+TOURNAMENT_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/tournaments \
   -H "content-type: application/json" \
   -d '{"name":"Spring Arena Cup"}' | jq -r .id)"
 
-TEAM_A_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
+TEAM_A_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
   -H "content-type: application/json" \
   -d '{"name":"Blue Rockets","tag":"BLUE","seed":1}' | jq -r .id)"
 

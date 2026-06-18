@@ -18,8 +18,36 @@ fi
 : "${XONOTIC_POSTGRES_DB:?XONOTIC_POSTGRES_DB must be set}"
 : "${XONOTIC_POSTGRES_USER:?XONOTIC_POSTGRES_USER must be set}"
 : "${XONOTIC_POSTGRES_PASSWORD:?XONOTIC_POSTGRES_PASSWORD must be set}"
-: "${ADMIN_PASSWORD_HASH:?ADMIN_PASSWORD_HASH must be set}"
-: "${ADMIN_SESSION_SECRET:?ADMIN_SESSION_SECRET must be set}"
+
+fail_admin_auth_config() {
+  cat >&2 <<'EOF'
+Admin auth is required, but ADMIN_PASSWORD_HASH or ADMIN_SESSION_SECRET is missing or invalid.
+
+Generate values with:
+  scripts/generate-admin-auth.sh --username admin --password admin
+
+Then paste the printed export lines into gitignored scripts/env.sh, run:
+  source scripts/env.sh
+  ./scripts/up.sh
+
+Important: keep the generated single quotes around ADMIN_PASSWORD_HASH. Werkzeug password hashes contain "$" separators, and double-quoted or unquoted values can be corrupted by shell expansion.
+EOF
+  exit 1
+}
+
+if [[ -z "${ADMIN_PASSWORD_HASH:-}" || -z "${ADMIN_SESSION_SECRET:-}" ]]; then
+  fail_admin_auth_config
+fi
+
+pbkdf2_hash_regex='^pbkdf2:sha256:[0-9]+\$[^$]+\$[0-9a-f]+$'
+scrypt_hash_regex='^scrypt:[0-9]+:[0-9]+:[0-9]+\$[^$]+\$[0-9a-f]+$'
+if [[ ! "${ADMIN_PASSWORD_HASH}" =~ ${pbkdf2_hash_regex} && ! "${ADMIN_PASSWORD_HASH}" =~ ${scrypt_hash_regex} ]]; then
+  fail_admin_auth_config
+fi
+
+if (( ${#ADMIN_SESSION_SECRET} < 32 )); then
+  fail_admin_auth_config
+fi
 
 infra_dir="${repo_root}/infra"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
