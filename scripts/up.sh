@@ -18,6 +18,8 @@ fi
 : "${XONOTIC_POSTGRES_DB:?XONOTIC_POSTGRES_DB must be set}"
 : "${XONOTIC_POSTGRES_USER:?XONOTIC_POSTGRES_USER must be set}"
 : "${XONOTIC_POSTGRES_PASSWORD:?XONOTIC_POSTGRES_PASSWORD must be set}"
+: "${ADMIN_PASSWORD_HASH:?ADMIN_PASSWORD_HASH must be set}"
+: "${ADMIN_SESSION_SECRET:?ADMIN_SESSION_SECRET must be set}"
 
 infra_dir="${repo_root}/infra"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
@@ -49,10 +51,15 @@ allocator_frontend_deployment_name="xonotic-allocator-frontend"
 postgres_deployment_name="xonotic-postgres"
 rcon_secret_name="xonotic-rcon"
 postgres_secret_name="xonotic-postgres"
+admin_auth_secret_name="xonotic-admin-auth"
+admin_username="${ADMIN_USERNAME:-admin}"
 rcon_password_b64="$(printf '%s' "${XONOTIC_RCON_PASSWORD}" | base64 | tr -d '\n')"
 postgres_db_b64="$(printf '%s' "${XONOTIC_POSTGRES_DB}" | base64 | tr -d '\n')"
 postgres_user_b64="$(printf '%s' "${XONOTIC_POSTGRES_USER}" | base64 | tr -d '\n')"
 postgres_password_b64="$(printf '%s' "${XONOTIC_POSTGRES_PASSWORD}" | base64 | tr -d '\n')"
+admin_username_b64="$(printf '%s' "${admin_username}" | base64 | tr -d '\n')"
+admin_password_hash_b64="$(printf '%s' "${ADMIN_PASSWORD_HASH}" | base64 | tr -d '\n')"
+admin_session_secret_b64="$(printf '%s' "${ADMIN_SESSION_SECRET}" | base64 | tr -d '\n')"
 
 cd "${infra_dir}"
 
@@ -139,6 +146,18 @@ data:
   POSTGRES_DB: ${postgres_db_b64}
   POSTGRES_USER: ${postgres_user_b64}
   POSTGRES_PASSWORD: ${postgres_password_b64}
+EOF
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${admin_auth_secret_name}
+  namespace: ${allocator_backend_namespace}
+type: Opaque
+data:
+  ADMIN_USERNAME: ${admin_username_b64}
+  ADMIN_PASSWORD_HASH: ${admin_password_hash_b64}
+  ADMIN_SESSION_SECRET: ${admin_session_secret_b64}
 EOF
 kubectl apply -f "${postgres_pvc_manifest}"
 kubectl apply -f "${postgres_service_manifest}"

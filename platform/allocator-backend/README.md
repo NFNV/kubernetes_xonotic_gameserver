@@ -16,12 +16,15 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 
 - no external Agones Allocator Service required
 - no extra network exposure for allocation traffic
-- no extra auth layer beyond Kubernetes ServiceAccount RBAC
+- Kubernetes ServiceAccount RBAC for cluster actions plus basic password auth for mutating admin API calls
 - keeps the implementation tiny and easy to review
 
 ## API
 
 - `GET /healthz`: simple health check
+- `GET /admin/session`: check Admin View session state
+- `POST /admin/login`: create an admin session from the configured password hash
+- `POST /admin/logout`: clear the admin session
 - `GET /fleet-status`: current Fleet summary for the operator UI
 - `GET /gameservers`: current `GameServer` list for the operator UI
 - `POST /tournaments`: create a persisted tournament
@@ -52,7 +55,7 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 
 Match Room state is intentionally process-local memory. It is lost when the backend Pod restarts. That keeps this phase small while still moving the project toward a tournament admin tool.
 
-Tournament state is PostgreSQL-backed. Single-elimination bracket generation, result recording, winner advancement, backend-owned tournament summaries, explicit finalization, and persisted server assignments are implemented; auth, other tournament formats, and persisted Match Rooms are intentionally deferred.
+Tournament state is PostgreSQL-backed. Single-elimination bracket generation, result recording, winner advancement, backend-owned tournament summaries, explicit finalization, persisted server assignments, and basic admin password protection are implemented; other tournament formats and persisted Match Rooms are intentionally deferred.
 
 For allocated Match Rooms, the backend queries the assigned Xonotic server with UDP `getstatus` and briefly caches the result. This provides live map, game mode, player count, player names, scores, ping, and team scores when available. It is read-only and does not use RCON.
 

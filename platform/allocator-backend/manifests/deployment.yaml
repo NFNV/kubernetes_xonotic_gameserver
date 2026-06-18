@@ -32,6 +32,21 @@ spec:
                 secretKeyRef:
                   name: xonotic-rcon
                   key: XONOTIC_RCON_PASSWORD
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: xonotic-admin-auth
+                  key: ADMIN_USERNAME
+            - name: ADMIN_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: xonotic-admin-auth
+                  key: ADMIN_PASSWORD_HASH
+            - name: ADMIN_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: xonotic-admin-auth
+                  key: ADMIN_SESSION_SECRET
             - name: POSTGRES_HOST
               value: xonotic-postgres.xonotic-allocator-backend.svc.cluster.local
             - name: POSTGRES_PORT

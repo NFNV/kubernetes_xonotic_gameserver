@@ -19,6 +19,7 @@ const BULK_ALLOCATION_REQUEST_RETRY_LIMIT = 4;
 const BULK_ALLOCATION_BACKEND_RETRY_MS = 5000;
 const VERIFIED_CONFIG_NOTE = "Only verified map/mode combinations are shown.";
 const SUPPORTED_BRACKET_SIZES = [2, 4, 8];
+const ADMIN_AUTH_EVENT = "xonotic-admin-auth-required";
 const FALLBACK_GAME_CONFIG_OPTIONS = {
   default: {
     requested_game_mode: "dm",
@@ -148,7 +149,10 @@ class ApiError extends Error {
 async function fetchJson(path, options) {
   let response;
   try {
-    response = await fetch(path, options);
+    response = await fetch(path, {
+      ...options,
+      credentials: options?.credentials || "same-origin",
+    });
   } catch (err) {
     const message = err?.message || "Network request failed";
     throw new ApiError(message, {
@@ -163,6 +167,13 @@ async function fetchJson(path, options) {
 
   if (!response.ok) {
     const message = data?.message || `${response.status} ${response.statusText}`;
+    if (
+      [401, 403].includes(response.status)
+      && !["/api/admin/login", "/api/admin/logout", "/api/admin/session"].includes(path)
+      && typeof window !== "undefined"
+    ) {
+      window.dispatchEvent(new CustomEvent(ADMIN_AUTH_EVENT, { detail: { message } }));
+    }
     throw new ApiError(message, { status: response.status, data, path });
   }
 
@@ -953,6 +964,16 @@ export default function App() {
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState("");
   const [viewMode, setViewMode] = useState("admin");
+  const [adminSession, setAdminSession] = useState({
+    authenticated: false,
+    username: "",
+    authConfigured: true,
+    loading: true,
+  });
+  const [adminLoginForm, setAdminLoginForm] = useState({ username: "admin", password: "" });
+  const [adminLoginError, setAdminLoginError] = useState(null);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [tournaments, setTournaments] = useState([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
   const [tournamentTeams, setTournamentTeams] = useState([]);
@@ -1038,6 +1059,83 @@ export default function App() {
       ...current,
       ...normalizeServerPool({ ...current, requested_server_pool_id: serverPoolId }, serverPoolOptions),
     }));
+  }
+
+  async function loadAdminSession({ silent = false } = {}) {
+    try {
+      const response = await fetchJson("/api/admin/session");
+      setAdminSession({
+        authenticated: Boolean(response.authenticated),
+        username: response.username || "",
+        authConfigured: response.auth_configured !== false,
+        loading: false,
+      });
+      if (response.authenticated || !silent) {
+        setAdminLoginError(null);
+      }
+    } catch (err) {
+      setAdminSession({
+        authenticated: false,
+        username: "",
+        authConfigured: false,
+        loading: false,
+      });
+      if (!silent) {
+        setAdminLoginError(err.message);
+      }
+    }
+  }
+
+  async function loginAdmin(event) {
+    event.preventDefault();
+    setLoggingIn(true);
+    setAdminLoginError(null);
+
+    try {
+      const response = await fetchJson("/api/admin/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username: adminLoginForm.username.trim(),
+          password: adminLoginForm.password,
+        }),
+      });
+      setAdminSession({
+        authenticated: Boolean(response.authenticated),
+        username: response.username || adminLoginForm.username.trim(),
+        authConfigured: response.auth_configured !== false,
+        loading: false,
+      });
+      setAdminLoginForm((current) => ({ ...current, password: "" }));
+      setCopyMessage("Admin unlocked.");
+      window.setTimeout(() => setCopyMessage(""), 1800);
+      await loadDashboard({ silent: true, source: "Admin login refresh", suppressError: true });
+      await loadTournaments({ silent: true });
+    } catch (err) {
+      setAdminLoginError(err.message);
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  async function logoutAdmin() {
+    setLoggingOut(true);
+    try {
+      await fetchJson("/api/admin/logout", { method: "POST" });
+    } catch {
+      // The local UI should still lock if the backend session is already gone.
+    } finally {
+      setAdminSession({
+        authenticated: false,
+        username: "",
+        authConfigured: true,
+        loading: false,
+      });
+      setLoggingOut(false);
+      setAdminLoginError(null);
+      setCopyMessage("Admin locked.");
+      window.setTimeout(() => setCopyMessage(""), 1800);
+    }
   }
 
   async function loadGameConfigOptions() {
@@ -2183,6 +2281,22 @@ export default function App() {
   }
 
   useEffect(() => {
+    const onAdminAuthRequired = (event) => {
+      setAdminSession((current) => ({
+        ...current,
+        authenticated: false,
+        loading: false,
+      }));
+      setAdminLoginError(event.detail?.message || "Admin session expired. Log in again.");
+      setViewMode("admin");
+    };
+
+    window.addEventListener(ADMIN_AUTH_EVENT, onAdminAuthRequired);
+    return () => window.removeEventListener(ADMIN_AUTH_EVENT, onAdminAuthRequired);
+  }, []);
+
+  useEffect(() => {
+    void loadAdminSession({ silent: true });
     void loadGameConfigOptions();
     void loadServerPools();
     void loadDashboard();
@@ -2241,6 +2355,7 @@ export default function App() {
     summaryActiveServerCount,
     tournamentMatches.filter((match) => match.active_server_assignment).length
   );
+  const adminLocked = !adminSession.authenticated;
 
   function refreshPlayerTournamentView() {
     void loadTournaments({ silent: true });
@@ -2312,6 +2427,83 @@ export default function App() {
     );
   }
 
+  if (adminLocked) {
+    return (
+      <main className="page">
+        <section className="hero">
+          <div>
+            <p className="eyebrow">Xonotic Operator Console</p>
+            <h1>Allocator Admin Dashboard</h1>
+            <p className="subtitle">
+              Admin View is locked. Player View remains public and read-only.
+            </p>
+          </div>
+          <div className="hero-actions">
+            <div className="view-toggle" aria-label="Dashboard view">
+              <button className="secondary toggle-active" type="button" aria-current="page">
+                Admin View
+              </button>
+              <button className="secondary" type="button" onClick={() => setViewMode("player")}>
+                Player View
+              </button>
+            </div>
+            <StatusPill ok={false} label="Admin locked" />
+            <StatusPill ok={backendHealthy} label={backendHealthy ? "Backend Healthy" : "Backend Unhealthy"} />
+          </div>
+        </section>
+
+        {error && (
+          <section className="error-banner">
+            <strong>{error.title}</strong>
+            <span>{error.message}</span>
+          </section>
+        )}
+
+        {copyMessage && <section className="copy-banner">{copyMessage}</section>}
+
+        <section className="panel admin-lock-panel">
+          <div className="admin-lock-copy">
+            <p className="eyebrow">Admin locked</p>
+            <h2>{adminSession.loading ? "Checking admin session..." : "Login required"}</h2>
+            <p>
+              Enter the admin credentials from the Kubernetes Secret to unlock operator actions. Player View does not require login.
+            </p>
+          </div>
+          <form className="admin-login-form" onSubmit={(event) => void loginAdmin(event)}>
+            <label>
+              <span>Admin ID</span>
+              <input
+                autoComplete="username"
+                value={adminLoginForm.username}
+                onChange={(event) => setAdminLoginForm((current) => ({ ...current, username: event.target.value }))}
+                placeholder="admin"
+                required
+              />
+            </label>
+            <label>
+              <span>Password</span>
+              <input
+                autoComplete="current-password"
+                type="password"
+                value={adminLoginForm.password}
+                onChange={(event) => setAdminLoginForm((current) => ({ ...current, password: event.target.value }))}
+                placeholder="Admin password"
+                required
+              />
+            </label>
+            {adminLoginError && <p className="admin-login-error">{adminLoginError}</p>}
+            {!adminSession.authConfigured && (
+              <p className="admin-login-error">Admin auth is not configured on the backend.</p>
+            )}
+            <button className="primary" type="submit" disabled={loggingIn || adminSession.loading}>
+              {loggingIn ? "Unlocking..." : "Unlock Admin View"}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="page">
       <section className="hero">
@@ -2332,6 +2524,10 @@ export default function App() {
             </button>
           </div>
           <StatusPill ok={backendHealthy} label={backendHealthy ? "Backend Healthy" : "Backend Unhealthy"} />
+          <span className="admin-session-pill">Admin: {adminSession.username || "signed in"}</span>
+          <button className="secondary" type="button" onClick={() => void logoutAdmin()} disabled={loggingOut}>
+            {loggingOut ? "Locking..." : "Log out"}
+          </button>
           <button
             className={`secondary ${autoRefresh ? "toggle-active" : ""}`}
             onClick={() => setAutoRefresh((enabled) => !enabled)}

@@ -7,7 +7,7 @@ It is intentionally narrow:
 - React
 - static build served by nginx
 - `/api` proxied to the in-cluster allocator backend
-- no auth
+- Admin View login backed by the allocator backend session cookie
 - PostgreSQL-backed tournament planning data through the backend
 
 ## UI Scope

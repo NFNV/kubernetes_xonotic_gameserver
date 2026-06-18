@@ -28,7 +28,7 @@ Terraform + GKE + firewall rules
 
 - Flask allocator backend handles Agones allocation, server release, RCON configuration, `getstatus` verification, and API workflows.
 - PostgreSQL stores tournaments, teams, rounds, matches, results, and server assignment history.
-- React Admin View manages allocation, tournament workflow, result recording, finalization, and debug controls.
+- React Admin View is password-protected and manages allocation, tournament workflow, result recording, finalization, and debug controls.
 - React Player View exposes read-only match status, results, endpoints, and copyable `connect IP:PORT` commands.
 
 ### Observability Plane
@@ -45,7 +45,7 @@ Terraform + GKE + firewall rules
 - Flask admin control plane for server lifecycle operations
 - PostgreSQL-backed tournament, match, result, and assignment state
 - Verified map/mode selection with RCON configuration and `getstatus` validation
-- React Admin View for operators and read-only Player View for players/spectators
+- Password-protected React Admin View for operators and public read-only Player View for players/spectators
 - Admin server-pool capacity visibility for Ready/Allocated regional game server capacity
 - Single-elimination tournament workflow with result recording and winner advancement
 - Tournament finalization with automatic active GameServer cleanup
@@ -120,6 +120,15 @@ cp scripts/env.sh.example scripts/env.sh
 
 Configure GCP project, region, zone, and local values in `scripts/env.sh`. This file is intentionally ignored because it contains local configuration and secrets.
 
+Generate admin auth values locally and place them in `scripts/env.sh`:
+
+```bash
+python3 -c 'from werkzeug.security import generate_password_hash; from getpass import getpass; print(generate_password_hash(getpass("Admin password: ")))'
+python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+```
+
+Set `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, and `ADMIN_SESSION_SECRET` from those values. `scripts/up.sh` recreates the `xonotic-admin-auth` Kubernetes Secret in the allocator namespace on every deploy, so Admin View auth survives backend/frontend Pod restarts and is restored after down/up cycles. Player View remains public and read-only.
+
 ```bash
 source scripts/env.sh
 ./scripts/up.sh
@@ -147,7 +156,7 @@ Tear down cloud resources:
 
 - Single-node GKE dev cluster
 - Limited concurrent match capacity
-- No production auth yet
+- Basic Admin View password protection only; no OAuth, roles, or production identity provider yet
 - No public domain or Ingress yet
 - In-cluster PostgreSQL is dev-grade
 - Not multi-region
@@ -156,7 +165,7 @@ Tear down cloud resources:
 
 ## Future Work
 
-- Admin authentication and role separation
+- Stronger admin authentication and role separation
 - Public Ingress/domain
 - Managed PostgreSQL or backups
 - Additional tournament formats

@@ -2,7 +2,7 @@
 
 This phase adds a small React admin dashboard for operators.
 
-It is not a public user-facing site. It is a simple control panel for:
+The Admin View requires login. Player View remains public/read-only. The Admin View is a simple control panel for:
 
 - checking allocator backend health
 - managing persisted tournaments, teams, rounds, and tournament match records
@@ -35,6 +35,9 @@ The nginx container proxies `/api` requests to the existing allocator backend se
 Backend endpoints used:
 
 - `GET /healthz`
+- `GET /admin/session`
+- `POST /admin/login`
+- `POST /admin/logout`
 - `GET /fleet-status`
 - `GET /gameservers`
 - `GET /tournaments`

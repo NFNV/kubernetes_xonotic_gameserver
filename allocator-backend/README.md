@@ -7,7 +7,7 @@ It is intentionally small:
 - Python
 - one HTTP process
 - PostgreSQL-backed tournament CRUD
-- no auth
+- basic password-protected admin sessions for mutating/operator actions
 - simple JSON API that can be consumed by the operator frontend
 
 The service runs inside Kubernetes and uses the Kubernetes API directly to create/read `GameServerAllocation` resources and delete allocated `GameServer` resources in `xonotic-agones`.
@@ -34,7 +34,7 @@ Still deferred:
 
 - double elimination, Swiss, and round robin formats
 - persisted live telemetry history
-- auth and production database hardening
+- stronger auth and production database hardening
 
 The existing in-memory Match Room, allocation, `getstatus`, RCON, and release flow remains process-local and unchanged in this phase. Tournament match server assignments are now persisted separately in PostgreSQL.
 
@@ -44,7 +44,7 @@ Match Rooms are the first admin-facing layer above raw Agones allocation.
 
 A Match Room represents an operator-created match/session and can have one allocated Xonotic `GameServer` assigned to it. The allocated `GameServer` is the infrastructure backing the room; standby `Ready` servers remain internal capacity.
 
-Match Rooms are stored only in backend process memory for now. They disappear when the backend Pod restarts. That is intentional for this MVP because there is no database, auth, player account model, or tournament bracket logic yet.
+Match Rooms are stored only in backend process memory for now. They disappear when the backend Pod restarts. That is intentional for this MVP because there is no persisted Match Room model or player account model yet.
 
 For allocated rooms, the backend also sends a read-only UDP `getstatus` query to the assigned Xonotic server. That response is cached briefly and used to fill live player count, map, game mode, player names, scores, ping, and team score data when available. This does not use RCON.
 

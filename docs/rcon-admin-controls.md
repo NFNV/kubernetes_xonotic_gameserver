@@ -334,7 +334,7 @@ Known limitations:
 - `getstatus` is best-effort and may briefly report the old map or a transient failure during a map change; the UI shows a warning and keeps the last known good status in that case
 - game mode is applied with `gametype <mode>` and verified through `getstatus`; if verification fails, the room is marked `allocated_needs_attention`
 - max players, restart, kick/ban, and arbitrary commands remain intentionally deferred
-- there is still no backend/frontend authentication in this dev phase
+- mutating RCON/admin endpoints require the basic Admin View session; this is not OAuth or production role management
 
 Example success shape:
 
@@ -391,10 +391,19 @@ Port-forward the backend:
 kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18080:8080
 ```
 
+Create an admin session cookie:
+
+```bash
+ADMIN_COOKIE="$(mktemp)"
+curl -fsS -c "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/admin/login \
+  -H "content-type: application/json" \
+  -d '{"username":"admin","password":"<admin-password>"}'
+```
+
 Create a Match Room:
 
 ```bash
-MATCH_ID="$(curl -fsS -X POST http://127.0.0.1:18080/matches \
+MATCH_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/matches \
   -H "content-type: application/json" \
   -d '{"name":"RCON smoke test"}' | jq -r .match_id)"
 ```
@@ -402,19 +411,19 @@ MATCH_ID="$(curl -fsS -X POST http://127.0.0.1:18080/matches \
 Allocate a server:
 
 ```bash
-curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/allocate"
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/allocate"
 ```
 
 Run the RCON status smoke test:
 
 ```bash
-curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/rcon-smoke-test"
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/rcon-smoke-test"
 ```
 
 Optionally also send the hardcoded smoke message:
 
 ```bash
-curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/rcon-smoke-test" \
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/rcon-smoke-test" \
   -H "content-type: application/json" \
   -d '{"include_say":true}'
 ```
@@ -422,7 +431,7 @@ curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/rcon-smoke-test" \
 Release the server when done:
 
 ```bash
-curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/release"
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/release"
 ```
 
 ## Security Limitations In This Phase
@@ -430,9 +439,9 @@ curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/release"
 This is still a dev-cluster smoke test:
 
 - the RCON password is stored in Kubernetes Secrets, not an external secret manager
-- the backend API has no authentication yet
-- anyone with access to the backend HTTP endpoint can call the smoke-test endpoint
+- the Admin View uses basic password-protected sessions, not OAuth or production role management
+- anyone with valid admin credentials and access to the backend HTTP endpoint can call the smoke-test endpoint
 - the smoke-test endpoint does not expose arbitrary RCON, but it still proves privileged server control
 - local `scripts/env.sh` must stay uncommitted
 
-Before any non-local/admin-only use, add authentication around the backend/admin UI and move secret management to the platform's chosen secret-management model.
+Before any non-local/admin-only use, replace basic auth with the platform's chosen identity and secret-management model.

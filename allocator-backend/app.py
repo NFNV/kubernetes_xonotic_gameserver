@@ -6,17 +6,19 @@ import struct
 import time
 import uuid
 from datetime import UTC, datetime
+from hmac import compare_digest
 from threading import Lock
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
-from flask import Flask, Response, g, jsonify, request
+from flask import Flask, Response, g, jsonify, request, session
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from kubernetes.config.config_exception import ConfigException
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from werkzeug.exceptions import BadRequest, HTTPException, UnsupportedMediaType
+from werkzeug.security import check_password_hash
 
 
 APP = Flask(__name__)
@@ -111,10 +113,34 @@ XONOTIC_RCON_CHANGE_MAP_STATUS_DELAY_SECONDS = float(os.environ.get("XONOTIC_RCO
 XONOTIC_RCON_CHANGE_MAP_VERIFY_TIMEOUT_SECONDS = float(os.environ.get("XONOTIC_RCON_CHANGE_MAP_VERIFY_TIMEOUT_SECONDS", "12"))
 XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS = float(os.environ.get("XONOTIC_RCON_CHANGE_MAP_VERIFY_INTERVAL_SECONDS", "1"))
 TOURNAMENT_ALLOCATION_STALE_SECONDS = float(os.environ.get("TOURNAMENT_ALLOCATION_STALE_SECONDS", "60"))
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH", "").strip()
+ADMIN_SESSION_SECRET = os.environ.get("ADMIN_SESSION_SECRET", "").strip()
+ADMIN_AUTH_INSECURE_DEV = os.environ.get("ADMIN_AUTH_INSECURE_DEV", "0") == "1"
 XONOTIC_RCON_PROTOCOLS = tuple(
     protocol.strip()
     for protocol in os.environ.get("XONOTIC_RCON_PROTOCOLS", "secure-challenge,secure-time,plaintext").split(",")
     if protocol.strip()
+)
+
+if not ADMIN_AUTH_INSECURE_DEV:
+    missing_admin_auth = [
+        name
+        for name, value in (
+            ("ADMIN_PASSWORD_HASH", ADMIN_PASSWORD_HASH),
+            ("ADMIN_SESSION_SECRET", ADMIN_SESSION_SECRET),
+        )
+        if not value
+    ]
+    if missing_admin_auth:
+        missing_names = ", ".join(missing_admin_auth)
+        raise RuntimeError(f"admin auth is not configured; set {missing_names} or set ADMIN_AUTH_INSECURE_DEV=1 for explicit local development")
+
+APP.secret_key = ADMIN_SESSION_SECRET or "insecure-local-dev-admin-session"
+APP.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("ADMIN_SESSION_COOKIE_SECURE", "0") == "1",
 )
 
 ALLOCATION_GROUP = "allocation.agones.dev"
@@ -207,6 +233,58 @@ def record_request_metrics(response):
         if started_at is not None:
             HTTP_REQUEST_LATENCY_SECONDS.labels(request.method, endpoint).observe(time.perf_counter() - started_at)
     return response
+
+
+def admin_auth_configured() -> bool:
+    return ADMIN_AUTH_INSECURE_DEV or bool(ADMIN_PASSWORD_HASH and ADMIN_SESSION_SECRET)
+
+
+def admin_session_payload() -> dict[str, Any]:
+    authenticated = ADMIN_AUTH_INSECURE_DEV or session.get("admin_authenticated") is True
+    username = ADMIN_USERNAME if authenticated else None
+    return {
+        "authenticated": authenticated,
+        "username": username,
+        "auth_configured": admin_auth_configured(),
+        "auth_mode": "insecure-dev" if ADMIN_AUTH_INSECURE_DEV else "password",
+    }
+
+
+def admin_auth_error(status_code: int = 401) -> tuple[Any, int]:
+    return jsonify(
+        {
+            "error": "admin_auth_required",
+            "message": "Admin authentication is required for this operation.",
+        }
+    ), status_code
+
+
+def password_matches_configured_hash(password: str) -> bool:
+    try:
+        return check_password_hash(ADMIN_PASSWORD_HASH, password)
+    except ValueError:
+        APP.logger.warning("ADMIN_PASSWORD_HASH is not a valid Werkzeug password hash")
+        return False
+
+
+@APP.before_request
+def require_admin_auth_for_mutating_requests():
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return None
+    if request.path in {"/admin/login", "/admin/logout"}:
+        return None
+    if ADMIN_AUTH_INSECURE_DEV:
+        return None
+    if not admin_auth_configured():
+        return jsonify(
+            {
+                "error": "admin_auth_not_configured",
+                "message": "Admin authentication is not configured on the backend.",
+            }
+        ), 503
+    if session.get("admin_authenticated") is True:
+        return None
+    return admin_auth_error()
 
 
 ADMIN_ALLOWED_MAPS = tuple(sorted({map_name for config in GAME_CONFIG_OPTIONS.values() for map_name in config["verified_maps"] + config["experimental_maps"]}))
@@ -4867,6 +4945,46 @@ def tournament_match_admin_change_map(tournament_id: str, match_id: str):
         )
 
     return jsonify(result)
+
+
+@APP.get("/admin/session")
+def admin_session():
+    return jsonify(admin_session_payload())
+
+
+@APP.post("/admin/login")
+def admin_login():
+    if ADMIN_AUTH_INSECURE_DEV:
+        session["admin_authenticated"] = True
+        session["admin_username"] = ADMIN_USERNAME
+        session["admin_login_at"] = utc_now()
+        return jsonify(admin_session_payload())
+
+    try:
+        body = parse_json_body()
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
+
+    username = str(body.get("username") or "").strip()
+    password = str(body.get("password") or "")
+    if not username or not password:
+        return jsonify({"error": "admin_login_failed", "message": "username and password are required"}), 400
+
+    if not compare_digest(username, ADMIN_USERNAME) or not password_matches_configured_hash(password):
+        return jsonify({"error": "admin_login_failed", "message": "invalid admin username or password"}), 401
+
+    session.clear()
+    session.permanent = True
+    session["admin_authenticated"] = True
+    session["admin_username"] = ADMIN_USERNAME
+    session["admin_login_at"] = utc_now()
+    return jsonify(admin_session_payload())
+
+
+@APP.post("/admin/logout")
+def admin_logout():
+    session.clear()
+    return jsonify({"authenticated": False, "username": None})
 
 
 @APP.get("/healthz")

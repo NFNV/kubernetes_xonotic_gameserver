@@ -126,6 +126,18 @@ button:disabled {
   color: #ff9a8d;
 }
 
+.admin-session-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 9px 14px;
+  border: 1px solid rgba(0, 255, 180, 0.2);
+  border-radius: 999px;
+  background: rgba(0, 255, 180, 0.1);
+  color: #99ffe4;
+  font-weight: 800;
+}
+
 .primary {
   background: linear-gradient(135deg, #ff6b24, #ffb14a);
   color: #160b05;
@@ -196,6 +208,39 @@ button:disabled {
   border-radius: 14px;
   background: rgba(18, 28, 45, 0.82);
   color: #bacbd9;
+}
+
+.admin-lock-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+  gap: 28px;
+  align-items: start;
+}
+
+.admin-lock-copy h2 {
+  margin: 0 0 10px;
+  color: #f7fbff;
+}
+
+.admin-lock-copy p:last-child {
+  margin: 0;
+  max-width: 640px;
+  color: #a9bfd1;
+}
+
+.admin-login-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(126, 176, 211, 0.16);
+  border-radius: 16px;
+  background: rgba(5, 12, 21, 0.36);
+}
+
+.admin-login-error {
+  margin: 0;
+  color: #ffb4a8;
+  font-weight: 800;
 }
 
 .player-page {
@@ -2570,6 +2615,10 @@ th {
 
   .hero-actions {
     justify-content: flex-start;
+  }
+
+  .admin-lock-panel {
+    grid-template-columns: 1fr;
   }
 
   .view-toggle {
