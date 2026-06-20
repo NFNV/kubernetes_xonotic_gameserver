@@ -1,6 +1,6 @@
 # Infrastructure
 
-This directory contains the minimal Terraform needed for Phase 1 of the project: a small GCP foundation plus one cost-conscious GKE Standard cluster for the MVP.
+This directory contains the minimal Terraform needed for the project: a small GCP foundation plus cost-conscious GKE Standard clusters for opt-in Xonotic game server regions.
 
 The Terraform in this directory is implemented, but nothing in `infra/` creates real cloud resources until you run `terraform apply` against a real GCP project.
 
@@ -9,7 +9,7 @@ The Terraform in this directory is implemented, but nothing in `infra/` creates 
 Terraform in this directory creates:
 
 - the required GCP APIs for this phase
-- one zonal GKE Standard cluster described as the default server pool
+- one zonal GKE Standard cluster described by the selected region/server-pool tfvars
 - one small node pool for that cluster
 
 It intentionally does not create:
@@ -35,6 +35,16 @@ At minimum, set:
 
 The current deployment is represented by `default_server_pool_id` and `server_pools`. The default pool is `south-america-default`, which maps to the South America GKE/Agones setup documented in [`docs/region-server-pools.md`](/Users/n/Documents/Cloud/xonotic/docs/region-server-pools.md).
 
+Region-specific tfvars files live under [`regions/`](/Users/n/Documents/Cloud/xonotic/infra/regions):
+
+| Region script argument | Terraform tfvars | Terraform workspace | Pool ID | Cluster |
+| --- | --- | --- | --- | --- |
+| `south-america` | `regions/south-america.tfvars` | `south-america` | `south-america-default` | `xonotic-mvp` |
+| `europe` | `regions/europe.tfvars` | `europe` | `europe-default` | `xonotic-eu` |
+| `north-america` | `regions/north-america.tfvars` | `north-america` | `north-america-default` | `xonotic-na` |
+
+Each tfvars file configures exactly one provisioned pool for that region. `project_id` is intentionally not committed in those files; the region scripts pass it from `GCP_PROJECT_ID`.
+
 The other variables have practical defaults for a low-cost MVP and can be overridden if needed:
 
 - `environment`: defaults to `mvp`
@@ -45,7 +55,7 @@ The other variables have practical defaults for a low-cost MVP and can be overri
 - `node_disk_type`: defaults to `pd-standard`
 - `node_count`: defaults to `1`
 
-Compatibility variables `region`, `zone`, and `cluster_name` still exist for older local `terraform.tfvars` files, but new configuration should prefer `server_pools`.
+Compatibility variables `region`, `zone`, and `cluster_name` still exist for older South America local `terraform.tfvars` files, but new configuration should prefer `server_pools`. They are intentionally ignored for non-South America region tfvars so stale local overrides cannot point Europe or North America back at the primary cluster.
 
 Use [`terraform.tfvars.example`](/Users/n/Documents/Cloud/xonotic/infra/terraform.tfvars.example) as the starting point for local values.
 
@@ -58,6 +68,28 @@ terraform init
 terraform plan -out=tfplan
 terraform apply tfplan
 ```
+
+For region-oriented use from the repository root, prefer the scripts:
+
+```bash
+./scripts/up-region.sh south-america
+./scripts/up-region.sh europe
+./scripts/down-region.sh europe
+```
+
+Those scripts select or create the matching Terraform workspace before planning/applying. This keeps regional state isolated so applying `europe` does not replace or destroy `south-america`.
+
+You can inspect regional workspaces and outputs with:
+
+```bash
+terraform -chdir=infra workspace list
+terraform -chdir=infra output default_server_pool
+terraform -chdir=infra output server_pools
+```
+
+The scripts restore the previously active workspace when they exit, so the existing local workflow is less likely to be left pointing at the wrong region.
+
+Cost warning: every additional region can create another GKE cluster and node pool. Always read the plan before confirming an apply or destroy.
 
 ## Local Operator Scripts
 
@@ -113,6 +145,8 @@ Tear the current test path and infra down:
 ./scripts/down.sh
 ```
 
+`./scripts/up.sh` and `./scripts/down.sh` remain the full current South America dev workflow: Terraform, Agones/Fleet, secrets, Postgres, backend, and frontend. The new `up-region.sh`/`down-region.sh` scripts are opt-in regional Terraform controls and do not deploy duplicate central control-plane workloads.
+
 If you prefer a tfvars file:
 
 ```bash
@@ -137,6 +171,16 @@ The connectivity checkpoint under [`platform/connectivity-checkpoint/README.md`]
 ```bash
 terraform destroy
 ```
+
+If you use region workspaces directly, select the intended workspace first and pass the matching tfvars:
+
+```bash
+terraform -chdir=infra workspace select europe
+terraform -chdir=infra plan -destroy -var-file=regions/europe.tfvars -var="project_id=${GCP_PROJECT_ID}"
+terraform -chdir=infra destroy -var-file=regions/europe.tfvars -var="project_id=${GCP_PROJECT_ID}"
+```
+
+Do not destroy from an unknown active workspace. `terraform -chdir=infra workspace show` should match the region you intend to tear down.
 
 Notes:
 
@@ -184,5 +228,7 @@ Because there is no Kubernetes `Service` of type `LoadBalancer` in either path, 
 - cluster access IAM design
 - dedicated node service accounts
 - Agones installation
+- backend multi-cluster Kubernetes client routing
+- real cross-region allocation from the central control plane
 - observability stack and alerting
 - multi-environment or multi-cluster layout

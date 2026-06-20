@@ -4,13 +4,13 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "Compatibility override for the default server pool GCP region. Prefer server_pools for new configuration."
+  description = "Compatibility override for the legacy South America default pool GCP region. Prefer server_pools for new configuration."
   type        = string
   default     = null
 }
 
 variable "zone" {
-  description = "Compatibility override for the default server pool GCP zone. Prefer server_pools for new configuration."
+  description = "Compatibility override for the legacy South America default pool GCP zone. Prefer server_pools for new configuration."
   type        = string
   default     = null
 }
@@ -22,7 +22,7 @@ variable "environment" {
 }
 
 variable "cluster_name" {
-  description = "Compatibility override for the default server pool GKE cluster name. Prefer server_pools for new configuration."
+  description = "Compatibility override for the legacy South America default pool GKE cluster name. Prefer server_pools for new configuration."
   type        = string
   default     = null
 }

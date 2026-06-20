@@ -1,6 +1,6 @@
 # Region Server Pools
 
-The platform is starting to model game server capacity as region-aware server pools. This is an application and infrastructure configuration abstraction only; the current dev deployment still uses one GKE cluster and one Agones Fleet.
+The platform models game server capacity as region-aware server pools. This is now represented in both the application configuration and the Terraform/operator workflow, but the current dev deployment still has only one provisioned, allocatable GKE/Agones region by default.
 
 ## Region
 
@@ -10,7 +10,7 @@ The current provisioned region is:
 
 - `south-america`
 
-The current simulated/planned regions are:
+The current planned regions are:
 
 - `europe`
 - `north-america`
@@ -39,6 +39,41 @@ The current simulated pools are:
 | --- | --- | --- | --- | --- | --- | --- |
 | `europe-simulated` | `Europe - Simulated` | `europe` | `gcp` | `false` | `false` | `not-provisioned` |
 | `north-america-simulated` | `North America - Simulated` | `north-america` | `gcp` | `false` | `false` | `not-provisioned` |
+
+## Regional Terraform Definitions
+
+The shared Terraform code under [`infra/`](/Users/n/Documents/Cloud/xonotic/infra) can be pointed at one region at a time with region-specific tfvars files:
+
+| Region | Terraform tfvars | Workspace | Provisioned pool ID | GCP target |
+| --- | --- | --- | --- | --- |
+| `south-america` | `infra/regions/south-america.tfvars` | `south-america` | `south-america-default` | `southamerica-west1-a` |
+| `europe` | `infra/regions/europe.tfvars` | `europe` | `europe-default` | `europe-west1-b` |
+| `north-america` | `infra/regions/north-america.tfvars` | `north-america` | `north-america-default` | `us-central1-a` |
+
+Each region file configures exactly one provisioned server pool for that region. The Terraform code is not duplicated; the pool metadata, cluster name, zone, and UDP port range come from the selected tfvars file.
+
+The region scripts are explicit and opt-in:
+
+```bash
+./scripts/up-region.sh south-america
+./scripts/up-region.sh europe
+./scripts/up-region.sh north-america
+
+./scripts/down-region.sh europe
+./scripts/down-region.sh north-america
+```
+
+They use Terraform workspaces named after the region, so a Europe apply uses the `europe` workspace and does not overwrite South America state. The scripts print the selected region, tfvars file, workspace, and a cost warning before applying or destroying.
+
+Useful inspection commands:
+
+```bash
+terraform -chdir=infra workspace list
+terraform -chdir=infra output default_server_pool
+terraform -chdir=infra output server_pools
+```
+
+Important: `./scripts/up.sh` and `./scripts/down.sh` remain the current full South America dev workflow. They still handle Terraform plus Agones, Fleet, secrets, PostgreSQL, backend, and frontend. The new region scripts are regional infrastructure controls and intentionally do not deploy duplicate central control-plane stacks into Europe or North America.
 
 ## Current South America Mapping
 
@@ -73,16 +108,19 @@ Simulation mode lets the control-plane UX show future regional server pools with
 
 If an allocation request targets a simulated pool, the backend rejects it with a clear `server_pool_not_provisioned` error. This keeps the UI honest while still demonstrating how the platform would present multi-region operations once those regions are backed by real infrastructure.
 
+The new `europe-default` and `north-america-default` Terraform tfvars are infrastructure definitions for future real pools. They are not automatically exposed as enabled backend pools and do not make the backend capable of allocating cross-cluster servers by themselves.
+
 ## Adding Another Region Later
 
 Activating Europe or North America later would require more than changing `enabled` to `true`. A real multi-region phase should add:
 
-- a second GKE cluster in the target GCP region/zone
+- a second GKE cluster in the target GCP region/zone, created with the matching region script
 - Agones installed in that cluster
 - a Xonotic Fleet and FleetAutoscaler for that region
 - matching UDP firewall rules for that pool's port range
 - backend allocation routing that chooses the correct Kubernetes client/cluster for the selected pool
 - deployment automation for backend/frontend configuration across regions
 - observability labels and dashboards grouped by pool/region
+- public DNS/Ingress or another operator-approved discovery model for regional endpoints
 
 Until that work exists, only `south-america-default` should be treated as an active server pool.

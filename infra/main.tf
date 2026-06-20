@@ -1,9 +1,10 @@
 locals {
   configured_default_server_pool = var.server_pools[var.default_server_pool_id]
+  use_compatibility_overrides    = var.default_server_pool_id == "south-america-default"
   default_server_pool = merge(local.configured_default_server_pool, {
-    gcp_region   = coalesce(var.region, local.configured_default_server_pool.gcp_region)
-    gcp_zone     = coalesce(var.zone, local.configured_default_server_pool.gcp_zone)
-    cluster_name = coalesce(var.cluster_name, local.configured_default_server_pool.cluster_name)
+    gcp_region   = local.use_compatibility_overrides ? coalesce(var.region, local.configured_default_server_pool.gcp_region) : local.configured_default_server_pool.gcp_region
+    gcp_zone     = local.use_compatibility_overrides ? coalesce(var.zone, local.configured_default_server_pool.gcp_zone) : local.configured_default_server_pool.gcp_zone
+    cluster_name = local.use_compatibility_overrides ? coalesce(var.cluster_name, local.configured_default_server_pool.cluster_name) : local.configured_default_server_pool.cluster_name
   })
   server_pools = merge(var.server_pools, {
     (var.default_server_pool_id) = local.default_server_pool
