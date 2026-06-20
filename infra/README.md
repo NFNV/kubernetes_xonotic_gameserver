@@ -79,6 +79,16 @@ For region-oriented use from the repository root, prefer the scripts:
 
 Those scripts select or create the matching Terraform workspace before planning/applying. This keeps regional state isolated so applying `europe` does not replace or destroy `south-america`.
 
+After Terraform creates the cluster, `up-region.sh` also fetches kubeconfig credentials and deploys the regional game-server plane:
+
+- Agones
+- `xonotic-agones` namespace
+- `xonotic-rcon` Secret from `XONOTIC_RCON_PASSWORD`
+- Xonotic `Fleet`
+- Xonotic `FleetAutoscaler`
+
+It does not deploy the allocator backend, frontend, PostgreSQL, or observability stack into secondary regions.
+
 You can inspect regional workspaces and outputs with:
 
 ```bash
@@ -145,7 +155,7 @@ Tear the current test path and infra down:
 ./scripts/down.sh
 ```
 
-`./scripts/up.sh` and `./scripts/down.sh` remain the full current South America dev workflow: Terraform, Agones/Fleet, secrets, Postgres, backend, and frontend. The new `up-region.sh`/`down-region.sh` scripts are opt-in regional Terraform controls and do not deploy duplicate central control-plane workloads.
+`./scripts/up.sh` and `./scripts/down.sh` remain the full current South America dev workflow: Terraform, Agones/Fleet, secrets, Postgres, backend, and frontend. The new `up-region.sh`/`down-region.sh` scripts are opt-in regional game-server-plane controls and do not deploy duplicate central control-plane workloads.
 
 If you prefer a tfvars file:
 

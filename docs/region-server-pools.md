@@ -65,6 +65,16 @@ The region scripts are explicit and opt-in:
 
 They use Terraform workspaces named after the region, so a Europe apply uses the `europe` workspace and does not overwrite South America state. The scripts print the selected region, tfvars file, workspace, and a cost warning before applying or destroying.
 
+After Terraform creates the cluster, `up-region.sh` fetches kubeconfig credentials and deploys the regional game-server plane:
+
+- Agones
+- `xonotic-agones` namespace
+- required `xonotic-rcon` Secret
+- Xonotic `Fleet`
+- Xonotic `FleetAutoscaler`
+
+It intentionally does not deploy the allocator backend, frontend, PostgreSQL, or observability stack into secondary regions.
+
 Useful inspection commands:
 
 ```bash
@@ -73,7 +83,7 @@ terraform -chdir=infra output default_server_pool
 terraform -chdir=infra output server_pools
 ```
 
-Important: `./scripts/up.sh` and `./scripts/down.sh` remain the current full South America dev workflow. They still handle Terraform plus Agones, Fleet, secrets, PostgreSQL, backend, and frontend. The new region scripts are regional infrastructure controls and intentionally do not deploy duplicate central control-plane stacks into Europe or North America.
+Important: `./scripts/up.sh` and `./scripts/down.sh` remain the current full South America dev workflow. They still handle Terraform plus Agones, Fleet, secrets, PostgreSQL, backend, and frontend. The new region scripts are regional game-server-plane controls and intentionally do not deploy duplicate central control-plane stacks into Europe or North America.
 
 ## Current South America Mapping
 
@@ -108,7 +118,7 @@ Simulation mode lets the control-plane UX show future regional server pools with
 
 If an allocation request targets a simulated pool, the backend rejects it with a clear `server_pool_not_provisioned` error. This keeps the UI honest while still demonstrating how the platform would present multi-region operations once those regions are backed by real infrastructure.
 
-The new `europe-default` and `north-america-default` Terraform tfvars are infrastructure definitions for future real pools. They are not automatically exposed as enabled backend pools and do not make the backend capable of allocating cross-cluster servers by themselves.
+The new `europe-default` and `north-america-default` Terraform tfvars are infrastructure definitions for future real pools. `up-region.sh` can now provision their cluster and deploy Agones/Fleet capacity, but those pools are not automatically exposed as enabled backend pools and do not make the backend capable of allocating cross-cluster servers by themselves.
 
 ## Adding Another Region Later
 
