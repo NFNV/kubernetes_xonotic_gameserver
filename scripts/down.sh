@@ -29,57 +29,54 @@ postgres_pvc_manifest="${repo_root}/platform/postgres/manifests/pvc.yaml"
 postgres_deployment_manifest="${repo_root}/platform/postgres/manifests/deployment.yaml"
 postgres_service_manifest="${repo_root}/platform/postgres/manifests/service.yaml"
 infra_dir="${repo_root}/infra"
+primary_region="south-america"
+primary_tfvars_file="regions/${primary_region}.tfvars"
 rcon_secret_name="xonotic-rcon"
 postgres_secret_name="xonotic-postgres"
 admin_auth_secret_name="xonotic-admin-auth"
-server_pool_id="${XONOTIC_SERVER_POOL_ID:-south-america-default}"
-server_pool_display_name="${XONOTIC_SERVER_POOL_DISPLAY_NAME:-South America - Default}"
-server_region="${XONOTIC_SERVER_REGION:-south-america}"
+multicluster_kubeconfig_secret_name="xonotic-multicluster-kubeconfig"
 gameserver_namespace="${XONOTIC_AGONES_NAMESPACE:-xonotic-agones}"
-fleet_name="${XONOTIC_FLEET_NAME:-xonotic-fleet}"
-udp_port_range="${XONOTIC_UDP_PORT_RANGE:-7000-7010}"
 
-kubectl delete -f "${manifest_path}" --ignore-not-found=true || true
-kubectl delete -f "${agones_gameserver_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${allocator_frontend_service_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${allocator_frontend_deployment_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${allocator_backend_service_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${allocator_backend_deployment_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${postgres_deployment_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${postgres_service_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${postgres_pvc_manifest}" --ignore-not-found=true || true
-kubectl delete secret "${admin_auth_secret_name}" -n xonotic-allocator-backend --ignore-not-found=true || true
-kubectl delete secret "${postgres_secret_name}" -n xonotic-allocator-backend --ignore-not-found=true || true
-kubectl delete secret "${rcon_secret_name}" -n xonotic-allocator-backend --ignore-not-found=true || true
-kubectl delete -f "${allocator_backend_rbac_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${allocator_backend_namespace_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${agones_fleet_autoscaler_manifest}" --ignore-not-found=true || true
-kubectl delete -f "${agones_fleet_manifest}" --ignore-not-found=true || true
-kubectl delete secret "${rcon_secret_name}" -n "${gameserver_namespace}" --ignore-not-found=true || true
-
-cd "${infra_dir}"
-
-if [[ ! -f terraform.tfvars ]]; then
-  cat > terraform.tfvars <<EOF
-project_id = "${GCP_PROJECT_ID}"
-
-default_server_pool_id = "${server_pool_id}"
-
-server_pools = {
-  "${server_pool_id}" = {
-    pool_id          = "${server_pool_id}"
-    display_name     = "${server_pool_display_name}"
-    region           = "${server_region}"
-    gcp_region       = "${GCP_REGION}"
-    gcp_zone         = "${GCP_ZONE}"
-    cluster_name     = "${GKE_CLUSTER_NAME}"
-    agones_namespace = "${gameserver_namespace}"
-    fleet_name       = "${fleet_name}"
-    udp_port_range   = "${udp_port_range}"
-  }
-}
-EOF
+terraform -chdir="${infra_dir}" init
+if ! terraform -chdir="${infra_dir}" workspace select "${primary_region}"; then
+  echo "Terraform workspace '${primary_region}' does not exist. Nothing to destroy."
+  exit 0
 fi
 
-terraform init
-terraform destroy -auto-approve
+credentials_command="$(terraform -chdir="${infra_dir}" output -raw get_credentials_command 2>/dev/null || true)"
+primary_context_ready=0
+if [[ -n "${credentials_command}" ]]; then
+  if bash -lc "${credentials_command}"; then
+    primary_context_ready=1
+  else
+    echo "Warning: could not refresh South America kubeconfig; skipping Kubernetes cleanup and continuing with Terraform destroy." >&2
+  fi
+fi
+
+if [[ "${primary_context_ready}" == "1" ]]; then
+  kubectl delete -f "${manifest_path}" --ignore-not-found=true || true
+  kubectl delete -f "${agones_gameserver_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${allocator_frontend_service_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${allocator_frontend_deployment_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${allocator_backend_service_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${allocator_backend_deployment_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${postgres_deployment_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${postgres_service_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${postgres_pvc_manifest}" --ignore-not-found=true || true
+  kubectl delete secret "${admin_auth_secret_name}" -n xonotic-allocator-backend --ignore-not-found=true || true
+  kubectl delete secret "${multicluster_kubeconfig_secret_name}" -n xonotic-allocator-backend --ignore-not-found=true || true
+  kubectl delete secret "${postgres_secret_name}" -n xonotic-allocator-backend --ignore-not-found=true || true
+  kubectl delete secret "${rcon_secret_name}" -n xonotic-allocator-backend --ignore-not-found=true || true
+  kubectl delete -f "${allocator_backend_rbac_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${allocator_backend_namespace_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${agones_fleet_autoscaler_manifest}" --ignore-not-found=true || true
+  kubectl delete -f "${agones_fleet_manifest}" --ignore-not-found=true || true
+  kubectl delete secret "${rcon_secret_name}" -n "${gameserver_namespace}" --ignore-not-found=true || true
+fi
+
+terraform -chdir="${infra_dir}" destroy -auto-approve \
+  -var-file="${primary_tfvars_file}" \
+  -var="project_id=${GCP_PROJECT_ID}" \
+  -var="region=${GCP_REGION}" \
+  -var="zone=${GCP_ZONE}" \
+  -var="cluster_name=${GKE_CLUSTER_NAME}"

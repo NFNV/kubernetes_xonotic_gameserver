@@ -37,7 +37,6 @@ Each region file configures exactly one provisioned server pool for that region.
 The region scripts are explicit and opt-in:
 
 ```bash
-./scripts/up-region.sh south-america
 ./scripts/up-region.sh europe
 ./scripts/up-region.sh north-america
 
@@ -68,6 +67,14 @@ terraform -chdir=infra output server_pools
 ```
 
 Important: `./scripts/up.sh` and `./scripts/down.sh` remain the current full South America dev workflow. They still handle Terraform plus Agones, Fleet, secrets, PostgreSQL, backend, and frontend. The new region scripts are regional game-server-plane controls and intentionally do not deploy duplicate central control-plane stacks into Europe or North America.
+
+In short:
+
+- `./scripts/up.sh` = primary control plane + South America game-server plane
+- `./scripts/up-region.sh europe` = Europe game-server plane only
+- `./scripts/up-region.sh north-america` = North America game-server plane only
+
+Prometheus/Grafana are optional and remain deployed separately with `kubectl apply -k platform/observability`.
 
 ## Central Multi-Cluster Control Plane
 

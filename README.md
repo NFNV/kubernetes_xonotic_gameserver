@@ -140,6 +140,23 @@ source scripts/env.sh
 ./scripts/up.sh
 ```
 
+`./scripts/up.sh` is the single primary-environment entrypoint. It selects the `south-america` Terraform workspace and brings up the South America GKE/Agones game-server plane plus PostgreSQL, allocator backend, and allocator frontend. Europe and North America remain game-server-only regional deployments:
+
+```bash
+./scripts/up-region.sh europe
+./scripts/up-region.sh north-america
+```
+
+Secondary regional contexts are added to the backend kubeconfig when reachable, but an unavailable EU or NA cluster does not block the primary South America control plane from starting.
+
+Observability remains intentionally separate for the small single-node cluster:
+
+```bash
+kubectl apply -k platform/observability
+kubectl rollout status deployment/xonotic-prometheus -n xonotic-observability
+kubectl rollout status deployment/xonotic-grafana -n xonotic-observability
+```
+
 Port-forward common services:
 
 ```bash

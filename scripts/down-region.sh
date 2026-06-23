@@ -4,8 +4,8 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/up-region.sh <south-america|europe|north-america>
-  ./scripts/down-region.sh <south-america|europe|north-america>
+  ./scripts/up-region.sh <europe|north-america>
+  ./scripts/down-region.sh <europe|north-america>
 EOF
 }
 
@@ -16,7 +16,7 @@ fi
 
 region="$1"
 case "${region}" in
-  south-america | europe | north-america) ;;
+  europe | north-america) ;;
   *)
     usage
     exit 1

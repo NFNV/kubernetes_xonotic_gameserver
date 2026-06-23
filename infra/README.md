@@ -72,9 +72,10 @@ terraform apply tfplan
 For region-oriented use from the repository root, prefer the scripts:
 
 ```bash
-./scripts/up-region.sh south-america
 ./scripts/up-region.sh europe
+./scripts/up-region.sh north-america
 ./scripts/down-region.sh europe
+./scripts/down-region.sh north-america
 ```
 
 Those scripts select or create the matching Terraform workspace before planning/applying. This keeps regional state isolated so applying `europe` does not replace or destroy `south-america`.
@@ -124,7 +125,7 @@ Optional server-pool environment variables default to the current South America 
 
 You can either export them in your shell or copy `scripts/env.sh.example` to `scripts/env.sh` and edit the values there. The scripts source `scripts/env.sh` automatically if it exists.
 
-Bring the infra and the current Agones phase up:
+Bring up the primary control-plane environment and South America game-server plane:
 
 ```bash
 ./scripts/up.sh
@@ -132,15 +133,24 @@ Bring the infra and the current Agones phase up:
 
 `./scripts/up.sh` now does all of the following:
 
-- applies the Terraform for the cluster and firewall rule
+- selects the `south-america` Terraform workspace and applies the South America cluster/firewall configuration
 - fetches kubeconfig credentials
 - installs or updates Agones with the repo's current Fleet-phase settings, including the narrow dynamic port range
 - applies the Xonotic Agones namespace, `Fleet`, and `FleetAutoscaler`
 - recreates the RCON Kubernetes Secrets from `XONOTIC_RCON_PASSWORD`
+- creates the PostgreSQL, admin-auth, and multi-cluster kubeconfig Secrets
+- deploys PostgreSQL and waits for its Pod to become Ready
 - recreates the Fleet `GameServer` instances after the Agones upgrade so their live host ports match the repo's constrained dynamic port range
 - applies the allocator backend namespace, RBAC, Deployment, and Service
 - applies the allocator frontend Deployment and Service
-- waits for the Agones controller deployments, Fleet readiness, allocator backend rollout, and allocator frontend rollout, then prints Fleet, `GameServer`, and allocator platform state
+- waits for PostgreSQL, backend, and frontend Pods to become Ready
+- prints backend/frontend port-forward commands when complete
+
+Prometheus and Grafana remain a separate, optional deployment:
+
+```bash
+kubectl apply -k platform/observability
+```
 
 Terraform also exposes server-pool metadata for the active deployment:
 
@@ -155,7 +165,13 @@ Tear the current test path and infra down:
 ./scripts/down.sh
 ```
 
-`./scripts/up.sh` and `./scripts/down.sh` remain the full current South America dev workflow: Terraform, Agones/Fleet, secrets, Postgres, backend, and frontend. The new `up-region.sh`/`down-region.sh` scripts are opt-in regional game-server-plane controls and do not deploy duplicate central control-plane workloads.
+The script distinction is deliberate:
+
+- `./scripts/up.sh`: primary South America game-server plane plus PostgreSQL, backend, and frontend
+- `./scripts/up-region.sh europe`: Europe game-server plane only
+- `./scripts/up-region.sh north-america`: North America game-server plane only
+- `./scripts/down.sh`: destroys the primary South America workspace
+- `./scripts/down-region.sh <region>`: destroys only the selected regional workspace
 
 If you prefer a tfvars file:
 

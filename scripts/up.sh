@@ -50,6 +50,8 @@ if (( ${#ADMIN_SESSION_SECRET} < 32 )); then
 fi
 
 infra_dir="${repo_root}/infra"
+primary_region="south-america"
+primary_tfvars_file="regions/${primary_region}.tfvars"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
 regional_allocator_rbac_manifest="${repo_root}/platform/agones/manifests/regional-allocator-rbac.yaml"
 fleet_manifest="${repo_root}/platform/agones/manifests/xonotic-fleet.yaml"
@@ -64,9 +66,6 @@ postgres_pvc_manifest="${repo_root}/platform/postgres/manifests/pvc.yaml"
 postgres_deployment_manifest="${repo_root}/platform/postgres/manifests/deployment.yaml"
 postgres_service_manifest="${repo_root}/platform/postgres/manifests/service.yaml"
 agones_system_namespace="agones-system"
-server_pool_id="${XONOTIC_SERVER_POOL_ID:-south-america-default}"
-server_pool_display_name="${XONOTIC_SERVER_POOL_DISPLAY_NAME:-South America - Default}"
-server_region="${XONOTIC_SERVER_REGION:-south-america}"
 gameserver_namespace="${XONOTIC_AGONES_NAMESPACE:-xonotic-agones}"
 fleet_name="${XONOTIC_FLEET_NAME:-xonotic-fleet}"
 udp_port_range="${XONOTIC_UDP_PORT_RANGE:-7000-7010}"
@@ -95,34 +94,30 @@ admin_username_b64="$(printf '%s' "${admin_username}" | base64 | tr -d '\n')"
 admin_password_hash_b64="$(printf '%s' "${ADMIN_PASSWORD_HASH}" | base64 | tr -d '\n')"
 admin_session_secret_b64="$(printf '%s' "${ADMIN_SESSION_SECRET}" | base64 | tr -d '\n')"
 
-cd "${infra_dir}"
+cat <<EOF
+Bringing up the primary Xonotic environment:
+  South America GKE/Agones game-server plane
+  PostgreSQL
+  allocator backend
+  allocator frontend
 
-if [[ ! -f terraform.tfvars ]]; then
-  cat > terraform.tfvars <<EOF
-project_id = "${GCP_PROJECT_ID}"
-
-default_server_pool_id = "${server_pool_id}"
-
-server_pools = {
-  "${server_pool_id}" = {
-    pool_id          = "${server_pool_id}"
-    display_name     = "${server_pool_display_name}"
-    region           = "${server_region}"
-    gcp_region       = "${GCP_REGION}"
-    gcp_zone         = "${GCP_ZONE}"
-    cluster_name     = "${GKE_CLUSTER_NAME}"
-    agones_namespace = "${gameserver_namespace}"
-    fleet_name       = "${fleet_name}"
-    udp_port_range   = "${udp_port_range}"
-  }
-}
+Terraform workspace: ${primary_region}
+Terraform variables: ${primary_tfvars_file}
+Observability remains an optional separate deployment.
 EOF
+
+terraform -chdir="${infra_dir}" init
+if ! terraform -chdir="${infra_dir}" workspace select "${primary_region}"; then
+  terraform -chdir="${infra_dir}" workspace new "${primary_region}"
 fi
+terraform -chdir="${infra_dir}" apply -auto-approve \
+  -var-file="${primary_tfvars_file}" \
+  -var="project_id=${GCP_PROJECT_ID}" \
+  -var="region=${GCP_REGION}" \
+  -var="zone=${GCP_ZONE}" \
+  -var="cluster_name=${GKE_CLUSTER_NAME}"
 
-terraform init
-terraform apply -auto-approve
-
-credentials_command="$(terraform output -raw get_credentials_command)"
+credentials_command="$(terraform -chdir="${infra_dir}" output -raw get_credentials_command)"
 bash -lc "${credentials_command}"
 
 kubectl apply -f "${agones_namespace_manifest}"
@@ -169,7 +164,7 @@ if [[ -z "${ready_replicas}" ]] || (( ready_replicas < required_ready_replicas )
   exit 1
 fi
 
-bash "${script_dir}/build-multicluster-kubeconfig.sh"
+bash "${script_dir}/build-multicluster-kubeconfig.sh" --allow-missing-secondary
 multicluster_kubeconfig_b64="$(base64 < "${multicluster_kubeconfig_path}" | tr -d '\n')"
 south_america_kube_context_b64="$(printf '%s' "${south_america_kube_context}" | base64 | tr -d '\n')"
 europe_kube_context_b64="$(printf '%s' "${europe_kube_context}" | base64 | tr -d '\n')"
@@ -217,6 +212,10 @@ kubectl apply -f "${postgres_pvc_manifest}"
 kubectl apply -f "${postgres_service_manifest}"
 kubectl apply -f "${postgres_deployment_manifest}"
 kubectl rollout status "deployment/${postgres_deployment_name}" -n "${allocator_backend_namespace}"
+kubectl wait --for=condition=Ready pod \
+  -l app="${postgres_deployment_name}" \
+  -n "${allocator_backend_namespace}" \
+  --timeout=300s
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret
@@ -231,9 +230,17 @@ kubectl apply -f "${allocator_backend_rbac_manifest}"
 kubectl apply -f "${allocator_backend_deployment_manifest}"
 kubectl apply -f "${allocator_backend_service_manifest}"
 kubectl rollout status "deployment/${allocator_backend_deployment_name}" -n "${allocator_backend_namespace}"
+kubectl wait --for=condition=Ready pod \
+  -l app="${allocator_backend_deployment_name}" \
+  -n "${allocator_backend_namespace}" \
+  --timeout=300s
 kubectl apply -f "${allocator_frontend_deployment_manifest}"
 kubectl apply -f "${allocator_frontend_service_manifest}"
 kubectl rollout status "deployment/${allocator_frontend_deployment_name}" -n "${allocator_backend_namespace}"
+kubectl wait --for=condition=Ready pod \
+  -l app="${allocator_frontend_deployment_name}" \
+  -n "${allocator_backend_namespace}" \
+  --timeout=300s
 
 kubectl get pods -n "${agones_system_namespace}"
 kubectl get fleetautoscaler -n "${gameserver_namespace}"
@@ -243,3 +250,21 @@ kubectl get deployment "${postgres_deployment_name}" -n "${allocator_backend_nam
 kubectl get pvc -n "${allocator_backend_namespace}"
 kubectl get pods -n "${allocator_backend_namespace}"
 kubectl get service -n "${allocator_backend_namespace}"
+
+cat <<EOF
+
+Primary South America environment is ready.
+
+Frontend:
+  kubectl port-forward -n ${allocator_backend_namespace} service/xonotic-allocator-frontend 18080:8080
+  http://127.0.0.1:18080
+
+Backend:
+  kubectl port-forward -n ${allocator_backend_namespace} service/xonotic-allocator-backend 18082:8080
+  http://127.0.0.1:18082
+
+Optional observability deployment:
+  kubectl apply -k platform/observability
+  kubectl rollout status deployment/xonotic-prometheus -n xonotic-observability
+  kubectl rollout status deployment/xonotic-grafana -n xonotic-observability
+EOF

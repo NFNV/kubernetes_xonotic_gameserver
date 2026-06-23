@@ -4,8 +4,8 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/up-region.sh <south-america|europe|north-america>
-  ./scripts/down-region.sh <south-america|europe|north-america>
+  ./scripts/up-region.sh <europe|north-america>
+  ./scripts/down-region.sh <europe|north-america>
 EOF
 }
 
@@ -16,7 +16,7 @@ fi
 
 region="$1"
 case "${region}" in
-  south-america | europe | north-america) ;;
+  europe | north-america) ;;
   *)
     usage
     exit 1
@@ -75,13 +75,11 @@ It does not deploy a duplicate allocator backend, frontend, PostgreSQL, or obser
 Use ./scripts/up.sh for the current full South America dev control-plane workflow.
 EOF
 
-if [[ "${region}" != "south-america" ]]; then
-  cat <<EOF
+cat <<EOF
 
 Cost warning: ${region} is an additional opt-in region. Applying this plan can create another
 GKE cluster and node pool in your GCP project.
 EOF
-fi
 
 terraform -chdir="${infra_dir}" init
 previous_workspace="$(terraform -chdir="${infra_dir}" workspace show 2>/dev/null || printf 'default')"
