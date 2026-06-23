@@ -98,7 +98,7 @@ terraform -chdir=infra output default_server_pool
 terraform -chdir=infra output server_pools
 ```
 
-The scripts restore the previously active workspace when they exit, so the existing local workflow is less likely to be left pointing at the wrong region.
+The scripts restore the previously active Terraform workspace when they exit. `up-region.sh` also restores the Kubernetes context that was active before it fetched regional credentials, so bringing up Europe or North America does not leave normal frontend/backend commands pointed at a game-server-only cluster.
 
 Cost warning: every additional region can create another GKE cluster and node pool. Always read the plan before confirming an apply or destroy.
 

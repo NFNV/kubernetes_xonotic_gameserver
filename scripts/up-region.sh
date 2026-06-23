@@ -58,9 +58,12 @@ fi
 
 rcon_password_b64="$(printf '%s' "${XONOTIC_RCON_PASSWORD}" | base64 | tr -d '\n')"
 
-restore_workspace() {
+restore_operator_context() {
   if [[ -n "${previous_workspace:-}" ]]; then
     terraform -chdir="${infra_dir}" workspace select "${previous_workspace}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${previous_kube_context:-}" ]]; then
+    kubectl config use-context "${previous_kube_context}" >/dev/null 2>&1 || true
   fi
 }
 
@@ -83,7 +86,8 @@ EOF
 
 terraform -chdir="${infra_dir}" init
 previous_workspace="$(terraform -chdir="${infra_dir}" workspace show 2>/dev/null || printf 'default')"
-trap restore_workspace EXIT
+previous_kube_context="$(kubectl config current-context 2>/dev/null || true)"
+trap restore_operator_context EXIT
 
 if ! terraform -chdir="${infra_dir}" workspace select "${region}"; then
   terraform -chdir="${infra_dir}" workspace new "${region}"
