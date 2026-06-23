@@ -51,6 +51,7 @@ fi
 
 infra_dir="${repo_root}/infra"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
+regional_allocator_rbac_manifest="${repo_root}/platform/agones/manifests/regional-allocator-rbac.yaml"
 fleet_manifest="${repo_root}/platform/agones/manifests/xonotic-fleet.yaml"
 fleet_autoscaler_manifest="${repo_root}/platform/agones/manifests/xonotic-fleetautoscaler.yaml"
 allocator_backend_namespace_manifest="${repo_root}/platform/allocator-backend/manifests/namespace.yaml"
@@ -80,6 +81,11 @@ postgres_deployment_name="xonotic-postgres"
 rcon_secret_name="xonotic-rcon"
 postgres_secret_name="xonotic-postgres"
 admin_auth_secret_name="xonotic-admin-auth"
+multicluster_kubeconfig_secret_name="xonotic-multicluster-kubeconfig"
+multicluster_kubeconfig_path="${XONOTIC_MULTICLUSTER_KUBECONFIG:-${script_dir}/.generated/xonotic-multicluster.kubeconfig}"
+south_america_kube_context="${XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT:-gke_${GCP_PROJECT_ID}_southamerica-west1-a_xonotic-mvp}"
+europe_kube_context="${XONOTIC_EUROPE_KUBE_CONTEXT:-gke_${GCP_PROJECT_ID}_europe-west1-b_xonotic-eu}"
+north_america_kube_context="${XONOTIC_NORTH_AMERICA_KUBE_CONTEXT:-gke_${GCP_PROJECT_ID}_us-central1-a_xonotic-na}"
 admin_username="${ADMIN_USERNAME:-admin}"
 rcon_password_b64="$(printf '%s' "${XONOTIC_RCON_PASSWORD}" | base64 | tr -d '\n')"
 postgres_db_b64="$(printf '%s' "${XONOTIC_POSTGRES_DB}" | base64 | tr -d '\n')"
@@ -120,6 +126,7 @@ credentials_command="$(terraform output -raw get_credentials_command)"
 bash -lc "${credentials_command}"
 
 kubectl apply -f "${agones_namespace_manifest}"
+kubectl apply -f "${regional_allocator_rbac_manifest}"
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret
@@ -162,7 +169,26 @@ if [[ -z "${ready_replicas}" ]] || (( ready_replicas < required_ready_replicas )
   exit 1
 fi
 
+bash "${script_dir}/build-multicluster-kubeconfig.sh"
+multicluster_kubeconfig_b64="$(base64 < "${multicluster_kubeconfig_path}" | tr -d '\n')"
+south_america_kube_context_b64="$(printf '%s' "${south_america_kube_context}" | base64 | tr -d '\n')"
+europe_kube_context_b64="$(printf '%s' "${europe_kube_context}" | base64 | tr -d '\n')"
+north_america_kube_context_b64="$(printf '%s' "${north_america_kube_context}" | base64 | tr -d '\n')"
+
 kubectl apply -f "${allocator_backend_namespace_manifest}"
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${multicluster_kubeconfig_secret_name}
+  namespace: ${allocator_backend_namespace}
+type: Opaque
+data:
+  config: ${multicluster_kubeconfig_b64}
+  XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT: ${south_america_kube_context_b64}
+  XONOTIC_EUROPE_KUBE_CONTEXT: ${europe_kube_context_b64}
+  XONOTIC_NORTH_AMERICA_KUBE_CONTEXT: ${north_america_kube_context_b64}
+EOF
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret

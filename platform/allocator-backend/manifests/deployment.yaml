@@ -27,6 +27,23 @@ spec:
               value: xonotic-fleet
             - name: GAME_LABEL
               value: xonotic
+            - name: XONOTIC_MULTICLUSTER_KUBECONFIG
+              value: /var/run/xonotic/kubeconfig/config
+            - name: XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT
+              valueFrom:
+                secretKeyRef:
+                  name: xonotic-multicluster-kubeconfig
+                  key: XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT
+            - name: XONOTIC_EUROPE_KUBE_CONTEXT
+              valueFrom:
+                secretKeyRef:
+                  name: xonotic-multicluster-kubeconfig
+                  key: XONOTIC_EUROPE_KUBE_CONTEXT
+            - name: XONOTIC_NORTH_AMERICA_KUBE_CONTEXT
+              valueFrom:
+                secretKeyRef:
+                  name: xonotic-multicluster-kubeconfig
+                  key: XONOTIC_NORTH_AMERICA_KUBE_CONTEXT
             - name: XONOTIC_RCON_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -70,6 +87,10 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          volumeMounts:
+            - name: multicluster-kubeconfig
+              mountPath: /var/run/xonotic/kubeconfig
+              readOnly: true
           resources:
             requests:
               memory: 192Mi
@@ -91,3 +112,8 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 12
+      volumes:
+        - name: multicluster-kubeconfig
+          secret:
+            secretName: xonotic-multicluster-kubeconfig
+            defaultMode: 0400

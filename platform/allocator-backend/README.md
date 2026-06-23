@@ -8,15 +8,15 @@ Match Rooms now store the requested map and game mode before allocation. Because
 
 This phase also adds PostgreSQL-backed tournament CRUD as a foundation for the future tournament admin tool. Tournament records, teams, rounds, and tournament matches are persisted; Match Rooms and live server telemetry remain in-memory/runtime-owned for now.
 
-## Why This Backend Uses The Kubernetes API In-Cluster
+## Why This Backend Uses Regional Kubernetes API Clients
 
-This backend runs as a Kubernetes Pod and only needs to create/read `GameServerAllocation` resources and delete allocated `GameServer` resources in the local cluster.
+This backend runs as a Kubernetes Pod in South America and only needs to create/read `GameServerAllocation` resources, inspect Fleet/GameServer capacity, and delete allocated `GameServer` resources in each configured regional cluster.
 
 For this phase, using the Kubernetes API directly is the simplest and most practical option:
 
 - no external Agones Allocator Service required
 - no extra network exposure for allocation traffic
-- Kubernetes ServiceAccount RBAC for cluster actions plus basic password auth for mutating admin API calls
+- namespaced regional ServiceAccount RBAC plus basic password auth for mutating admin API calls
 - keeps the implementation tiny and easy to review
 
 ## API
@@ -146,10 +146,29 @@ For the current repo phase, `./scripts/up.sh` already deploys these manifests af
 
 Manual deployment remains:
 
+Refresh all three GKE contexts and build the backend-only kubeconfig first:
+
+```bash
+gcloud container clusters get-credentials xonotic-mvp \
+  --zone southamerica-west1-a --project "${GCP_PROJECT_ID}"
+gcloud container clusters get-credentials xonotic-eu \
+  --zone europe-west1-b --project "${GCP_PROJECT_ID}"
+gcloud container clusters get-credentials xonotic-na \
+  --zone us-central1-a --project "${GCP_PROJECT_ID}"
+./scripts/build-multicluster-kubeconfig.sh
+```
+
 Apply the namespace, PostgreSQL Secret, PostgreSQL manifests, and RBAC:
 
 ```bash
 kubectl apply -f platform/allocator-backend/manifests/namespace.yaml
+kubectl create secret generic xonotic-multicluster-kubeconfig \
+  -n xonotic-allocator-backend \
+  --from-file=config="${XONOTIC_MULTICLUSTER_KUBECONFIG:-scripts/.generated/xonotic-multicluster.kubeconfig}" \
+  --from-literal=XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT="${XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT}" \
+  --from-literal=XONOTIC_EUROPE_KUBE_CONTEXT="${XONOTIC_EUROPE_KUBE_CONTEXT}" \
+  --from-literal=XONOTIC_NORTH_AMERICA_KUBE_CONTEXT="${XONOTIC_NORTH_AMERICA_KUBE_CONTEXT}" \
+  --dry-run=client -o yaml | kubectl apply -f -
 eval "$(scripts/generate-admin-auth.sh --username admin --password admin)"
 kubectl apply -f - <<EOF
 apiVersion: v1

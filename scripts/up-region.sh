@@ -36,6 +36,7 @@ infra_dir="${repo_root}/infra"
 tfvars_file="${infra_dir}/regions/${region}.tfvars"
 plan_file="${TMPDIR:-/tmp}/xonotic-${region}.tfplan"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
+regional_allocator_rbac_manifest="${repo_root}/platform/agones/manifests/regional-allocator-rbac.yaml"
 fleet_manifest="${repo_root}/platform/agones/manifests/xonotic-fleet.yaml"
 fleet_autoscaler_manifest="${repo_root}/platform/agones/manifests/xonotic-fleetautoscaler.yaml"
 agones_system_namespace="agones-system"
@@ -116,6 +117,7 @@ echo
 echo "Deploying regional game-server plane into ${region}..."
 
 kubectl apply -f "${agones_namespace_manifest}"
+kubectl apply -f "${regional_allocator_rbac_manifest}"
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret

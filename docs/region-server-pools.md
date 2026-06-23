@@ -1,44 +1,26 @@
 # Region Server Pools
 
-The platform models game server capacity as region-aware server pools. This is now represented in both the application configuration and the Terraform/operator workflow, but the current dev deployment still has only one provisioned, allocatable GKE/Agones region by default.
+The platform models game server capacity as region-aware server pools. South America hosts the central control plane, while South America, Europe, and North America each provide an independent GKE/Agones game-server plane.
 
 ## Region
 
 A region is a player-facing placement concept such as `south-america`, `north-america`, or `europe`. It describes where tournament match capacity should live from an operator/player point of view.
 
-The current provisioned region is:
-
-- `south-america`
-
-The current planned regions are:
-
-- `europe`
-- `north-america`
+The currently provisioned regions are `south-america`, `europe`, and `north-america`.
 
 ## Server Pool
 
 A server pool is the concrete backend for a region. It maps an operator-facing pool ID to the Kubernetes and Agones resources that can allocate Xonotic match servers.
 
-The current provisioned pool is:
+The current pools are:
 
-| Field | Value |
-| --- | --- |
-| Pool ID | `south-america-default` |
-| Display name | `South America - Default` |
-| Region | `south-america` |
-| GCP region | `southamerica-west1` |
-| GCP zone | `southamerica-west1-a` |
-| GKE cluster | `xonotic-mvp` |
-| Agones namespace | `xonotic-agones` |
-| Agones Fleet | `xonotic-fleet` |
-| UDP port range | `7000-7010` |
+| Pool ID | Display name | GCP region/zone | GKE cluster | Agones target |
+| --- | --- | --- | --- | --- |
+| `south-america-default` | South America - Default | `southamerica-west1` / `southamerica-west1-a` | `xonotic-mvp` | `xonotic-agones/xonotic-fleet` |
+| `europe-default` | Europe - Default | `europe-west1` / `europe-west1-b` | `xonotic-eu` | `xonotic-agones/xonotic-fleet` |
+| `north-america-default` | North America - Default | `us-central1` / `us-central1-a` | `xonotic-na` | `xonotic-agones/xonotic-fleet` |
 
-The current simulated pools are:
-
-| Pool ID | Display name | Region | Provider | Provisioned | Enabled | Status |
-| --- | --- | --- | --- | --- | --- | --- |
-| `europe-simulated` | `Europe - Simulated` | `europe` | `gcp` | `false` | `false` | `not-provisioned` |
-| `north-america-simulated` | `North America - Simulated` | `north-america` | `gcp` | `false` | `false` | `not-provisioned` |
+All three use dynamic UDP ports `7000-7010`. Only the South America cluster runs the allocator backend, frontend, PostgreSQL, and observability workloads.
 
 ## Regional Terraform Definitions
 
@@ -75,6 +57,8 @@ After Terraform creates the cluster, `up-region.sh` fetches kubeconfig credentia
 
 It intentionally does not deploy the allocator backend, frontend, PostgreSQL, or observability stack into secondary regions.
 
+It also applies the least-privilege `xonotic-regional-allocator` ServiceAccount and namespaced RBAC used by the central backend. That identity can create/read `GameServerAllocation` resources, read Fleet/GameServer state, and delete allocated GameServers in `xonotic-agones`; it has no cluster-wide permissions.
+
 Useful inspection commands:
 
 ```bash
@@ -85,19 +69,34 @@ terraform -chdir=infra output server_pools
 
 Important: `./scripts/up.sh` and `./scripts/down.sh` remain the current full South America dev workflow. They still handle Terraform plus Agones, Fleet, secrets, PostgreSQL, backend, and frontend. The new region scripts are regional game-server-plane controls and intentionally do not deploy duplicate central control-plane stacks into Europe or North America.
 
-## Current South America Mapping
+## Central Multi-Cluster Control Plane
 
-Terraform now exposes the current cluster as the default server pool through `server_pools` and `default_server_pool_id`. The resolved pool metadata is available through these outputs:
+The allocator backend remains in South America. It selects a Kubernetes client from the match's `requested_server_pool_id`:
+
+- `south-america-default` uses `XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT`
+- `europe-default` uses `XONOTIC_EUROPE_KUBE_CONTEXT`
+- `north-america-default` uses `XONOTIC_NORTH_AMERICA_KUBE_CONTEXT`
+
+`scripts/build-multicluster-kubeconfig.sh` reads the operator's three GKE contexts, ensures regional allocator RBAC exists, and writes a gitignored kubeconfig containing only the regional API endpoints, CA certificates, and namespaced allocator service-account tokens. `scripts/up.sh` stores that file in the `xonotic-multicluster-kubeconfig` Kubernetes Secret and mounts it read-only into the backend Pod.
+
+Get or refresh the source contexts:
 
 ```bash
-terraform -chdir=infra output default_server_pool_id
-terraform -chdir=infra output default_server_pool
-terraform -chdir=infra output server_pools
+gcloud container clusters get-credentials xonotic-mvp \
+  --zone southamerica-west1-a --project "${GCP_PROJECT_ID}"
+gcloud container clusters get-credentials xonotic-eu \
+  --zone europe-west1-b --project "${GCP_PROJECT_ID}"
+gcloud container clusters get-credentials xonotic-na \
+  --zone us-central1-a --project "${GCP_PROJECT_ID}"
+
+./scripts/build-multicluster-kubeconfig.sh
 ```
 
-`scripts/up.sh` and `scripts/down.sh` use the same pool defaults when they generate a local `infra/terraform.tfvars` file. By default, they still target the existing South America GKE/Agones setup and do not increase Fleet capacity.
+The generated kubeconfig is a dev-cluster credential artifact and must not be committed. Rebuild it after recreating a regional cluster because that cluster receives a new API endpoint, CA, and service-account token.
 
-The Admin View also surfaces runtime capacity per configured server pool. For the South America pool, the backend reads the configured Agones Fleet and reports Desired, Current, Ready, Allocated, and Reserved replicas so operators can see when the region has no Ready servers before attempting match allocation. For simulated pools, the backend returns `not-provisioned` and does not query Kubernetes.
+During allocation, the backend creates the `GameServerAllocation` in the selected context, then configures and verifies the returned public Xonotic endpoint through RCON and `getstatus`. The assignment stores its pool, region, cluster, namespace, and Fleet metadata. Release, result-save cleanup, release-all, and tournament finalization use that assignment metadata to delete the GameServer from the same regional cluster.
+
+The capacity endpoint queries each configured Fleet with its own context. A failed or unreachable regional context produces an `unavailable` pool row without breaking capacity results for the other regions.
 
 ## Capacity States
 
@@ -109,28 +108,18 @@ The capacity endpoint reports these operator-facing states:
 | --- | --- | --- |
 | `available` | The pool is provisioned and has at least one Ready GameServer. | Ready to allocate match servers. |
 | `no-ready-capacity` | The pool is provisioned, but Ready GameServers are currently `0`. | Wait for FleetAutoscaler, release an active match server, or increase pool capacity. |
-| `not-provisioned` | The pool is planned/simulated and has no deployed regional infrastructure. | Create regional infrastructure before enabling this pool. |
+| `not-provisioned` | A configured future pool has no deployed regional infrastructure. | Create regional infrastructure before enabling this pool. |
 | `unavailable` | The backend could not query the configured Agones Fleet. | Check backend Kubernetes access and Agones Fleet health for this pool. |
-
-## Simulation Mode
-
-Simulation mode lets the control-plane UX show future regional server pools without deploying more clusters or increasing cloud cost. Europe and North America are intentionally visible as planned regions, but they are not allocatable and do not have fake capacity, fake endpoints, or fake GameServers.
-
-If an allocation request targets a simulated pool, the backend rejects it with a clear `server_pool_not_provisioned` error. This keeps the UI honest while still demonstrating how the platform would present multi-region operations once those regions are backed by real infrastructure.
-
-The new `europe-default` and `north-america-default` Terraform tfvars are infrastructure definitions for future real pools. `up-region.sh` can now provision their cluster and deploy Agones/Fleet capacity, but those pools are not automatically exposed as enabled backend pools and do not make the backend capable of allocating cross-cluster servers by themselves.
 
 ## Adding Another Region Later
 
-Activating Europe or North America later would require more than changing `enabled` to `true`. A real multi-region phase should add:
+Adding another provisioned region requires:
 
-- a second GKE cluster in the target GCP region/zone, created with the matching region script
+- a GKE cluster in the target GCP region/zone
 - Agones installed in that cluster
 - a Xonotic Fleet and FleetAutoscaler for that region
 - matching UDP firewall rules for that pool's port range
-- backend allocation routing that chooses the correct Kubernetes client/cluster for the selected pool
-- deployment automation for backend/frontend configuration across regions
+- the regional allocator ServiceAccount/RBAC and kubeconfig context
+- a backend server-pool config entry and context environment variable
 - observability labels and dashboards grouped by pool/region
 - public DNS/Ingress or another operator-approved discovery model for regional endpoints
-
-Until that work exists, only `south-america-default` should be treated as an active server pool.

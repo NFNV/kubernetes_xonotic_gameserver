@@ -54,7 +54,7 @@ Terraform + GKE + firewall rules
 
 The target concept is worldwide tournament server management: operators allocate dedicated servers, configure and verify them, expose player connection commands, record results, and release capacity when matches are complete.
 
-The platform includes a server-pool abstraction designed for multi-region expansion. The current dev deployment uses one South America pool backed by the current GKE/Agones cluster, plus simulated Europe and North America pools that are visible as planned regions but not provisioned or allocatable.
+The platform uses a central South America control plane with provisioned South America, Europe, and North America Agones server pools. The backend selects a regional Kubernetes context for allocation, capacity checks, and GameServer release while keeping PostgreSQL and operator services centralized.
 
 ## Game Server Allocation Lifecycle
 
@@ -165,7 +165,7 @@ Tear down cloud resources:
 - Basic Admin View password protection only; no OAuth, roles, or production identity provider yet
 - No public domain or Ingress yet
 - In-cluster PostgreSQL is dev-grade
-- Not multi-region
+- Multi-region capacity is operated from one central control plane and still uses dev-grade static regional service-account kubeconfig credentials
 - Minimal alerts/runbooks
 - Capacity depends on Fleet/FleetAutoscaler and Kubernetes node resources
 
@@ -178,7 +178,7 @@ Tear down cloud resources:
 - Matchmaking or match request queue
 - Improved Fleet autoscaling and scheduling
 - Alerts for allocation, RCON, verification, and capacity issues
-- Multi-node and multi-region support
+- Multi-node regional pools and stronger cross-cluster identity
 - CI/CD deployment automation from GitHub to GKE
 
 ## Repository Map

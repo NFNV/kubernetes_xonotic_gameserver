@@ -58,6 +58,8 @@ AGONES_NAMESPACE = os.environ.get("AGONES_NAMESPACE", "xonotic-agones")
 FLEET_NAME = os.environ.get("FLEET_NAME", "xonotic-fleet")
 GAME_LABEL = os.environ.get("GAME_LABEL", "xonotic")
 DEFAULT_SERVER_POOL_ID = "south-america-default"
+MULTICLUSTER_KUBECONFIG = os.environ.get("XONOTIC_MULTICLUSTER_KUBECONFIG", "").strip() or None
+KUBERNETES_API_TIMEOUT_SECONDS = float(os.environ.get("KUBERNETES_API_TIMEOUT_SECONDS", "10"))
 SERVER_POOLS = (
     {
         "id": DEFAULT_SERVER_POOL_ID,
@@ -68,38 +70,41 @@ SERVER_POOLS = (
         "cluster_name": "xonotic-mvp",
         "agones_namespace": "xonotic-agones",
         "fleet_name": "xonotic-fleet",
+        "kube_context": os.environ.get("XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT", "").strip() or None,
         "provisioned": True,
         "enabled": True,
         "default": True,
         "status": "provisioned",
     },
     {
-        "id": "europe-simulated",
-        "display_name": "Europe - Simulated",
+        "id": "europe-default",
+        "display_name": "Europe - Default",
         "region": "europe",
         "provider": "gcp",
-        "gcp_region": None,
-        "cluster_name": None,
-        "agones_namespace": None,
-        "fleet_name": None,
-        "provisioned": False,
-        "enabled": False,
+        "gcp_region": "europe-west1",
+        "cluster_name": "xonotic-eu",
+        "agones_namespace": "xonotic-agones",
+        "fleet_name": "xonotic-fleet",
+        "kube_context": os.environ.get("XONOTIC_EUROPE_KUBE_CONTEXT", "").strip() or None,
+        "provisioned": True,
+        "enabled": True,
         "default": False,
-        "status": "not-provisioned",
+        "status": "provisioned",
     },
     {
-        "id": "north-america-simulated",
-        "display_name": "North America - Simulated",
+        "id": "north-america-default",
+        "display_name": "North America - Default",
         "region": "north-america",
         "provider": "gcp",
-        "gcp_region": None,
-        "cluster_name": None,
-        "agones_namespace": None,
-        "fleet_name": None,
-        "provisioned": False,
-        "enabled": False,
+        "gcp_region": "us-central1",
+        "cluster_name": "xonotic-na",
+        "agones_namespace": "xonotic-agones",
+        "fleet_name": "xonotic-fleet",
+        "kube_context": os.environ.get("XONOTIC_NORTH_AMERICA_KUBE_CONTEXT", "").strip() or None,
+        "provisioned": True,
+        "enabled": True,
         "default": False,
-        "status": "not-provisioned",
+        "status": "provisioned",
     },
 )
 ALLOCATION_TIMEOUT_SECONDS = int(os.environ.get("ALLOCATION_TIMEOUT_SECONDS", "5"))
@@ -180,6 +185,8 @@ MATCHES: dict[str, dict[str, Any]] = {}
 MATCHES_LOCK = Lock()
 STATUS_CACHE: dict[str, dict[str, Any]] = {}
 STATUS_CACHE_LOCK = Lock()
+KUBERNETES_CLIENTS: dict[str, client.CustomObjectsApi] = {}
+KUBERNETES_CLIENTS_LOCK = Lock()
 DEFAULT_MAX_PLAYERS = int(os.environ.get("DEFAULT_MATCH_MAX_PLAYERS", "8"))
 MAX_MATCH_PLAYERS_LIMIT = int(os.environ.get("MAX_MATCH_PLAYERS_LIMIT", "32"))
 FINISHED_MATCH_STATUSES = {"released", "finished"}
@@ -742,6 +749,7 @@ def server_pool_response(pool: dict[str, Any]) -> dict[str, Any]:
         "cluster_name": pool.get("cluster_name"),
         "agones_namespace": pool.get("agones_namespace"),
         "fleet_name": pool.get("fleet_name"),
+        "kube_context": pool.get("kube_context"),
         "provisioned": bool(pool.get("provisioned", True)),
         "enabled": bool(pool.get("enabled")),
         "default": bool(pool.get("default")),
@@ -763,6 +771,40 @@ def server_pool_metadata(pool: dict[str, Any]) -> dict[str, Any]:
 
 def find_server_pool_by_id(server_pool_id: str) -> dict[str, Any] | None:
     return next((pool.copy() for pool in SERVER_POOLS if pool["id"] == server_pool_id), None)
+
+
+def server_pool_for_assignment(assignment: dict[str, Any]) -> dict[str, Any]:
+    server_pool_id = assignment.get("server_pool_id")
+    if server_pool_id:
+        pool = find_server_pool_by_id(str(server_pool_id))
+        if pool:
+            return pool
+
+    cluster_name = assignment.get("cluster_name")
+    region = assignment.get("region")
+    pool = next(
+        (
+            candidate.copy()
+            for candidate in SERVER_POOLS
+            if cluster_name
+            and candidate.get("cluster_name") == cluster_name
+            and (not region or candidate.get("region") == region)
+        ),
+        None,
+    )
+    if pool:
+        return pool
+
+    raise BackendApiError(
+        {
+            "error": "assignment_server_pool_unavailable",
+            "message": "the assignment does not map to a configured server pool",
+            "server_pool_id": server_pool_id,
+            "cluster_name": cluster_name,
+            "region": region,
+        },
+        503,
+    )
 
 
 def validate_requested_region(value: Any) -> str | None:
@@ -974,15 +1016,48 @@ def clean_score_label(label: str) -> str:
     return label.replace("!", "").replace("<", "").strip()
 
 
-def load_kubernetes_config() -> None:
-    try:
-        config.load_incluster_config()
-    except ConfigException:
-        config.load_kube_config()
+def kubernetes_api_for_pool(server_pool: dict[str, Any]) -> client.CustomObjectsApi:
+    pool_id = server_pool["id"]
+    with KUBERNETES_CLIENTS_LOCK:
+        cached_api = KUBERNETES_CLIENTS.get(pool_id)
+        if cached_api:
+            return cached_api
+
+        kube_context = server_pool.get("kube_context")
+        try:
+            if kube_context:
+                api_client = config.new_client_from_config(
+                    config_file=MULTICLUSTER_KUBECONFIG,
+                    context=kube_context,
+                )
+            elif server_pool.get("default"):
+                configuration = client.Configuration()
+                try:
+                    config.load_incluster_config(client_configuration=configuration)
+                except ConfigException:
+                    config.load_kube_config(
+                        config_file=MULTICLUSTER_KUBECONFIG,
+                        client_configuration=configuration,
+                    )
+                api_client = client.ApiClient(configuration=configuration)
+            else:
+                raise ConfigException(f"no kube context configured for server pool {pool_id}")
+        except (ConfigException, OSError, KeyError, ValueError) as exc:
+            raise BackendApiError(
+                {
+                    "error": "server_pool_cluster_unavailable",
+                    "message": f"Kubernetes client configuration is unavailable for server pool {pool_id}",
+                    "server_pool": server_pool_response(server_pool),
+                    "details": str(exc),
+                },
+                503,
+            ) from exc
+
+        custom_objects_api = client.CustomObjectsApi(api_client=api_client)
+        KUBERNETES_CLIENTS[pool_id] = custom_objects_api
+        return custom_objects_api
 
 
-load_kubernetes_config()
-custom_objects_api = client.CustomObjectsApi()
 if db_configured():
     try:
         ensure_db_ready()
@@ -1124,12 +1199,14 @@ def raise_kubernetes_api_error(
 
 def read_fleet_status(server_pool: dict[str, Any] | None = None) -> dict[str, Any]:
     pool = server_pool or default_server_pool()
+    custom_objects_api = kubernetes_api_for_pool(pool)
     fleet = custom_objects_api.get_namespaced_custom_object(
         group="agones.dev",
         version="v1",
         namespace=pool["agones_namespace"],
         plural="fleets",
         name=pool["fleet_name"],
+        _request_timeout=KUBERNETES_API_TIMEOUT_SECONDS,
     )
     status = extract_fleet_status(fleet)
     status["server_pool"] = server_pool_response(pool)
@@ -1147,6 +1224,7 @@ def server_pool_capacity_response(pool: dict[str, Any]) -> dict[str, Any]:
         "cluster_name": pool_response["cluster_name"],
         "agones_namespace": pool_response["agones_namespace"],
         "fleet_name": pool_response["fleet_name"],
+        "kube_context": pool_response["kube_context"],
         "provisioned": pool_response["provisioned"],
         "enabled": pool_response["enabled"],
         "desired_replicas": None,
@@ -1231,6 +1309,8 @@ def ensure_ready_gameserver_capacity(server_pool: dict[str, Any] | None = None) 
     pool = server_pool or default_server_pool()
     try:
         fleet = read_fleet_status(pool)
+    except BackendApiError:
+        raise
     except ApiException as exc:
         raise_kubernetes_api_error(
             operation="get",
@@ -2425,6 +2505,7 @@ def configure_allocated_server(
 
 def wait_for_allocation(name: str, server_pool: dict[str, Any]) -> dict:
     deadline = time.time() + ALLOCATION_TIMEOUT_SECONDS
+    custom_objects_api = kubernetes_api_for_pool(server_pool)
 
     while time.time() < deadline:
         allocation = custom_objects_api.get_namespaced_custom_object(
@@ -2433,6 +2514,7 @@ def wait_for_allocation(name: str, server_pool: dict[str, Any]) -> dict:
             namespace=server_pool["agones_namespace"],
             plural=ALLOCATION_PLURAL,
             name=name,
+            _request_timeout=KUBERNETES_API_TIMEOUT_SECONDS,
         )
 
         try:
@@ -2447,6 +2529,7 @@ def allocate_gameserver(server_pool: dict[str, Any] | None = None) -> dict:
     pool = server_pool or default_server_pool()
     try:
         ALLOCATION_ATTEMPTS.inc()
+        custom_objects_api = kubernetes_api_for_pool(pool)
         request_body = build_allocation_manifest(pool)
         try:
             allocation = custom_objects_api.create_namespaced_custom_object(
@@ -2455,6 +2538,7 @@ def allocate_gameserver(server_pool: dict[str, Any] | None = None) -> dict:
                 namespace=pool["agones_namespace"],
                 plural=ALLOCATION_PLURAL,
                 body=request_body,
+                _request_timeout=KUBERNETES_API_TIMEOUT_SECONDS,
             )
         except ApiException as exc:
             raise_kubernetes_api_error(
@@ -2536,8 +2620,16 @@ def allocate_gameserver(server_pool: dict[str, Any] | None = None) -> dict:
         raise
 
 
-def delete_gameserver(name: str, *, agones_namespace: str | None = None) -> dict[str, Any]:
-    namespace = agones_namespace or AGONES_NAMESPACE
+def delete_gameserver(
+    name: str,
+    *,
+    server_pool: dict[str, Any] | None = None,
+    assignment: dict[str, Any] | None = None,
+    agones_namespace: str | None = None,
+) -> dict[str, Any]:
+    pool = server_pool or (server_pool_for_assignment(assignment) if assignment else default_server_pool())
+    namespace = agones_namespace or pool["agones_namespace"]
+    custom_objects_api = kubernetes_api_for_pool(pool)
     try:
         custom_objects_api.delete_namespaced_custom_object(
             group="agones.dev",
@@ -2545,32 +2637,55 @@ def delete_gameserver(name: str, *, agones_namespace: str | None = None) -> dict
             namespace=namespace,
             plural="gameservers",
             name=name,
+            _request_timeout=KUBERNETES_API_TIMEOUT_SECONDS,
         )
     except ApiException as exc:
         if exc.status == 404:
-            return {"deleted": False, "already_missing": True}
+            return {
+                "deleted": False,
+                "already_missing": True,
+                "server_pool_id": pool["id"],
+                "region": pool["region"],
+            }
         raise_kubernetes_api_error(
             operation="delete",
             resource_type=GAMESERVER_RESOURCE_KIND,
             namespace=namespace,
             name=name,
-            request_context={"gameserver_name": name},
+            request_context={"gameserver_name": name, "server_pool": server_pool_response(pool)},
             exc=exc,
         )
     except Exception as exc:
-        raise BackendApiError({"error": "gameserver_delete_failed", "message": str(exc), "gameserver_name": name}, 500) from exc
+        raise BackendApiError(
+            {
+                "error": "gameserver_delete_failed",
+                "message": str(exc),
+                "gameserver_name": name,
+                "server_pool": server_pool_response(pool),
+            },
+            500,
+        ) from exc
 
-    return {"deleted": True, "already_missing": False}
+    return {
+        "deleted": True,
+        "already_missing": False,
+        "server_pool_id": pool["id"],
+        "region": pool["region"],
+    }
 
 
-def get_gameserver(name: str) -> dict[str, Any]:
+def get_gameserver(name: str, server_pool: dict[str, Any] | None = None) -> dict[str, Any]:
+    pool = server_pool or default_server_pool()
+    namespace = pool["agones_namespace"]
+    custom_objects_api = kubernetes_api_for_pool(pool)
     try:
         return custom_objects_api.get_namespaced_custom_object(
             group="agones.dev",
             version="v1",
-            namespace=AGONES_NAMESPACE,
+            namespace=namespace,
             plural="gameservers",
             name=name,
+            _request_timeout=KUBERNETES_API_TIMEOUT_SECONDS,
         )
     except ApiException as exc:
         if exc.status == 404:
@@ -2579,17 +2694,18 @@ def get_gameserver(name: str) -> dict[str, Any]:
                     "error": "gameserver_not_found",
                     "message": f"GameServer {name} was not found",
                     "resource_type": GAMESERVER_RESOURCE_KIND,
-                    "namespace": AGONES_NAMESPACE,
+                    "namespace": namespace,
                     "name": name,
+                    "server_pool": server_pool_response(pool),
                 },
                 404,
             ) from exc
         raise_kubernetes_api_error(
             operation="get",
             resource_type=GAMESERVER_RESOURCE_KIND,
-            namespace=AGONES_NAMESPACE,
+            namespace=namespace,
             name=name,
-            request_context={"gameserver_name": name},
+            request_context={"gameserver_name": name, "server_pool": server_pool_response(pool)},
             exc=exc,
         )
     except Exception as exc:
@@ -3159,7 +3275,11 @@ def release_active_tournament_server_assignments(tournament_id: str) -> dict[str
         assignment_json = assignment_response(assignment, include_live_status=False)
         gameserver_name = assignment["allocated_game_server_name"]
         try:
-            release_result = delete_gameserver(gameserver_name, agones_namespace=assignment.get("agones_namespace"))
+            release_result = delete_gameserver(
+                gameserver_name,
+                assignment=assignment,
+                agones_namespace=assignment.get("agones_namespace"),
+            )
             clear_status_cache(assignment.get("address"), assignment.get("port"))
             if release_result.get("already_missing"):
                 message = f"GameServer {gameserver_name} was already gone; assignment marked released."
@@ -3243,6 +3363,7 @@ def release_match_server_assignment_after_result(
     try:
         release_result = delete_gameserver(
             gameserver_name,
+            assignment=active_assignment,
             agones_namespace=active_assignment.get("agones_namespace"),
         )
         clear_status_cache(active_assignment.get("address"), active_assignment.get("port"))
@@ -4556,6 +4677,7 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                 if active_assignment and force_replace:
                     release_result = delete_gameserver(
                         active_assignment["allocated_game_server_name"],
+                        assignment=active_assignment,
                         agones_namespace=active_assignment.get("agones_namespace"),
                     )
                     cur.execute(
@@ -4602,7 +4724,11 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
                 match = fetch_tournament_match(cur, tournament_id, match_id)
                 active_assignment = fetch_active_server_assignment(cur, tournament_id, match_id)
                 if active_assignment:
-                    delete_gameserver(allocation["allocated_game_server_name"], agones_namespace=server_pool["agones_namespace"])
+                    delete_gameserver(
+                        allocation["allocated_game_server_name"],
+                        server_pool=server_pool,
+                        agones_namespace=server_pool["agones_namespace"],
+                    )
                     return jsonify(
                         {
                             "reused_existing_assignment": True,
@@ -4648,7 +4774,11 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
     except BackendApiError as exc:
         if allocation:
             try:
-                delete_gameserver(allocation["allocated_game_server_name"], agones_namespace=server_pool["agones_namespace"])
+                delete_gameserver(
+                    allocation["allocated_game_server_name"],
+                    server_pool=server_pool,
+                    agones_namespace=server_pool["agones_namespace"],
+                )
             except BackendApiError:
                 APP.logger.warning("allocated GameServer cleanup failed after tournament assignment error", exc_info=True)
         mark_tournament_match_allocation_failed(tournament_id, match_id)
@@ -4656,7 +4786,11 @@ def allocate_tournament_match_server(tournament_id: str, match_id: str):
     except psycopg.Error as exc:
         if allocation:
             try:
-                delete_gameserver(allocation["allocated_game_server_name"], agones_namespace=server_pool["agones_namespace"])
+                delete_gameserver(
+                    allocation["allocated_game_server_name"],
+                    server_pool=server_pool,
+                    agones_namespace=server_pool["agones_namespace"],
+                )
             except BackendApiError:
                 APP.logger.warning("allocated GameServer cleanup failed after tournament assignment DB error", exc_info=True)
         mark_tournament_match_allocation_failed(tournament_id, match_id)
@@ -4772,6 +4906,7 @@ def release_tournament_match_server(tournament_id: str, match_id: str):
 
         release_result = delete_gameserver(
             active_assignment["allocated_game_server_name"],
+            assignment=active_assignment,
             agones_namespace=active_assignment.get("agones_namespace"),
         )
         clear_status_cache(active_assignment.get("address"), active_assignment.get("port"))
@@ -4847,6 +4982,7 @@ def release_all_tournament_match_servers(tournament_id: str):
         try:
             release_result = delete_gameserver(
                 assignment["allocated_game_server_name"],
+                assignment=assignment,
                 agones_namespace=assignment.get("agones_namespace"),
             )
             clear_status_cache(assignment.get("address"), assignment.get("port"))
@@ -5059,7 +5195,7 @@ def server_pools():
             "items": pools,
             "default_server_pool_id": default_pool["id"],
             "default_region": default_pool["region"],
-            "note": "Server pools include the active South America pool plus planned simulated regions for future multi-region allocation.",
+            "note": "Provisioned server pools route allocation to regional Agones clusters through configured kube contexts.",
         }
     )
 
@@ -5083,6 +5219,8 @@ def fleet_status():
     pool = default_server_pool()
     try:
         fleet = read_fleet_status(pool)
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
     except ApiException as exc:
         return kubernetes_api_error_response(
             operation="get",
@@ -5103,13 +5241,17 @@ def gameservers():
     pool = default_server_pool()
     label_selector = f"agones.dev/fleet={pool['fleet_name']},game={GAME_LABEL}"
     try:
+        custom_objects_api = kubernetes_api_for_pool(pool)
         response = custom_objects_api.list_namespaced_custom_object(
             group="agones.dev",
             version="v1",
             namespace=pool["agones_namespace"],
             plural="gameservers",
             label_selector=label_selector,
+            _request_timeout=KUBERNETES_API_TIMEOUT_SECONDS,
         )
+    except BackendApiError as exc:
+        return jsonify(exc.payload), exc.status_code
     except ApiException as exc:
         return kubernetes_api_error_response(
             operation="list",

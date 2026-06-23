@@ -13,6 +13,7 @@ Thumbs.db
 !.env.example
 !.env.template
 scripts/env.sh
+scripts/.generated/
 *.local
 .local/
 .direnv/

@@ -238,7 +238,6 @@ Because there is no Kubernetes `Service` of type `LoadBalancer` in either path, 
 - cluster access IAM design
 - dedicated node service accounts
 - Agones installation
-- backend multi-cluster Kubernetes client routing
-- real cross-region allocation from the central control plane
+- production-grade cross-cluster identity instead of dev kubeconfig service-account tokens
 - observability stack and alerting
-- multi-environment or multi-cluster layout
+- multi-environment layout

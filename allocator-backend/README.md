@@ -10,9 +10,9 @@ It is intentionally small:
 - basic password-protected admin sessions for mutating/operator actions
 - simple JSON API that can be consumed by the operator frontend
 
-The service runs inside Kubernetes and uses the Kubernetes API directly to create/read `GameServerAllocation` resources and delete allocated `GameServer` resources in `xonotic-agones`.
+The service runs inside the South America Kubernetes cluster and uses pool-scoped Kubernetes clients to create/read `GameServerAllocation` resources and delete allocated `GameServer` resources in the selected regional `xonotic-agones` namespace.
 
-That is the right choice for this phase because the backend already runs in-cluster and only needs the simplest possible path to allocate from the existing Agones Fleet.
+The mounted multi-context kubeconfig contains least-privilege regional allocator identities for South America, Europe, and North America. PostgreSQL, frontend, and observability remain centralized.
 
 ## Tournament Persistence
 
