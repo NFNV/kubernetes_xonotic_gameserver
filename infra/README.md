@@ -134,6 +134,7 @@ Bring up the primary control-plane environment and South America game-server pla
 `./scripts/up.sh` now does all of the following:
 
 - selects the `south-america` Terraform workspace and applies the South America cluster/firewall configuration
+- imports an already-existing legacy South America cluster, node pool, or firewall rules into that workspace when their Terraform bindings are missing
 - fetches kubeconfig credentials
 - installs or updates Agones with the repo's current Fleet-phase settings, including the narrow dynamic port range
 - applies the Xonotic Agones namespace, `Fleet`, and `FleetAutoscaler`

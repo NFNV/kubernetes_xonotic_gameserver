@@ -110,12 +110,68 @@ terraform -chdir="${infra_dir}" init
 if ! terraform -chdir="${infra_dir}" workspace select "${primary_region}"; then
   terraform -chdir="${infra_dir}" workspace new "${primary_region}"
 fi
+
+terraform_vars=(
+  "-var-file=${primary_tfvars_file}"
+  "-var=project_id=${GCP_PROJECT_ID}"
+  "-var=region=${GCP_REGION}"
+  "-var=zone=${GCP_ZONE}"
+  "-var=cluster_name=${GKE_CLUSTER_NAME}"
+)
+
+terraform_state_has() {
+  terraform -chdir="${infra_dir}" state list 2>/dev/null | grep -Fxq "$1"
+}
+
+import_existing_primary_resources() {
+  local node_pool_name="${GKE_CLUSTER_NAME}-pool"
+  local fixed_udp_firewall="${GKE_CLUSTER_NAME}-agones-udp-26000"
+  local dynamic_udp_firewall="${GKE_CLUSTER_NAME}-agones-udp-${udp_min_port}-${udp_max_port}"
+
+  if ! terraform_state_has "google_container_cluster.primary" \
+    && gcloud container clusters describe "${GKE_CLUSTER_NAME}" \
+      --zone "${GCP_ZONE}" \
+      --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+    echo "Importing existing South America GKE cluster into Terraform workspace ${primary_region}..."
+    terraform -chdir="${infra_dir}" import "${terraform_vars[@]}" \
+      google_container_cluster.primary \
+      "projects/${GCP_PROJECT_ID}/locations/${GCP_ZONE}/clusters/${GKE_CLUSTER_NAME}"
+  fi
+
+  if ! terraform_state_has "google_container_node_pool.primary" \
+    && gcloud container node-pools describe "${node_pool_name}" \
+      --cluster "${GKE_CLUSTER_NAME}" \
+      --zone "${GCP_ZONE}" \
+      --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+    echo "Importing existing South America GKE node pool into Terraform workspace ${primary_region}..."
+    terraform -chdir="${infra_dir}" import "${terraform_vars[@]}" \
+      google_container_node_pool.primary \
+      "projects/${GCP_PROJECT_ID}/locations/${GCP_ZONE}/clusters/${GKE_CLUSTER_NAME}/nodePools/${node_pool_name}"
+  fi
+
+  if ! terraform_state_has "google_compute_firewall.xonotic_agones_gameserver_udp" \
+    && gcloud compute firewall-rules describe "${fixed_udp_firewall}" \
+      --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+    echo "Importing existing fixed UDP firewall rule into Terraform workspace ${primary_region}..."
+    terraform -chdir="${infra_dir}" import "${terraform_vars[@]}" \
+      google_compute_firewall.xonotic_agones_gameserver_udp \
+      "projects/${GCP_PROJECT_ID}/global/firewalls/${fixed_udp_firewall}"
+  fi
+
+  if ! terraform_state_has "google_compute_firewall.xonotic_agones_fleet_udp_dynamic" \
+    && gcloud compute firewall-rules describe "${dynamic_udp_firewall}" \
+      --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+    echo "Importing existing dynamic UDP firewall rule into Terraform workspace ${primary_region}..."
+    terraform -chdir="${infra_dir}" import "${terraform_vars[@]}" \
+      google_compute_firewall.xonotic_agones_fleet_udp_dynamic \
+      "projects/${GCP_PROJECT_ID}/global/firewalls/${dynamic_udp_firewall}"
+  fi
+}
+
+import_existing_primary_resources
+
 terraform -chdir="${infra_dir}" apply -auto-approve \
-  -var-file="${primary_tfvars_file}" \
-  -var="project_id=${GCP_PROJECT_ID}" \
-  -var="region=${GCP_REGION}" \
-  -var="zone=${GCP_ZONE}" \
-  -var="cluster_name=${GKE_CLUSTER_NAME}"
+  "${terraform_vars[@]}"
 
 credentials_command="$(terraform -chdir="${infra_dir}" output -raw get_credentials_command)"
 bash -lc "${credentials_command}"

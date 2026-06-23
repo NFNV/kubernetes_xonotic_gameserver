@@ -149,6 +149,8 @@ source scripts/env.sh
 
 Secondary regional contexts are added to the backend kubeconfig when reachable, but an unavailable EU or NA cluster does not block the primary South America control plane from starting.
 
+For repositories upgraded from the earlier default-workspace flow, `up.sh` detects an existing South America cluster, node pool, and UDP firewall rules and imports missing bindings into the `south-america` workspace before applying. This avoids duplicate-resource `409 Already exists` failures.
+
 Observability remains intentionally separate for the small single-node cluster:
 
 ```bash
