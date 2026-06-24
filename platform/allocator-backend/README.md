@@ -162,13 +162,7 @@ Apply the namespace, PostgreSQL Secret, PostgreSQL manifests, and RBAC:
 
 ```bash
 kubectl apply -f platform/allocator-backend/manifests/namespace.yaml
-kubectl create secret generic xonotic-multicluster-kubeconfig \
-  -n xonotic-allocator-backend \
-  --from-file=config="${XONOTIC_MULTICLUSTER_KUBECONFIG:-scripts/.generated/xonotic-multicluster.kubeconfig}" \
-  --from-literal=XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT="${XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT}" \
-  --from-literal=XONOTIC_EUROPE_KUBE_CONTEXT="${XONOTIC_EUROPE_KUBE_CONTEXT}" \
-  --from-literal=XONOTIC_NORTH_AMERICA_KUBE_CONTEXT="${XONOTIC_NORTH_AMERICA_KUBE_CONTEXT}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+./scripts/apply-multicluster-kubeconfig-secret.sh
 eval "$(scripts/generate-admin-auth.sh --username admin --password admin)"
 kubectl apply -f - <<EOF
 apiVersion: v1

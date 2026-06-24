@@ -86,7 +86,7 @@ The allocator backend remains in South America. It selects a Kubernetes client f
 - `europe-default` uses `XONOTIC_EUROPE_KUBE_CONTEXT`
 - `north-america-default` uses `XONOTIC_NORTH_AMERICA_KUBE_CONTEXT`
 
-`scripts/build-multicluster-kubeconfig.sh` reads the operator's three GKE contexts, ensures regional allocator RBAC exists, and writes a gitignored kubeconfig containing only the regional API endpoints, CA certificates, and namespaced allocator service-account tokens. `scripts/up.sh` stores that file in the `xonotic-multicluster-kubeconfig` Kubernetes Secret and mounts it read-only into the backend Pod.
+`scripts/build-multicluster-kubeconfig.sh` reads the operator's three GKE contexts, ensures regional allocator RBAC exists, and writes a gitignored kubeconfig containing only the regional API endpoints, CA certificates, and namespaced allocator service-account tokens. The canonical path is `scripts/.generated/xonotic-multicluster.kubeconfig`. `scripts/apply-multicluster-kubeconfig-secret.sh` validates that file and applies it as `xonotic-allocator-backend/xonotic-multicluster-kubeconfig`. `scripts/up.sh` calls both helpers automatically before restarting the backend.
 
 Get or refresh the source contexts:
 
@@ -99,9 +99,26 @@ gcloud container clusters get-credentials xonotic-na \
   --zone us-central1-a --project "${GCP_PROJECT_ID}"
 
 ./scripts/build-multicluster-kubeconfig.sh
+./scripts/apply-multicluster-kubeconfig-secret.sh
+kubectl rollout restart deployment/xonotic-allocator-backend -n xonotic-allocator-backend
+kubectl rollout status deployment/xonotic-allocator-backend -n xonotic-allocator-backend
 ```
 
 The generated kubeconfig is a dev-cluster credential artifact and must not be committed. Rebuild it after recreating a regional cluster because that cluster receives a new API endpoint, CA, and service-account token.
+
+Verify the mounted kubeconfig without printing credentials:
+
+```bash
+kubectl exec -n xonotic-allocator-backend deployment/xonotic-allocator-backend -- \
+  python -c 'from kubernetes import config; contexts, _ = config.list_kube_config_contexts(config_file="/var/run/xonotic/kubeconfig/config"); print("\n".join(item["name"] for item in contexts))'
+```
+
+Verify regional capacity:
+
+```bash
+kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18082:8080
+curl -fsS http://127.0.0.1:18082/server-pools/capacity | jq '.items[] | {server_pool_id, capacity_state, ready_replicas, allocated_replicas}'
+```
 
 During allocation, the backend creates the `GameServerAllocation` in the selected context, then configures and verifies the returned public Xonotic endpoint through RCON and `getstatus`. The assignment stores its pool, region, cluster, namespace, and Fleet metadata. Release, result-save cleanup, release-all, and tournament finalization use that assignment metadata to delete the GameServer from the same regional cluster.
 

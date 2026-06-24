@@ -147,7 +147,24 @@ source scripts/env.sh
 ./scripts/up-region.sh north-america
 ```
 
-Secondary regional contexts are added to the backend kubeconfig when reachable, but an unavailable EU or NA cluster does not block the primary South America control plane from starting.
+The backend deployment requires all three regional contexts in its generated kubeconfig. From a fully stopped environment, bring up the game-server-only regions first, then the primary environment:
+
+```bash
+./scripts/up-region.sh europe &&
+./scripts/up-region.sh north-america &&
+./scripts/up.sh
+```
+
+If regional credentials or the mounted Secret become stale, refresh and reconcile them without manually constructing a Secret:
+
+```bash
+gcloud container clusters get-credentials xonotic-mvp --zone southamerica-west1-a --project "${GCP_PROJECT_ID}"
+gcloud container clusters get-credentials xonotic-eu --zone europe-west1-b --project "${GCP_PROJECT_ID}"
+gcloud container clusters get-credentials xonotic-na --zone us-central1-a --project "${GCP_PROJECT_ID}"
+./scripts/build-multicluster-kubeconfig.sh
+./scripts/apply-multicluster-kubeconfig-secret.sh
+kubectl rollout restart deployment/xonotic-allocator-backend -n xonotic-allocator-backend
+```
 
 For repositories upgraded from the earlier default-workspace flow, `up.sh` detects an existing South America cluster, node pool, and UDP firewall rules and imports missing bindings into the `south-america` workspace before applying. This avoids duplicate-resource `409 Already exists` failures.
 
