@@ -44,7 +44,7 @@ The region scripts are explicit and opt-in:
 ./scripts/down-region.sh north-america
 ```
 
-They use Terraform workspaces named after the region, so a Europe apply uses the `europe` workspace and does not overwrite South America state. The scripts print the selected region, tfvars file, workspace, and a cost warning before applying or destroying.
+They use Terraform workspaces named after the region, so a Europe apply uses the `europe` workspace and does not overwrite South America state. The scripts print the selected region, tfvars file, workspace, and a cost warning, then apply without an interactive confirmation prompt.
 
 `up-region.sh` temporarily switches Kubernetes context while deploying that region, then restores the context that was active when the script started. This keeps primary backend/frontend commands pointed at South America during normal operation.
 

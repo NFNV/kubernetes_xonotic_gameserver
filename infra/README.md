@@ -78,7 +78,7 @@ For region-oriented use from the repository root, prefer the scripts:
 ./scripts/down-region.sh north-america
 ```
 
-Those scripts select or create the matching Terraform workspace before planning/applying. This keeps regional state isolated so applying `europe` does not replace or destroy `south-america`.
+Those scripts select or create the matching Terraform workspace before planning/applying. This keeps regional state isolated so applying `europe` does not replace or destroy `south-america`. Lifecycle scripts are non-interactive: invoking an up/down command is sufficient authorization to apply its displayed Terraform plan.
 
 After Terraform creates the cluster, `up-region.sh` also fetches kubeconfig credentials and deploys the regional game-server plane:
 

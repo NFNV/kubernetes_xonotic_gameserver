@@ -75,13 +75,4 @@ terraform -chdir="${infra_dir}" plan \
   -var="project_id=${GCP_PROJECT_ID}" \
   -out="${plan_file}"
 
-if [[ "${XONOTIC_AUTO_APPROVE:-0}" != "1" ]]; then
-  echo
-  read -r -p "Type 'destroy ${region}' to destroy this regional infrastructure: " confirmation
-  if [[ "${confirmation}" != "destroy ${region}" ]]; then
-    echo "Aborted. No infrastructure was changed."
-    exit 1
-  fi
-fi
-
 terraform -chdir="${infra_dir}" apply "${plan_file}"
