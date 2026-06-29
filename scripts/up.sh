@@ -215,8 +215,14 @@ if [[ -z "${ready_replicas}" ]] || (( ready_replicas < required_ready_replicas )
   exit 1
 fi
 
-kubectl apply -f "${allocator_backend_namespace_manifest}"
+cat <<EOF
+Preparing the central backend multicluster kubeconfig.
+This must succeed before deploying PostgreSQL, backend, or frontend, otherwise
+the allocator backend cannot query regional Agones pools.
+EOF
 bash "${script_dir}/build-multicluster-kubeconfig.sh"
+
+kubectl apply -f "${allocator_backend_namespace_manifest}"
 bash "${script_dir}/apply-multicluster-kubeconfig-secret.sh"
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -291,11 +297,11 @@ cat <<EOF
 Primary South America environment is ready.
 
 Frontend:
-  kubectl port-forward -n ${allocator_backend_namespace} service/xonotic-allocator-frontend 18080:8080
+  kubectl --context gke_${GCP_PROJECT_ID}_${GCP_ZONE}_${GKE_CLUSTER_NAME} port-forward -n ${allocator_backend_namespace} service/xonotic-allocator-frontend 18080:8080
   http://127.0.0.1:18080
 
 Backend:
-  kubectl port-forward -n ${allocator_backend_namespace} service/xonotic-allocator-backend 18082:8080
+  kubectl --context gke_${GCP_PROJECT_ID}_${GCP_ZONE}_${GKE_CLUSTER_NAME} port-forward -n ${allocator_backend_namespace} service/xonotic-allocator-backend 18082:8080
   http://127.0.0.1:18082
 
 Optional observability deployment:
