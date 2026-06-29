@@ -115,7 +115,30 @@ terraform_vars=(
 )
 
 terraform_state_has() {
-  terraform -chdir="${infra_dir}" state list 2>/dev/null | grep -Fxq "$1"
+  terraform -chdir="${infra_dir}" state show "$1" >/dev/null 2>&1
+}
+
+terraform_import_if_needed() {
+  local address="$1"
+  local resource_id="$2"
+
+  if terraform_state_has "${address}"; then
+    return 0
+  fi
+
+  local import_output
+  if import_output="$(terraform -chdir="${infra_dir}" import "${terraform_vars[@]}" "${address}" "${resource_id}" 2>&1)"; then
+    printf '%s\n' "${import_output}"
+    return 0
+  fi
+
+  if grep -Fq "Resource already managed by Terraform" <<<"${import_output}"; then
+    echo "Terraform already manages ${address}; continuing."
+    return 0
+  fi
+
+  printf '%s\n' "${import_output}" >&2
+  return 1
 }
 
 import_existing_primary_resources() {
@@ -128,7 +151,7 @@ import_existing_primary_resources() {
       --zone "${GCP_ZONE}" \
       --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
     echo "Importing existing South America GKE cluster into Terraform workspace ${primary_region}..."
-    terraform -chdir="${infra_dir}" import "${terraform_vars[@]}" \
+    terraform_import_if_needed \
       google_container_cluster.primary \
       "projects/${GCP_PROJECT_ID}/locations/${GCP_ZONE}/clusters/${GKE_CLUSTER_NAME}"
   fi
@@ -139,7 +162,7 @@ import_existing_primary_resources() {
       --zone "${GCP_ZONE}" \
       --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
     echo "Importing existing South America GKE node pool into Terraform workspace ${primary_region}..."
-    terraform -chdir="${infra_dir}" import "${terraform_vars[@]}" \
+    terraform_import_if_needed \
       google_container_node_pool.primary \
       "projects/${GCP_PROJECT_ID}/locations/${GCP_ZONE}/clusters/${GKE_CLUSTER_NAME}/nodePools/${node_pool_name}"
   fi
@@ -148,7 +171,7 @@ import_existing_primary_resources() {
     && gcloud compute firewall-rules describe "${fixed_udp_firewall}" \
       --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
     echo "Importing existing fixed UDP firewall rule into Terraform workspace ${primary_region}..."
-    terraform -chdir="${infra_dir}" import "${terraform_vars[@]}" \
+    terraform_import_if_needed \
       google_compute_firewall.xonotic_agones_gameserver_udp \
       "projects/${GCP_PROJECT_ID}/global/firewalls/${fixed_udp_firewall}"
   fi
@@ -157,7 +180,7 @@ import_existing_primary_resources() {
     && gcloud compute firewall-rules describe "${dynamic_udp_firewall}" \
       --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
     echo "Importing existing dynamic UDP firewall rule into Terraform workspace ${primary_region}..."
-    terraform -chdir="${infra_dir}" import "${terraform_vars[@]}" \
+    terraform_import_if_needed \
       google_compute_firewall.xonotic_agones_fleet_udp_dynamic \
       "projects/${GCP_PROJECT_ID}/global/firewalls/${dynamic_udp_firewall}"
   fi
