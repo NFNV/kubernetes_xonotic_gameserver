@@ -65,6 +65,7 @@ allocator_frontend_service_manifest="${repo_root}/platform/allocator-frontend/ma
 postgres_pvc_manifest="${repo_root}/platform/postgres/manifests/pvc.yaml"
 postgres_deployment_manifest="${repo_root}/platform/postgres/manifests/deployment.yaml"
 postgres_service_manifest="${repo_root}/platform/postgres/manifests/service.yaml"
+observability_dir="${repo_root}/platform/observability"
 agones_system_namespace="agones-system"
 gameserver_namespace="${XONOTIC_AGONES_NAMESPACE:-xonotic-agones}"
 fleet_name="${XONOTIC_FLEET_NAME:-xonotic-fleet}"
@@ -77,6 +78,9 @@ allocator_backend_namespace="xonotic-allocator-backend"
 allocator_backend_deployment_name="xonotic-allocator-backend"
 allocator_frontend_deployment_name="xonotic-allocator-frontend"
 postgres_deployment_name="xonotic-postgres"
+observability_namespace="xonotic-observability"
+prometheus_deployment_name="xonotic-prometheus"
+grafana_deployment_name="xonotic-grafana"
 rcon_secret_name="xonotic-rcon"
 postgres_secret_name="xonotic-postgres"
 admin_auth_secret_name="xonotic-admin-auth"
@@ -95,10 +99,11 @@ Bringing up the primary Xonotic environment:
   PostgreSQL
   allocator backend
   allocator frontend
+  lightweight Prometheus/Grafana observability
 
 Terraform workspace: ${primary_region}
 Terraform variables: ${primary_tfvars_file}
-Observability remains an optional separate deployment.
+Observability deploys automatically and warns without blocking the primary environment.
 EOF
 
 terraform -chdir="${infra_dir}" init
@@ -184,6 +189,26 @@ import_existing_primary_resources() {
       google_compute_firewall.xonotic_agones_fleet_udp_dynamic \
       "projects/${GCP_PROJECT_ID}/global/firewalls/${dynamic_udp_firewall}"
   fi
+}
+
+observability_ready=0
+deploy_observability() {
+  echo "Deploying lightweight observability stack..."
+  if kubectl apply -k "${observability_dir}" \
+    && kubectl rollout status "deployment/${prometheus_deployment_name}" -n "${observability_namespace}" \
+    && kubectl rollout status "deployment/${grafana_deployment_name}" -n "${observability_namespace}"; then
+    observability_ready=1
+    return 0
+  fi
+
+  observability_ready=0
+  cat >&2 <<EOF
+Warning: Prometheus/Grafana deployment failed or did not roll out.
+The primary backend/frontend environment is still ready.
+Inspect with:
+  kubectl get deploy,pod,svc -n ${observability_namespace}
+EOF
+  return 0
 }
 
 import_existing_primary_resources
@@ -306,6 +331,8 @@ kubectl wait --for=condition=Ready pod \
   -n "${allocator_backend_namespace}" \
   --timeout=300s
 
+deploy_observability
+
 kubectl get pods -n "${agones_system_namespace}"
 kubectl get fleetautoscaler -n "${gameserver_namespace}"
 kubectl get fleet -n "${gameserver_namespace}"
@@ -314,6 +341,10 @@ kubectl get deployment "${postgres_deployment_name}" -n "${allocator_backend_nam
 kubectl get pvc -n "${allocator_backend_namespace}"
 kubectl get pods -n "${allocator_backend_namespace}"
 kubectl get service -n "${allocator_backend_namespace}"
+if [[ "${observability_ready}" == "1" ]]; then
+  kubectl get deployment -n "${observability_namespace}"
+  kubectl get service -n "${observability_namespace}"
+fi
 
 cat <<EOF
 
@@ -327,8 +358,11 @@ Backend:
   kubectl --context gke_${GCP_PROJECT_ID}_${GCP_ZONE}_${GKE_CLUSTER_NAME} port-forward -n ${allocator_backend_namespace} service/xonotic-allocator-backend 18082:8080
   http://127.0.0.1:18082
 
-Optional observability deployment:
-  kubectl apply -k platform/observability
-  kubectl rollout status deployment/xonotic-prometheus -n xonotic-observability
-  kubectl rollout status deployment/xonotic-grafana -n xonotic-observability
+Prometheus:
+  kubectl --context gke_${GCP_PROJECT_ID}_${GCP_ZONE}_${GKE_CLUSTER_NAME} port-forward -n ${observability_namespace} service/xonotic-prometheus 9090:9090
+  http://127.0.0.1:9090
+
+Grafana:
+  kubectl --context gke_${GCP_PROJECT_ID}_${GCP_ZONE}_${GKE_CLUSTER_NAME} port-forward -n ${observability_namespace} service/xonotic-grafana 3000:3000
+  http://127.0.0.1:3000
 EOF

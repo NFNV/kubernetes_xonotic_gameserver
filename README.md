@@ -140,14 +140,14 @@ source scripts/env.sh
 ./scripts/up.sh
 ```
 
-`./scripts/up.sh` is the single primary-environment entrypoint. It selects the `south-america` Terraform workspace and brings up the South America GKE/Agones game-server plane plus PostgreSQL, allocator backend, and allocator frontend. Europe and North America remain game-server-only regional deployments:
+`./scripts/up.sh` is the single primary-environment entrypoint. It selects the `south-america` Terraform workspace and brings up the South America GKE/Agones game-server plane plus PostgreSQL, allocator backend, allocator frontend, and lightweight Prometheus/Grafana observability. Observability deploys automatically and warns without blocking the primary environment if it cannot roll out. Europe and North America remain game-server-only regional deployments:
 
 ```bash
 ./scripts/up-region.sh europe
 ./scripts/up-region.sh north-america
 ```
 
-The backend deployment requires all three regional contexts in its generated kubeconfig. From a fully stopped environment, bring up the game-server-only regions first, then the primary environment:
+The backend deployment requires the South America context in its generated kubeconfig and includes Europe/North America when they are reachable. From a fully stopped environment, bring up the game-server-only regions first if you want all regional pools available immediately, then the primary environment:
 
 ```bash
 ./scripts/up-region.sh europe &&
@@ -168,24 +168,18 @@ kubectl rollout restart deployment/xonotic-allocator-backend -n xonotic-allocato
 
 For repositories upgraded from the earlier default-workspace flow, `up.sh` detects an existing South America cluster, node pool, and UDP firewall rules and imports missing bindings into the `south-america` workspace before applying. This avoids duplicate-resource `409 Already exists` failures.
 
-Observability remains intentionally separate for the small single-node cluster:
-
-```bash
-kubectl apply -k platform/observability
-kubectl rollout status deployment/xonotic-prometheus -n xonotic-observability
-kubectl rollout status deployment/xonotic-grafana -n xonotic-observability
-```
-
 Port-forward common services:
 
 ```bash
 kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-frontend 18080:8080
 kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18082:8080
+kubectl port-forward -n xonotic-observability service/xonotic-prometheus 9090:9090
 kubectl port-forward -n xonotic-observability service/xonotic-grafana 3000:3000
 ```
 
 - Frontend: `http://127.0.0.1:18080`
 - Backend: `http://127.0.0.1:18082`
+- Prometheus: `http://127.0.0.1:9090`
 - Grafana: `http://127.0.0.1:3000`
 
 Tear down cloud resources:

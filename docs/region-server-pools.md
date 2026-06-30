@@ -68,15 +68,15 @@ terraform -chdir=infra output default_server_pool
 terraform -chdir=infra output server_pools
 ```
 
-Important: `./scripts/up.sh` and `./scripts/down.sh` remain the current full South America dev workflow. They still handle Terraform plus Agones, Fleet, secrets, PostgreSQL, backend, and frontend. The new region scripts are regional game-server-plane controls and intentionally do not deploy duplicate central control-plane stacks into Europe or North America.
+Important: `./scripts/up.sh` and `./scripts/down.sh` remain the current full South America dev workflow. They still handle Terraform plus Agones, Fleet, secrets, PostgreSQL, backend, frontend, and lightweight observability. The new region scripts are regional game-server-plane controls and intentionally do not deploy duplicate central control-plane stacks into Europe or North America.
 
 In short:
 
-- `./scripts/up.sh` = primary control plane + South America game-server plane
+- `./scripts/up.sh` = primary control plane + South America game-server plane + Prometheus/Grafana
 - `./scripts/up-region.sh europe` = Europe game-server plane only
 - `./scripts/up-region.sh north-america` = North America game-server plane only
 
-Prometheus/Grafana are optional and remain deployed separately with `kubectl apply -k platform/observability`.
+Prometheus/Grafana are deployed automatically by `./scripts/up.sh` and are intentionally non-fatal: if the lightweight observability stack cannot roll out, the script warns and keeps the primary backend/frontend usable.
 
 ## Central Multi-Cluster Control Plane
 

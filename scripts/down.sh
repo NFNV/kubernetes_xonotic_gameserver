@@ -28,6 +28,7 @@ allocator_frontend_service_manifest="${repo_root}/platform/allocator-frontend/ma
 postgres_pvc_manifest="${repo_root}/platform/postgres/manifests/pvc.yaml"
 postgres_deployment_manifest="${repo_root}/platform/postgres/manifests/deployment.yaml"
 postgres_service_manifest="${repo_root}/platform/postgres/manifests/service.yaml"
+observability_dir="${repo_root}/platform/observability"
 infra_dir="${repo_root}/infra"
 primary_region="south-america"
 primary_tfvars_file="regions/${primary_region}.tfvars"
@@ -54,6 +55,7 @@ if [[ -n "${credentials_command}" ]]; then
 fi
 
 if [[ "${primary_context_ready}" == "1" ]]; then
+  kubectl delete -k "${observability_dir}" --ignore-not-found=true || true
   kubectl delete -f "${manifest_path}" --ignore-not-found=true || true
   kubectl delete -f "${agones_gameserver_manifest}" --ignore-not-found=true || true
   kubectl delete -f "${allocator_frontend_service_manifest}" --ignore-not-found=true || true

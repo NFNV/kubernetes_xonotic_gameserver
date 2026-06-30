@@ -6,7 +6,15 @@ It is intentionally not a production monitoring stack. It does not install Alert
 
 ## Deploy
 
-First rebuild and redeploy the allocator backend image so `/metrics` is available:
+The normal primary-environment entrypoint deploys this stack automatically after the allocator backend and frontend are Ready:
+
+```bash
+./scripts/up.sh
+```
+
+Observability is default-on but non-fatal. If Prometheus or Grafana cannot roll out, `up.sh` prints a warning and leaves the primary backend/frontend environment usable.
+
+If backend metrics code changed, first rebuild and redeploy the allocator backend image so `/metrics` is available:
 
 ```bash
 docker buildx build --platform linux/amd64 \
@@ -17,7 +25,7 @@ kubectl rollout restart deployment/xonotic-allocator-backend -n xonotic-allocato
 kubectl rollout status deployment/xonotic-allocator-backend -n xonotic-allocator-backend
 ```
 
-Then apply the observability manifests:
+To manually reconcile only the observability stack:
 
 ```bash
 kubectl apply -k platform/observability
