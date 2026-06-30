@@ -40,9 +40,13 @@ namespace="${XONOTIC_AGONES_NAMESPACE:-xonotic-agones}"
 token_secret="xonotic-regional-allocator-token"
 required_contexts=(
   "${south_america_context}"
+)
+optional_contexts=(
   "${europe_context}"
   "${north_america_context}"
 )
+included_contexts=()
+skipped_contexts=()
 
 if [[ "${south_america_context}" != "${expected_south_america_context}" \
   || "${europe_context}" != "${expected_europe_context}" \
@@ -66,26 +70,42 @@ trap cleanup EXIT
 
 add_context() {
   local source_context="$1"
+  local required="$2"
   local ca_data
   local server
   local token
   local ca_file="${tmp_dir}/${source_context//[^a-zA-Z0-9_.-]/_}.crt"
 
   if ! kubectl config get-contexts "${source_context}" -o name | grep -Fxq "${source_context}"; then
-    echo "Missing kubeconfig context: ${source_context}" >&2
-    echo "Run the documented gcloud container clusters get-credentials command for this region first." >&2
-    exit 1
+    if [[ "${required}" == "true" ]]; then
+      echo "Missing required kubeconfig context: ${source_context}" >&2
+      echo "Run the documented gcloud container clusters get-credentials command for this region first." >&2
+      exit 1
+    fi
+    echo "Skipping optional kubeconfig context because it is missing: ${source_context}" >&2
+    skipped_contexts+=("${source_context} (missing)")
+    return 0
   fi
 
   if ! kubectl --context "${source_context}" get namespace "${namespace}" --request-timeout=10s >/dev/null 2>&1; then
-    echo "Kubeconfig context is unreachable: ${source_context}" >&2
-    echo "Refresh it with the documented gcloud container clusters get-credentials command." >&2
-    exit 1
+    if [[ "${required}" == "true" ]]; then
+      echo "Required kubeconfig context is unreachable: ${source_context}" >&2
+      echo "Refresh it with the documented gcloud container clusters get-credentials command." >&2
+      exit 1
+    fi
+    echo "Skipping optional kubeconfig context because it is unreachable: ${source_context}" >&2
+    skipped_contexts+=("${source_context} (unreachable)")
+    return 0
   fi
 
   if ! kubectl --context "${source_context}" apply -f "${rbac_manifest}"; then
-    echo "Failed to apply regional allocator RBAC in context: ${source_context}" >&2
-    exit 1
+    if [[ "${required}" == "true" ]]; then
+      echo "Failed to apply regional allocator RBAC in required context: ${source_context}" >&2
+      exit 1
+    fi
+    echo "Skipping optional kubeconfig context because RBAC apply failed: ${source_context}" >&2
+    skipped_contexts+=("${source_context} (rbac failed)")
+    return 0
   fi
 
   for _ in $(seq 1 30); do
@@ -97,15 +117,25 @@ add_context() {
   done
 
   if [[ -z "${token:-}" ]]; then
-    echo "Token Secret ${namespace}/${token_secret} was not populated in context ${source_context}" >&2
-    exit 1
+    if [[ "${required}" == "true" ]]; then
+      echo "Token Secret ${namespace}/${token_secret} was not populated in required context ${source_context}" >&2
+      exit 1
+    fi
+    echo "Skipping optional kubeconfig context because allocator token is unavailable: ${source_context}" >&2
+    skipped_contexts+=("${source_context} (token unavailable)")
+    return 0
   fi
 
   server="$(kubectl --context "${source_context}" config view --minify --flatten --raw -o jsonpath='{.clusters[0].cluster.server}')"
   ca_data="$(kubectl --context "${source_context}" config view --minify --flatten --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
   if [[ -z "${server}" || -z "${ca_data}" ]]; then
-    echo "Context ${source_context} is missing an API server or embedded cluster CA" >&2
-    exit 1
+    if [[ "${required}" == "true" ]]; then
+      echo "Required context ${source_context} is missing an API server or embedded cluster CA" >&2
+      exit 1
+    fi
+    echo "Skipping optional kubeconfig context because API server or CA data is missing: ${source_context}" >&2
+    skipped_contexts+=("${source_context} (invalid context data)")
+    return 0
   fi
 
   printf '%s' "${ca_data}" | base64 -d > "${ca_file}"
@@ -118,10 +148,15 @@ add_context() {
     --cluster="${source_context}" \
     --user="${source_context}" \
     --namespace="${namespace}" >/dev/null
+  included_contexts+=("${source_context}")
 }
 
 for context_name in "${required_contexts[@]}"; do
-  add_context "${context_name}"
+  add_context "${context_name}" "true"
+done
+
+for context_name in "${optional_contexts[@]}"; do
+  add_context "${context_name}" "false"
 done
 
 kubectl config --kubeconfig="${build_path}" use-context "${south_america_context}" >/dev/null
@@ -134,7 +169,7 @@ fi
 
 for context_name in "${required_contexts[@]}"; do
   if ! kubectl config --kubeconfig="${build_path}" get-contexts "${context_name}" -o name | grep -Fxq "${context_name}"; then
-    echo "Generated kubeconfig is missing required context: ${context_name}" >&2
+    echo "Generated kubeconfig is missing required South America context: ${context_name}" >&2
     exit 1
   fi
 done
@@ -146,10 +181,11 @@ cat <<EOF
 Created least-privilege regional allocator kubeconfig:
   ${output_path}
 
-Validated contexts:
-  ${south_america_context}
-  ${europe_context}
-  ${north_america_context}
+Included contexts:
+$(printf '  %s\n' "${included_contexts[@]}")
+
+Skipped optional contexts:
+$(if [[ ${#skipped_contexts[@]} -eq 0 ]]; then printf '  none\n'; else printf '  %s\n' "${skipped_contexts[@]}"; fi)
 
 Canonical repo-relative path:
   scripts/.generated/xonotic-multicluster.kubeconfig

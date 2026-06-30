@@ -30,6 +30,8 @@ configured_path="${XONOTIC_MULTICLUSTER_KUBECONFIG:-${canonical_path}}"
 primary_context="${south_america_context}"
 required_contexts=(
   "${south_america_context}"
+)
+optional_contexts=(
   "${europe_context}"
   "${north_america_context}"
 )
@@ -67,9 +69,15 @@ fi
 
 for context_name in "${required_contexts[@]}"; do
   if ! kubectl config --kubeconfig="${kubeconfig_path}" get-contexts "${context_name}" -o name | grep -Fxq "${context_name}"; then
-    echo "Multicluster kubeconfig is missing required context: ${context_name}" >&2
-    echo "Refresh all regional credentials and rebuild the kubeconfig." >&2
+    echo "Multicluster kubeconfig is missing required South America context: ${context_name}" >&2
+    echo "Refresh South America credentials and rebuild the kubeconfig." >&2
     exit 1
+  fi
+done
+
+for context_name in "${optional_contexts[@]}"; do
+  if ! kubectl config --kubeconfig="${kubeconfig_path}" get-contexts "${context_name}" -o name | grep -Fxq "${context_name}"; then
+    echo "Warning: multicluster kubeconfig is missing optional context ${context_name}; that server pool will report unavailable until refreshed." >&2
   fi
 done
 
