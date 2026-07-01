@@ -81,6 +81,8 @@ postgres_deployment_name="xonotic-postgres"
 observability_namespace="xonotic-observability"
 prometheus_deployment_name="xonotic-prometheus"
 grafana_deployment_name="xonotic-grafana"
+kube_state_metrics_deployment_name="xonotic-kube-state-metrics"
+node_exporter_daemonset_name="xonotic-node-exporter"
 rcon_secret_name="xonotic-rcon"
 postgres_secret_name="xonotic-postgres"
 admin_auth_secret_name="xonotic-admin-auth"
@@ -195,7 +197,11 @@ observability_ready=0
 deploy_observability() {
   echo "Deploying lightweight observability stack..."
   if kubectl apply -k "${observability_dir}" \
+    && kubectl rollout restart "deployment/${prometheus_deployment_name}" -n "${observability_namespace}" \
+    && kubectl rollout restart "deployment/${grafana_deployment_name}" -n "${observability_namespace}" \
     && kubectl rollout status "deployment/${prometheus_deployment_name}" -n "${observability_namespace}" \
+    && kubectl rollout status "deployment/${kube_state_metrics_deployment_name}" -n "${observability_namespace}" \
+    && kubectl rollout status "daemonset/${node_exporter_daemonset_name}" -n "${observability_namespace}" \
     && kubectl rollout status "deployment/${grafana_deployment_name}" -n "${observability_namespace}"; then
     observability_ready=1
     return 0

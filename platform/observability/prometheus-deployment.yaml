@@ -15,6 +15,7 @@ spec:
       labels:
         app: xonotic-prometheus
     spec:
+      serviceAccountName: xonotic-prometheus
       containers:
         - name: prometheus
           image: prom/prometheus:v3.10.0
