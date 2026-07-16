@@ -13,7 +13,7 @@ Terraform + GKE + firewall rules
   -> Flask allocator backend + PostgreSQL
   -> React Admin / Player UI
   -> RCON configuration + getstatus verification
-  -> Prometheus metrics + Grafana dashboard
+  -> Prometheus metrics + Loki logs + Grafana dashboards
 ```
 
 ### Infrastructure Plane
@@ -33,9 +33,9 @@ Terraform + GKE + firewall rules
 
 ### Observability Plane
 
-- Prometheus scrapes backend `/metrics`.
-- Grafana visualizes allocator health and server/tournament operations.
-- Metrics track HTTP behavior, allocation outcomes, active assignments, RCON failures, and map/mode verification.
+- Prometheus scrapes backend and Kubernetes infrastructure metrics.
+- Grafana Alloy collects primary-cluster pod logs and forwards them to Loki.
+- Grafana visualizes allocator metrics, cluster health, and operational logs.
 
 ## Features
 
@@ -49,7 +49,7 @@ Terraform + GKE + firewall rules
 - Admin server-pool capacity visibility for Ready/Allocated regional game server capacity
 - Single-elimination tournament workflow with result recording and winner advancement
 - Tournament finalization with automatic active GameServer cleanup
-- Prometheus/Grafana observability for allocation and platform health
+- Prometheus metrics, Loki logs, Alloy collection, and Grafana dashboards for platform health
 - Terraform, GHCR publishing, and dev scripts for infrastructure automation and cost control
 
 The target concept is worldwide tournament server management: operators allocate dedicated servers, configure and verify them, expose player connection commands, record results, and release capacity when matches are complete.
@@ -85,9 +85,9 @@ Finalization requires a recorded winner for the final match. Result recording cl
 
 ## Observability
 
-The backend exposes Prometheus metrics at `/metrics`, and Grafana provides a lightweight dashboard for platform health. Metrics cover request count/latency, allocation attempts/successes/failures, active match server assignments, RCON command failures, and map/mode verification failures.
+Prometheus collects metrics, Loki stores short-lived Kubernetes pod logs, and Grafana provides one place to explore both. Grafana Alloy runs on each primary-cluster node and forwards labeled backend, Agones, and Xonotic logs to Loki. Metrics cover request count/latency, allocation outcomes, active assignments, RCON failures, verification failures, and Kubernetes resource pressure; log panels focus on backend activity, allocation failures, RCON/`getstatus` errors, and GameServer output.
 
-These signals help diagnose issues such as no ready GameServers, FleetAutoscaler capacity lag, failed allocations, RCON problems, verification failures, and resource pressure on the small dev cluster.
+The logging setup is intentionally dev-grade: Loki uses bounded ephemeral storage with 24-hour retention, remains reachable only inside the cluster or through port-forwarding, and currently observes the primary South America cluster only.
 
 ## Kubernetes / GKE Setup
 
@@ -95,7 +95,7 @@ This project targets a small GKE Standard development cluster:
 
 - Terraform provisions the cluster and firewall rules.
 - Agones runs the Xonotic Fleet with dynamic UDP ports.
-- Backend, frontend, PostgreSQL, Prometheus, and Grafana run as Kubernetes workloads.
+- Backend, frontend, PostgreSQL, Prometheus, Loki, Alloy, and Grafana run as Kubernetes workloads.
 - Images are built and published to GHCR.
 - `scripts/up.sh` and `scripts/down.sh` help control cloud costs.
 - Resource requests/limits and `Recreate` rollout strategy are used for a constrained single-node dev cluster.
@@ -140,7 +140,7 @@ source scripts/env.sh
 ./scripts/up.sh
 ```
 
-`./scripts/up.sh` is the single primary-environment entrypoint. It selects the `south-america` Terraform workspace and brings up the South America GKE/Agones game-server plane plus PostgreSQL, allocator backend, allocator frontend, and lightweight Prometheus/Grafana observability. Observability deploys automatically and warns without blocking the primary environment if it cannot roll out. Europe and North America remain game-server-only regional deployments:
+`./scripts/up.sh` is the single primary-environment entrypoint. It selects the `south-america` Terraform workspace and brings up the South America GKE/Agones game-server plane plus PostgreSQL, allocator backend, allocator frontend, and lightweight Prometheus/Grafana/Loki observability. Observability deploys automatically and warns without blocking the primary environment if it cannot roll out. Europe and North America remain game-server-only regional deployments:
 
 ```bash
 ./scripts/up-region.sh europe
@@ -174,12 +174,14 @@ Port-forward common services:
 kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-frontend 18080:8080
 kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18082:8080
 kubectl port-forward -n xonotic-observability service/xonotic-prometheus 9090:9090
+kubectl port-forward -n xonotic-observability service/xonotic-loki 3100:3100
 kubectl port-forward -n xonotic-observability service/xonotic-grafana 3000:3000
 ```
 
 - Frontend: `http://127.0.0.1:18080`
 - Backend: `http://127.0.0.1:18082`
 - Prometheus: `http://127.0.0.1:9090`
+- Loki readiness/API: `http://127.0.0.1:3100/ready`
 - Grafana: `http://127.0.0.1:3000`
 
 Tear down cloud resources:
@@ -219,5 +221,5 @@ Tear down cloud resources:
 - `allocator-frontend/`: React admin/player UI
 - `platform/agones/`: Agones Fleet/FleetAutoscaler manifests
 - `platform/postgres/`: PostgreSQL dev manifests
-- `platform/observability/`: Prometheus/Grafana manifests
+- `platform/observability/`: Prometheus, Loki, Alloy, and Grafana manifests
 - `scripts/`: local bring-up, tear-down, and verification helpers

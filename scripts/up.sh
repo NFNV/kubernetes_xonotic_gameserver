@@ -81,6 +81,8 @@ postgres_deployment_name="xonotic-postgres"
 observability_namespace="xonotic-observability"
 prometheus_deployment_name="xonotic-prometheus"
 grafana_deployment_name="xonotic-grafana"
+loki_deployment_name="xonotic-loki"
+alloy_daemonset_name="xonotic-alloy"
 kube_state_metrics_deployment_name="xonotic-kube-state-metrics"
 node_exporter_daemonset_name="xonotic-node-exporter"
 rcon_secret_name="xonotic-rcon"
@@ -101,7 +103,7 @@ Bringing up the primary Xonotic environment:
   PostgreSQL
   allocator backend
   allocator frontend
-  lightweight Prometheus/Grafana observability
+  lightweight Prometheus/Grafana/Loki observability
 
 Terraform workspace: ${primary_region}
 Terraform variables: ${primary_tfvars_file}
@@ -198,10 +200,14 @@ deploy_observability() {
   echo "Deploying lightweight observability stack..."
   if kubectl apply -k "${observability_dir}" \
     && kubectl rollout restart "deployment/${prometheus_deployment_name}" -n "${observability_namespace}" \
+    && kubectl rollout restart "deployment/${loki_deployment_name}" -n "${observability_namespace}" \
+    && kubectl rollout restart "daemonset/${alloy_daemonset_name}" -n "${observability_namespace}" \
     && kubectl rollout restart "deployment/${grafana_deployment_name}" -n "${observability_namespace}" \
     && kubectl rollout status "deployment/${prometheus_deployment_name}" -n "${observability_namespace}" \
     && kubectl rollout status "deployment/${kube_state_metrics_deployment_name}" -n "${observability_namespace}" \
     && kubectl rollout status "daemonset/${node_exporter_daemonset_name}" -n "${observability_namespace}" \
+    && kubectl rollout status "deployment/${loki_deployment_name}" -n "${observability_namespace}" \
+    && kubectl rollout status "daemonset/${alloy_daemonset_name}" -n "${observability_namespace}" \
     && kubectl rollout status "deployment/${grafana_deployment_name}" -n "${observability_namespace}"; then
     observability_ready=1
     return 0
@@ -209,10 +215,10 @@ deploy_observability() {
 
   observability_ready=0
   cat >&2 <<EOF
-Warning: Prometheus/Grafana deployment failed or did not roll out.
+Warning: Prometheus/Grafana/Loki deployment failed or did not roll out.
 The primary backend/frontend environment is still ready.
 Inspect with:
-  kubectl get deploy,pod,svc -n ${observability_namespace}
+  kubectl get deploy,daemonset,pod,svc -n ${observability_namespace}
 EOF
   return 0
 }
@@ -349,6 +355,7 @@ kubectl get pods -n "${allocator_backend_namespace}"
 kubectl get service -n "${allocator_backend_namespace}"
 if [[ "${observability_ready}" == "1" ]]; then
   kubectl get deployment -n "${observability_namespace}"
+  kubectl get daemonset -n "${observability_namespace}"
   kubectl get service -n "${observability_namespace}"
 fi
 
@@ -367,6 +374,10 @@ Backend:
 Prometheus:
   kubectl --context gke_${GCP_PROJECT_ID}_${GCP_ZONE}_${GKE_CLUSTER_NAME} port-forward -n ${observability_namespace} service/xonotic-prometheus 9090:9090
   http://127.0.0.1:9090
+
+Loki API (verification only):
+  kubectl --context gke_${GCP_PROJECT_ID}_${GCP_ZONE}_${GKE_CLUSTER_NAME} port-forward -n ${observability_namespace} service/xonotic-loki 3100:3100
+  http://127.0.0.1:3100/ready
 
 Grafana:
   kubectl --context gke_${GCP_PROJECT_ID}_${GCP_ZONE}_${GKE_CLUSTER_NAME} port-forward -n ${observability_namespace} service/xonotic-grafana 3000:3000

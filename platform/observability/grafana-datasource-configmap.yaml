@@ -14,3 +14,10 @@ data:
         url: http://xonotic-prometheus.xonotic-observability.svc.cluster.local:9090
         isDefault: true
         editable: false
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://xonotic-loki.xonotic-observability.svc.cluster.local:3100
+        isDefault: false
+        editable: false

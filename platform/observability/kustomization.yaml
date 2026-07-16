@@ -11,8 +11,15 @@ resources:
   - kube-state-metrics-service.yaml
   - node-exporter-daemonset.yaml
   - node-exporter-service.yaml
+  - loki-configmap.yaml
+  - loki-deployment.yaml
+  - loki-service.yaml
+  - alloy-rbac.yaml
+  - alloy-configmap.yaml
+  - alloy-daemonset.yaml
   - grafana-datasource-configmap.yaml
   - grafana-dashboard-provider-configmap.yaml
   - grafana-dashboard-configmap.yaml
+  - grafana-logs-dashboard-configmap.yaml
   - grafana-deployment.yaml
   - grafana-service.yaml

@@ -1,16 +1,20 @@
 # Observability
 
-This directory contains the lightweight Prometheus and Grafana stack for the primary South America dev/control-plane cluster.
+This directory contains the lightweight metrics and logging stack for the primary South America dev/control-plane cluster.
 
-It is intentionally not a production monitoring suite. It does not install Prometheus Operator, Alertmanager, Loki, Tempo, custom resource definitions, or persistent monitoring storage. Prometheus stores data in an ephemeral `emptyDir`, keeps a short retention window, and all services remain `ClusterIP` only.
+It is intentionally not a production monitoring suite. It does not install Prometheus Operator, Alertmanager, Tempo, custom resource definitions, or persistent monitoring storage. Prometheus and Loki use bounded ephemeral volumes with short retention windows, and all services remain `ClusterIP` only.
 
 ## Components
 
 - Prometheus (`xonotic-prometheus`) scrapes metrics and stores short-lived time series for debugging and day-to-day operations.
-- Grafana (`xonotic-grafana`) reads Prometheus and serves provisioned dashboards through local port-forwarding.
+- Loki (`xonotic-loki`) stores compressed Kubernetes pod logs for up to 24 hours on a bounded `emptyDir` volume.
+- Grafana Alloy (`xonotic-alloy`) runs as a DaemonSet, discovers pods on its local node through the Kubernetes API, and forwards their logs to Loki without privileged host filesystem mounts.
+- Grafana (`xonotic-grafana`) reads Prometheus and Loki and serves provisioned metrics and logs dashboards through local port-forwarding.
 - kube-state-metrics (`xonotic-kube-state-metrics`) exposes Kubernetes object and state metrics such as pod phases, restarts, node conditions, Deployment state, and resource requests.
 - node-exporter (`xonotic-node-exporter`) runs once per node and exposes node CPU, memory, disk, filesystem, and network metrics.
 - Prometheus also scrapes kubelet and cAdvisor metrics through the Kubernetes API server proxy for pod/container CPU and memory usage.
+
+In short: Prometheus stores metrics, Loki stores logs, Alloy collects logs, and Grafana visualizes both.
 
 ## Deploy
 
@@ -27,10 +31,14 @@ To manually reconcile only the observability stack:
 ```bash
 kubectl apply -k platform/observability
 kubectl rollout restart deployment/xonotic-prometheus -n xonotic-observability
+kubectl rollout restart deployment/xonotic-loki -n xonotic-observability
+kubectl rollout restart daemonset/xonotic-alloy -n xonotic-observability
 kubectl rollout restart deployment/xonotic-grafana -n xonotic-observability
 kubectl rollout status deployment/xonotic-prometheus -n xonotic-observability
 kubectl rollout status deployment/xonotic-kube-state-metrics -n xonotic-observability
 kubectl rollout status daemonset/xonotic-node-exporter -n xonotic-observability
+kubectl rollout status deployment/xonotic-loki -n xonotic-observability
+kubectl rollout status daemonset/xonotic-alloy -n xonotic-observability
 kubectl rollout status deployment/xonotic-grafana -n xonotic-observability
 ```
 
@@ -64,12 +72,21 @@ kubectl port-forward -n xonotic-observability service/xonotic-prometheus 9090:90
 
 Open `http://127.0.0.1:9090`.
 
+Loki API, for readiness and direct LogQL verification:
+
+```bash
+kubectl port-forward -n xonotic-observability service/xonotic-loki 3100:3100
+```
+
+Check `http://127.0.0.1:3100/ready`. Normal log exploration should happen through Grafana rather than the Loki API.
+
 ## Dashboards
 
 Grafana provisions dashboards into the `Xonotic` folder:
 
 - `Xonotic Cluster Overview`: cluster node count, running pods, node pressure, node CPU, node memory, root disk utilization, node network throughput, top pod CPU, top pod memory, and pod restarts.
 - `Xonotic Allocator Operations`: backend HTTP request rate, backend request latency, allocation successes/failures, active match assignments, Xonotic namespace pod CPU/memory, pod restarts, RCON failures, map/mode verification failures, and an explicit Agones capacity TODO panel.
+- `Xonotic Platform Logs`: allocator backend logs, allocation failure filtering, RCON/`getstatus` errors, and Agones/Xonotic GameServer logs.
 
 ## Metrics
 
@@ -91,6 +108,13 @@ Kubernetes infrastructure metrics:
 - node CPU, memory, disk, filesystem, and network metrics from node-exporter.
 - pod/container CPU and memory metrics from kubelet/cAdvisor.
 - pod restarts, pod phases, node conditions, Deployment state, and resource-request metadata from kube-state-metrics.
+
+Kubernetes log labels:
+
+- `namespace`, `pod`, and `container` identify the workload source.
+- `app` is copied from the pod's `app` or `app.kubernetes.io/name` label.
+- `cluster="xonotic-mvp"` and `region="south-america"` identify this primary deployment.
+- `server_pool_id` is retained when a workload provides that pod label; it is not invented for unlabeled control-plane pods.
 
 ## Useful PromQL
 
@@ -155,12 +179,46 @@ Active match assignments:
 allocator_active_match_server_assignments
 ```
 
+## Useful LogQL
+
+Allocator backend logs:
+
+```logql
+{namespace="xonotic-allocator-backend", app="xonotic-allocator-backend"}
+```
+
+Allocation failures and capacity errors:
+
+```logql
+{namespace="xonotic-allocator-backend", app="xonotic-allocator-backend"}
+  |~ "(?i)(allocation.*(fail|error)|no.ready.*server|no_ready_servers)"
+```
+
+RCON and `getstatus` failures:
+
+```logql
+{namespace="xonotic-allocator-backend", app="xonotic-allocator-backend"}
+  |~ "(?i)((rcon|getstatus).*(fail|error|timeout)|(fail|error|timeout).*(rcon|getstatus))"
+```
+
+Xonotic GameServer logs:
+
+```logql
+{namespace="xonotic-agones", container="server"}
+```
+
+All logs from the primary cluster for a specific pod:
+
+```logql
+{cluster="xonotic-mvp", pod="POD_NAME"}
+```
+
 ## Test
 
-Check Pods:
+Check workloads and Pods:
 
 ```bash
-kubectl get pods -n xonotic-observability
+kubectl get deploy,daemonset,pod,svc -n xonotic-observability
 ```
 
 Check services remain internal:
@@ -195,6 +253,26 @@ kubectl port-forward -n xonotic-observability service/xonotic-prometheus 9090:90
 curl -fsS http://127.0.0.1:9090/api/v1/targets | rg 'allocator-backend|kube-state-metrics|node-exporter|kubernetes-kubelet|kubernetes-cadvisor'
 ```
 
+Verify Loki and Alloy:
+
+```bash
+kubectl rollout status deployment/xonotic-loki -n xonotic-observability
+kubectl rollout status daemonset/xonotic-alloy -n xonotic-observability
+kubectl logs -n xonotic-observability daemonset/xonotic-alloy --tail=100
+kubectl port-forward -n xonotic-observability service/xonotic-loki 3100:3100
+curl -fsS http://127.0.0.1:3100/ready
+curl -G -fsS http://127.0.0.1:3100/loki/api/v1/query_range \
+  --data-urlencode 'query={namespace="xonotic-allocator-backend"}' \
+  --data-urlencode 'limit=20'
+```
+
+Verify Grafana provisioned the Loki data source:
+
+```bash
+kubectl port-forward -n xonotic-observability service/xonotic-grafana 3000:3000
+curl -fsS -u admin:admin http://127.0.0.1:3000/api/datasources/uid/loki
+```
+
 Query Prometheus from the API:
 
 ```bash
@@ -215,12 +293,12 @@ Backend-derived allocation metrics and Kubernetes pod metrics are still availabl
 
 ## Regional / Multicluster Limitation
 
-This stack observes the primary South America control-plane cluster only. Europe and North America currently run game-server-plane resources without their own Prometheus/Grafana deployment.
+This stack observes metrics and logs from the primary South America control-plane cluster only. Europe and North America currently run game-server-plane resources without Alloy, Loki, or regional Prometheus deployments, so their GameServer logs are not sent to the primary Loki instance.
 
 Useful multicluster observability would require one of these follow-up designs:
 
-- one Prometheus per regional cluster with central Grafana/federation, or
-- central Prometheus scraping remote regional clusters with explicit credentials, API access, network reachability, and careful scrape limits.
+- one Prometheus and Alloy collector per regional cluster, with controlled forwarding/federation to a central observability plane, or
+- central collectors scraping remote regional clusters with explicit credentials, API access, network reachability, and careful query/ingestion limits.
 
 Do not bolt full federation into the small dev cluster until there is a clear capacity and access plan.
 
@@ -234,4 +312,8 @@ kube-state-metrics requests `20m` CPU and `64Mi` memory, limits at `100m` CPU an
 
 node-exporter runs once per node and requests `10m` CPU and `32Mi` memory per node, limits at `100m` CPU and `64Mi` memory per node.
 
-On a one-node dev cluster, the observability stack requests about `80m` CPU and `352Mi` memory total, with limits around `600m` CPU and `704Mi` memory. Each additional node adds one node-exporter Pod at `10m` CPU and `32Mi` memory requested.
+Loki requests `25m` CPU and `96Mi` memory, limits at `200m` CPU and `256Mi` memory, retains logs for 24 hours, and uses a `1Gi` bounded ephemeral volume. Logs are lost when the Loki Pod is recreated or the node disappears; this is intentional for the dev cluster.
+
+Alloy runs once per node and requests `20m` CPU and `64Mi` memory per node, limits at `100m` CPU and `128Mi` memory. It tails only pods on its own node and uses the Kubernetes API instead of privileged host mounts.
+
+On a one-node dev cluster, the complete observability stack requests about `125m` CPU and `512Mi` memory total, with limits around `900m` CPU and `1088Mi` memory. Each additional node adds one node-exporter Pod plus one Alloy Pod, requesting another `30m` CPU and `96Mi` memory. This is still appropriate for development, but operators should watch node memory and pod scheduling before increasing concurrent GameServer capacity.
