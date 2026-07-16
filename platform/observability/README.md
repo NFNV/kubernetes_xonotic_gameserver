@@ -2,19 +2,21 @@
 
 This directory contains the lightweight metrics and logging stack for the primary South America dev/control-plane cluster.
 
-It is intentionally not a production monitoring suite. It does not install Prometheus Operator, Alertmanager, Tempo, custom resource definitions, or persistent monitoring storage. Prometheus and Loki use bounded ephemeral volumes with short retention windows, and all services remain `ClusterIP` only.
+It is intentionally not a production monitoring suite. It does not install Prometheus Operator, Alertmanager, Tempo, custom resource definitions, or persistent metrics/log storage. Prometheus and Loki use bounded ephemeral volumes with short retention windows, while Grafana keeps its small SQLite configuration database on a 2Gi persistent volume. All services remain `ClusterIP` only.
 
 ## Components
 
 - Prometheus (`xonotic-prometheus`) scrapes metrics and stores short-lived time series for debugging and day-to-day operations.
 - Loki (`xonotic-loki`) stores compressed Kubernetes pod logs for up to 24 hours on a bounded `emptyDir` volume.
 - Grafana Alloy (`xonotic-alloy`) runs as a DaemonSet, discovers pods on its local node through the Kubernetes API, and forwards their logs to Loki without privileged host filesystem mounts.
-- Grafana (`xonotic-grafana`) reads Prometheus and Loki and serves provisioned metrics and logs dashboards through local port-forwarding.
+- Grafana (`xonotic-grafana`) reads Prometheus and Loki and serves provisioned metrics and logs dashboards through local port-forwarding. It runs as one `Recreate` replica and keeps `/var/lib/grafana` on a 2Gi PVC so migrations and provisioning state survive Pod replacement.
 - kube-state-metrics (`xonotic-kube-state-metrics`) exposes Kubernetes object and state metrics such as pod phases, restarts, node conditions, Deployment state, and resource requests.
 - node-exporter (`xonotic-node-exporter`) runs once per node and exposes node CPU, memory, disk, filesystem, and network metrics.
 - Prometheus also scrapes kubelet and cAdvisor metrics through the Kubernetes API server proxy for pod/container CPU and memory usage.
 
 In short: Prometheus stores metrics, Loki stores logs, Alloy collects logs, and Grafana visualizes both.
+
+Grafana uses SQLite only for this small dev deployment. WAL mode and bounded query/transaction retries reduce transient lock contention, and automatic suggested-plugin installation is disabled because the provisioned dashboards use built-in Prometheus and Loki visualizations. Periodic update checks and the unused Grafana-managed alert engine are disabled to avoid background work on the constrained node; Prometheus alerting is not configured in this MVP. Startup probes allow database migrations and provisioning to complete before liveness checks can restart the Pod.
 
 ## Deploy
 
@@ -40,6 +42,12 @@ kubectl rollout status daemonset/xonotic-node-exporter -n xonotic-observability
 kubectl rollout status deployment/xonotic-loki -n xonotic-observability
 kubectl rollout status daemonset/xonotic-alloy -n xonotic-observability
 kubectl rollout status deployment/xonotic-grafana -n xonotic-observability
+```
+
+Check the persistent Grafana volume:
+
+```bash
+kubectl get pvc xonotic-grafana-data -n xonotic-observability
 ```
 
 If backend metrics code changed, first rebuild and redeploy the allocator backend image so `/metrics` is available:
@@ -219,7 +227,36 @@ Check workloads and Pods:
 
 ```bash
 kubectl get deploy,daemonset,pod,svc -n xonotic-observability
+kubectl get pvc xonotic-grafana-data -n xonotic-observability
 ```
+
+Grafana startup and restart stability:
+
+```bash
+kubectl rollout restart deployment/xonotic-grafana -n xonotic-observability
+kubectl rollout status deployment/xonotic-grafana -n xonotic-observability --timeout=5m
+kubectl logs deployment/xonotic-grafana -n xonotic-observability --since=10m | \
+  grep -E 'SQLITE_BUSY|Datasource provisioning error' || true
+```
+
+The primary `e2-medium` node is deliberately small. If idle memory remains above 80% after startup settles, use a reviewed Terraform plan to evaluate `e2-standard-2`; do not change `infra/regions/south-america.tfvars` or apply the resize without accepting the added cost and GKE node-roll downtime:
+
+```bash
+source scripts/env.sh
+terraform -chdir=infra workspace select south-america
+terraform -chdir=infra plan \
+  -refresh=true \
+  -var-file=regions/south-america.tfvars \
+  -var="project_id=${GCP_PROJECT_ID}" \
+  -var="region=${GCP_REGION}" \
+  -var="zone=${GCP_ZONE}" \
+  -var="cluster_name=${GKE_CLUSTER_NAME}" \
+  -var="node_machine_type=e2-standard-2"
+```
+
+This is a plan-only command. The observed plan updates only `google_container_node_pool.primary` from `e2-medium` to `e2-standard-2`; applying it requires separate approval.
+
+GKE's managed metrics and logging agents also run in the primary cluster alongside this repository's Prometheus and Alloy stack. They provide Google Cloud integration but overlap with some project-level collection. Disabling managed GKE monitoring/logging could recover memory without a larger node, but it would remove that cloud-side visibility and requires a separate, reviewed infrastructure change; this observability hardening does not disable it automatically.
 
 Check services remain internal:
 

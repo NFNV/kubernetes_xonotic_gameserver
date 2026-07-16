@@ -21,5 +21,6 @@ resources:
   - grafana-dashboard-provider-configmap.yaml
   - grafana-dashboard-configmap.yaml
   - grafana-logs-dashboard-configmap.yaml
+  - grafana-pvc.yaml
   - grafana-deployment.yaml
   - grafana-service.yaml

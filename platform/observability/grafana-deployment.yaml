@@ -15,6 +15,9 @@ spec:
       labels:
         app: xonotic-grafana
     spec:
+      securityContext:
+        fsGroup: 472
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: grafana
           image: grafana/grafana:13.0.1-security-01
@@ -33,6 +36,43 @@ spec:
               value: Viewer
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
+            - name: GF_DATABASE_WAL
+              value: "true"
+            - name: GF_DATABASE_QUERY_RETRIES
+              value: "10"
+            - name: GF_DATABASE_TRANSACTION_RETRIES
+              value: "10"
+            - name: GF_PLUGINS_PREINSTALL_DISABLED
+              value: "true"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES
+              value: "false"
+            - name: GF_UNIFIED_ALERTING_ENABLED
+              value: "false"
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 6
           resources:
             requests:
               cpu: 25m
@@ -41,6 +81,8 @@ spec:
               cpu: 200m
               memory: 256Mi
           volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources
               readOnly: true
@@ -51,6 +93,9 @@ spec:
               mountPath: /var/lib/grafana/dashboards
               readOnly: true
       volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: xonotic-grafana-data
         - name: datasources
           configMap:
             name: xonotic-grafana-datasources

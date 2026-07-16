@@ -9,6 +9,8 @@ data:
     datasources:
       - name: Prometheus
         uid: prometheus
+        orgId: 1
+        version: 1
         type: prometheus
         access: proxy
         url: http://xonotic-prometheus.xonotic-observability.svc.cluster.local:9090
@@ -16,6 +18,8 @@ data:
         editable: false
       - name: Loki
         uid: loki
+        orgId: 1
+        version: 1
         type: loki
         access: proxy
         url: http://xonotic-loki.xonotic-observability.svc.cluster.local:3100
