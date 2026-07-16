@@ -1,0 +1,240 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: allocator-backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install --requirement allocator-backend/requirements.txt
+
+      - name: Compile backend source
+        run: python -m compileall -q allocator-backend
+
+  frontend:
+    name: Frontend production build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: allocator-frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: allocator-frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+  terraform:
+    name: Terraform static validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+
+      - name: Check Terraform formatting
+        run: terraform -chdir=infra fmt -check -recursive
+
+      - name: Initialize without a state backend
+        run: terraform -chdir=infra init -backend=false -input=false
+
+      - name: Validate Terraform configuration
+        run: terraform -chdir=infra validate
+
+  shell:
+    name: Shell and workflow validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+
+      - name: Run ShellCheck
+        run: git ls-files -z 'scripts/*.sh' | xargs -0 shellcheck
+
+      - name: Set up Go for actionlint
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+      - name: Validate workflow YAML
+        run: actionlint
+
+  manifests:
+    name: Kubernetes and observability validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install YAML parser
+        run: python -m pip install PyYAML==6.0.2
+
+      - name: Render Kustomize resources
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/xonotic-rendered
+          kubectl kustomize platform/allocator-backend/manifests > /tmp/xonotic-rendered/backend.yaml
+          kubectl kustomize platform/allocator-frontend/manifests > /tmp/xonotic-rendered/frontend.yaml
+          kubectl kustomize platform/postgres/manifests > /tmp/xonotic-rendered/postgres.yaml
+          kubectl kustomize platform/agones/manifests > /tmp/xonotic-rendered/agones.yaml
+          kubectl kustomize platform/observability > /tmp/xonotic-rendered/observability.yaml
+
+      - name: Validate Kubernetes schemas
+        run: |
+          docker run --rm -v /tmp/xonotic-rendered:/manifests:ro \
+            ghcr.io/yannh/kubeconform:v0.7.0 \
+            -strict -summary -ignore-missing-schemas /manifests
+
+      - name: Extract and validate provisioned configuration
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          import yaml
+
+          rendered = Path("/tmp/xonotic-rendered/observability.yaml")
+          documents = list(yaml.safe_load_all(rendered.read_text()))
+          config_maps = {
+              document["metadata"]["name"]: document.get("data", {})
+              for document in documents
+              if document and document.get("kind") == "ConfigMap"
+          }
+
+          dashboard_count = 0
+          for name, data in config_maps.items():
+              for key, value in data.items():
+                  if key.endswith(".json"):
+                      json.loads(value)
+                      dashboard_count += 1
+
+          if dashboard_count < 3:
+              raise SystemExit(f"expected at least 3 Grafana dashboards, found {dashboard_count}")
+
+          required = {
+              "xonotic-prometheus-config": ("prometheus.yml", "/tmp/prometheus.yml"),
+              "xonotic-loki-config": ("loki.yaml", "/tmp/loki.yaml"),
+              "xonotic-alloy-config": ("config.alloy", "/tmp/config.alloy"),
+          }
+          for config_map, (key, destination) in required.items():
+              value = config_maps.get(config_map, {}).get(key)
+              if not value:
+                  raise SystemExit(f"missing {config_map}/{key}")
+              Path(destination).write_text(value)
+
+          print(f"validated {dashboard_count} Grafana dashboard JSON documents")
+          PY
+
+      - name: Validate Prometheus configuration
+        run: |
+          mkdir -p /tmp/prometheus-serviceaccount
+          printf 'ci-validation-token\n' > /tmp/prometheus-serviceaccount/token
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -subj '/CN=xonotic-ci-validation' \
+            -days 1 \
+            -keyout /tmp/prometheus-serviceaccount/ca.key \
+            -out /tmp/prometheus-serviceaccount/ca.crt >/dev/null 2>&1
+          docker run --rm \
+            -v /tmp/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
+            -v /tmp/prometheus-serviceaccount:/var/run/secrets/kubernetes.io/serviceaccount:ro \
+            --entrypoint promtool \
+            prom/prometheus:v3.10.0 \
+            check config /etc/prometheus/prometheus.yml
+
+      - name: Validate Loki configuration
+        run: |
+          docker run --rm \
+            -v /tmp/loki.yaml:/etc/loki/loki.yaml:ro \
+            grafana/loki:3.7.0 \
+            -config.file=/etc/loki/loki.yaml -verify-config=true
+
+      - name: Validate Alloy configuration
+        run: |
+          docker run --rm \
+            -v /tmp/config.alloy:/etc/alloy/config.alloy:ro \
+            grafana/alloy:v1.16.1 \
+            validate /etc/alloy/config.alloy
+
+  container-builds:
+    name: Build ${{ matrix.name }} image
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: allocator backend
+            context: allocator-backend
+            cache_scope: allocator-backend
+          - name: allocator frontend
+            context: allocator-frontend
+            cache_scope: allocator-frontend
+          - name: Xonotic GameServer
+            context: server
+            cache_scope: xonotic-server
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build without pushing
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}

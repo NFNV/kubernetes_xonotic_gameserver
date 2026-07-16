@@ -51,6 +51,7 @@ Terraform + GKE + firewall rules
 - Tournament finalization with automatic active GameServer cleanup
 - Prometheus metrics, Loki logs, Alloy collection, and Grafana dashboards for platform health
 - Terraform, GHCR publishing, and dev scripts for infrastructure automation and cost control
+- GitHub Actions CI, immutable GHCR releases, and approval-gated manual Kubernetes deployments that remain healthy while clusters are offline
 
 The target concept is worldwide tournament server management: operators allocate dedicated servers, configure and verify them, expose player connection commands, record results, and release capacity when matches are complete.
 
@@ -101,6 +102,14 @@ This project targets a small GKE Standard development cluster:
 - Resource requests/limits and `Recreate` rollout strategy are used for a constrained single-node dev cluster.
 
 This is a portfolio-grade development platform, not a production-hardened service.
+
+## CI/CD
+
+Pull requests validate the backend, frontend production build, Terraform, shell scripts, Kubernetes manifests, observability configuration, and all three container builds without contacting GKE. Successful merges to `master` publish coordinated backend, frontend, and GameServer images to GHCR using immutable full-SHA tags.
+
+Control-plane and regional GameServer deployments are manual GitHub Actions workflows authenticated to GCP through OIDC and Workload Identity Federation. If a cost-controlled cluster is offline, deployment reports it as not provisioned without making normal CI or image publication unhealthy. Terraform apply/destroy remains in the local lifecycle scripts until regional state is explicitly migrated to a shared remote backend.
+
+See [`docs/ci-cd.md`](docs/ci-cd.md) for workflow architecture, WIF/IAM setup, GitHub Variables and Environments, rollback, and first-run commands.
 
 ## Screenshots
 
@@ -211,7 +220,7 @@ Tear down cloud resources:
 - Improved Fleet autoscaling and scheduling
 - Alerts for allocation, RCON, verification, and capacity issues
 - Multi-node regional pools and stronger cross-cluster identity
-- CI/CD deployment automation from GitHub to GKE
+- Remote Terraform state and approval-gated regional apply/destroy workflows
 
 ## Repository Map
 

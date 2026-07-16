@@ -18,6 +18,7 @@ scripts/.generated/
 .local/
 .direnv/
 .envrc.local
+gha-creds-*.json
 
 # Python tooling caches
 __pycache__/

@@ -1,0 +1,93 @@
+name: Terraform Regional Plans
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: Region to produce an offline configuration plan for
+        required: true
+        default: south-america
+        type: choice
+        options:
+          - south-america
+          - europe
+          - north-america
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-plan-${{ github.event.pull_request.number || inputs.region || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regions:
+    name: Resolve Terraform regions
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Build plan matrix
+        id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SELECTED_REGION: ${{ inputs.region }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            echo 'matrix={"region":["south-america","europe","north-america"]}' >> "${GITHUB_OUTPUT}"
+          else
+            matrix="$(jq -cn --arg region "${SELECTED_REGION}" '{region:[$region]}')"
+            echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+          fi
+
+  plan:
+    name: Plan ${{ matrix.region }} configuration
+    needs: regions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.regions.outputs.matrix) }}
+    env:
+      GOOGLE_OAUTH_ACCESS_TOKEN: ci-offline-configuration-plan
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+
+      - name: Initialize without a state backend
+        run: terraform -chdir=infra init -backend=false -input=false
+
+      - name: Select isolated empty workspace
+        run: terraform -chdir=infra workspace new "ci-${{ matrix.region }}"
+
+      - name: Produce offline configuration plan
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra plan \
+            -input=false \
+            -lock=false \
+            -refresh=false \
+            -var-file="regions/${{ matrix.region }}.tfvars" \
+            -var="project_id=xonotic-ci-validation" \
+            -out="/tmp/${{ matrix.region }}.tfplan" \
+            -no-color | tee "/tmp/${{ matrix.region }}.plan.txt"
+
+      - name: Summarize configuration plan
+        run: |
+          summary="$(grep -E '^Plan:' "/tmp/${{ matrix.region }}.plan.txt" | tail -n 1)"
+          {
+            echo "## Terraform configuration plan: ${{ matrix.region }}"
+            echo
+            echo "- Workspace: \`ci-${{ matrix.region }}\`"
+            echo "- Variables: \`infra/regions/${{ matrix.region }}.tfvars\`"
+            echo "- Result: ${summary}"
+            echo
+            echo "> This is a \`-refresh=false\` plan from an empty GitHub runner. It validates configuration shape but is not a live drift plan and cannot be applied."
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -1,0 +1,228 @@
+name: Deploy Regional Game Plane
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: Regional GameServer plane to deploy
+        required: true
+        default: south-america
+        type: choice
+        options:
+          - south-america
+          - europe
+          - north-america
+          - all
+      image_sha:
+        description: Full Git SHA of the immutable Xonotic GameServer image
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  regions:
+    name: Resolve selected regions
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Build region matrix
+        id: matrix
+        env:
+          SELECTED_REGION: ${{ inputs.region }}
+          SA_CLUSTER: ${{ vars.GCP_SA_CLUSTER_NAME }}
+          SA_ZONE: ${{ vars.GCP_SA_CLUSTER_ZONE }}
+          EU_CLUSTER: ${{ vars.GCP_EU_CLUSTER_NAME }}
+          EU_ZONE: ${{ vars.GCP_EU_CLUSTER_ZONE }}
+          NA_CLUSTER: ${{ vars.GCP_NA_CLUSTER_NAME }}
+          NA_ZONE: ${{ vars.GCP_NA_CLUSTER_ZONE }}
+        run: |
+          set -euo pipefail
+          for value in SA_CLUSTER SA_ZONE EU_CLUSTER EU_ZONE NA_CLUSTER NA_ZONE; do
+            if [[ -z "${!value}" ]]; then
+              echo "Required GitHub variable ${value} is empty." >&2
+              exit 1
+            fi
+          done
+
+          case "${SELECTED_REGION}" in
+            south-america)
+              matrix="$(jq -cn --arg c "${SA_CLUSTER}" --arg z "${SA_ZONE}" '{include:[{region:"south-america",cluster:$c,zone:$z,pool:"south-america-default"}]}')"
+              ;;
+            europe)
+              matrix="$(jq -cn --arg c "${EU_CLUSTER}" --arg z "${EU_ZONE}" '{include:[{region:"europe",cluster:$c,zone:$z,pool:"europe-default"}]}')"
+              ;;
+            north-america)
+              matrix="$(jq -cn --arg c "${NA_CLUSTER}" --arg z "${NA_ZONE}" '{include:[{region:"north-america",cluster:$c,zone:$z,pool:"north-america-default"}]}')"
+              ;;
+            all)
+              matrix="$(jq -cn \
+                --arg sac "${SA_CLUSTER}" --arg saz "${SA_ZONE}" \
+                --arg euc "${EU_CLUSTER}" --arg euz "${EU_ZONE}" \
+                --arg nac "${NA_CLUSTER}" --arg naz "${NA_ZONE}" \
+                '{include:[
+                  {region:"south-america",cluster:$sac,zone:$saz,pool:"south-america-default"},
+                  {region:"europe",cluster:$euc,zone:$euz,pool:"europe-default"},
+                  {region:"north-america",cluster:$nac,zone:$naz,pool:"north-america-default"}
+                ]}')"
+              ;;
+            *)
+              echo "Unsupported region: ${SELECTED_REGION}" >&2
+              exit 1
+              ;;
+          esac
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+
+  deploy:
+    name: Deploy ${{ matrix.region }} GameServer plane
+    needs: regions
+    runs-on: ubuntu-latest
+    environment: game-plane-${{ matrix.region }}
+    concurrency:
+      group: game-plane-${{ matrix.region }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.regions.outputs.matrix) }}
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      IMAGE_SHA: ${{ inputs.image_sha }}
+      IMAGE: ghcr.io/nfnv/xonotic-server:sha-${{ inputs.image_sha }}
+      AGONES_NAMESPACE: xonotic-agones
+      FLEET_NAME: xonotic-fleet
+    steps:
+      - name: Validate release revision
+        run: |
+          set -euo pipefail
+          if [[ ! "${IMAGE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_sha must be a full 40-character Git SHA." >&2
+            exit 1
+          fi
+
+      - name: Check out release revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.image_sha }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Check whether the regional cluster exists
+        id: cluster
+        env:
+          CLUSTER: ${{ matrix.cluster }}
+          ZONE: ${{ matrix.zone }}
+        run: |
+          set -euo pipefail
+          output_file="$(mktemp)"
+          if gcloud container clusters describe "${CLUSTER}" \
+            --project "${GCP_PROJECT_ID}" \
+            --zone "${ZONE}" >"${output_file}" 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if grep -Eqi '(404|not found)' "${output_file}"; then
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+            {
+              echo "## ${{ matrix.region }} GameServer deployment skipped"
+              echo
+              echo "Cluster \`${CLUSTER}\` is not currently provisioned."
+              if [[ "${{ matrix.region }}" == "south-america" ]]; then
+                echo "Run \`./scripts/up.sh\` before deploying this region."
+              else
+                echo "Run \`./scripts/up-region.sh ${{ matrix.region }}\` before deploying this region."
+              fi
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          cat "${output_file}" >&2
+          echo "Unable to determine cluster state; this is an access or connectivity failure." >&2
+          exit 1
+
+      - name: Get regional GKE credentials
+        if: steps.cluster.outputs.exists == 'true'
+        uses: google-github-actions/get-gke-credentials@v3
+        with:
+          cluster_name: ${{ matrix.cluster }}
+          location: ${{ matrix.zone }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Verify regional prerequisites
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          kubectl get namespace agones-system >/dev/null
+          kubectl get customresourcedefinition/fleets.agones.dev >/dev/null
+          kubectl get customresourcedefinition/fleetautoscalers.autoscaling.agones.dev >/dev/null
+          kubectl get namespace "${AGONES_NAMESPACE}" >/dev/null
+          kubectl get secret xonotic-rcon -n "${AGONES_NAMESPACE}" >/dev/null
+          rcon_value="$(kubectl get secret xonotic-rcon -n "${AGONES_NAMESPACE}" -o jsonpath='{.data.XONOTIC_RCON_PASSWORD}')"
+          if [[ -z "${rcon_value}" ]]; then
+            echo "Required Secret key xonotic-rcon/XONOTIC_RCON_PASSWORD is missing or empty." >&2
+            exit 1
+          fi
+
+      - name: Apply immutable Fleet release
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          cp -R platform/agones/manifests /tmp/xonotic-game-plane
+          sed -i "s/newTag: connectivity-checkpoint/newTag: sha-${IMAGE_SHA}/" /tmp/xonotic-game-plane/kustomization.yaml
+          kubectl kustomize /tmp/xonotic-game-plane | grep -F "${IMAGE}" >/dev/null
+          kubectl apply -k /tmp/xonotic-game-plane
+
+      - name: Wait for Ready capacity on the new image
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 600))
+          while (( SECONDS < deadline )); do
+            fleet_ready="$(kubectl get fleet "${FLEET_NAME}" -n "${AGONES_NAMESPACE}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+            fleet_ready="${fleet_ready:-0}"
+            image_ready="$(kubectl get gameservers -n "${AGONES_NAMESPACE}" -o json | jq --arg image "${IMAGE}" '[.items[] | select(.status.state == "Ready") | .spec.template.spec.containers[]? | select(.image == $image)] | length')"
+            echo "${{ matrix.region }}: Fleet Ready=${fleet_ready}, Ready on requested image=${image_ready}"
+            if (( fleet_ready >= 1 && image_ready >= 1 )); then
+              break
+            fi
+            sleep 10
+          done
+
+          if (( fleet_ready < 1 || image_ready < 1 )); then
+            echo "Timed out waiting for Ready GameServer capacity on ${IMAGE}." >&2
+            kubectl describe fleet "${FLEET_NAME}" -n "${AGONES_NAMESPACE}" || true
+            kubectl get gameservers -n "${AGONES_NAMESPACE}" -o wide || true
+            exit 1
+          fi
+
+          kubectl get fleet "${FLEET_NAME}" -n "${AGONES_NAMESPACE}"
+          kubectl get gameservers -n "${AGONES_NAMESPACE}" -o wide
+          kubectl get gameservers -n "${AGONES_NAMESPACE}" \
+            -o custom-columns='NAME:.metadata.name,STATE:.status.state,IMAGE:.spec.template.spec.containers[0].image,ADDRESS:.status.address,PORT:.status.ports[0].port'
+
+      - name: Summarize regional deployment
+        if: always() && steps.cluster.outputs.exists == 'true'
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## ${{ matrix.region }} GameServer deployment"
+            echo
+            echo "- Result: \`${JOB_STATUS}\`"
+            echo "- Cluster: \`${{ matrix.cluster }}\`"
+            echo "- Zone: \`${{ matrix.zone }}\`"
+            echo "- Server pool: \`${{ matrix.pool }}\`"
+            echo "- Image: \`${IMAGE}\`"
+            echo "- Allocated GameServers were not deleted; Agones updates Ready capacity first."
+          } >> "${GITHUB_STEP_SUMMARY}"

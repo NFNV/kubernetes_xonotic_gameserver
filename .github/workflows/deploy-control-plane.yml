@@ -1,0 +1,197 @@
+name: Deploy Control Plane
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: Full Git SHA whose backend and frontend images should be deployed
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: control-plane-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy South America control plane
+    runs-on: ubuntu-latest
+    environment: control-plane-dev
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_CLUSTER_NAME: ${{ vars.GCP_SA_CLUSTER_NAME }}
+      GCP_CLUSTER_ZONE: ${{ vars.GCP_SA_CLUSTER_ZONE }}
+      IMAGE_SHA: ${{ inputs.image_sha }}
+      CONTROL_NAMESPACE: xonotic-allocator-backend
+      OBSERVABILITY_NAMESPACE: xonotic-observability
+    steps:
+      - name: Validate release revision
+        run: |
+          set -euo pipefail
+          if [[ ! "${IMAGE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_sha must be a full 40-character Git SHA." >&2
+            exit 1
+          fi
+
+      - name: Check out release revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.image_sha }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Check whether the control-plane cluster exists
+        id: cluster
+        run: |
+          set -euo pipefail
+          output_file="$(mktemp)"
+          if gcloud container clusters describe "${GCP_CLUSTER_NAME}" \
+            --project "${GCP_PROJECT_ID}" \
+            --zone "${GCP_CLUSTER_ZONE}" >"${output_file}" 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if grep -Eqi '(404|not found)' "${output_file}"; then
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+            {
+              echo "## Control-plane deployment skipped"
+              echo
+              echo "South America control-plane cluster \`${GCP_CLUSTER_NAME}\` is not currently provisioned."
+              echo "Run \`./scripts/up.sh\` before deploying this release."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          cat "${output_file}" >&2
+          echo "Unable to determine cluster state; this is an access or connectivity failure, not an offline-cluster skip." >&2
+          exit 1
+
+      - name: Get GKE credentials
+        if: steps.cluster.outputs.exists == 'true'
+        uses: google-github-actions/get-gke-credentials@v3
+        with:
+          cluster_name: ${{ vars.GCP_SA_CLUSTER_NAME }}
+          location: ${{ vars.GCP_SA_CLUSTER_ZONE }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Verify runtime Secrets
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          if ! kubectl get namespace "${CONTROL_NAMESPACE}" >/dev/null 2>&1; then
+            echo "Namespace ${CONTROL_NAMESPACE} is missing. Run ./scripts/up.sh to bootstrap runtime Secrets." >&2
+            exit 1
+          fi
+
+          required_secrets=(
+            "xonotic-postgres:POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD"
+            "xonotic-admin-auth:ADMIN_USERNAME ADMIN_PASSWORD_HASH ADMIN_SESSION_SECRET"
+            "xonotic-rcon:XONOTIC_RCON_PASSWORD"
+            "xonotic-multicluster-kubeconfig:config XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT XONOTIC_EUROPE_KUBE_CONTEXT XONOTIC_NORTH_AMERICA_KUBE_CONTEXT"
+          )
+
+          for requirement in "${required_secrets[@]}"; do
+            secret="${requirement%%:*}"
+            keys="${requirement#*:}"
+            if ! kubectl get secret "${secret}" -n "${CONTROL_NAMESPACE}" >/dev/null 2>&1; then
+              echo "Required Secret ${CONTROL_NAMESPACE}/${secret} is missing." >&2
+              exit 1
+            fi
+            for key in ${keys}; do
+              value="$(kubectl get secret "${secret}" -n "${CONTROL_NAMESPACE}" -o "jsonpath={.data.${key}}")"
+              if [[ -z "${value}" ]]; then
+                echo "Required key ${secret}/${key} is missing or empty." >&2
+                exit 1
+              fi
+            done
+          done
+
+          echo "Required runtime Secrets and keys are present; no values were printed or modified."
+
+      - name: Prepare immutable Kustomize releases
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          cp -R platform/allocator-backend/manifests /tmp/xonotic-backend
+          cp -R platform/allocator-frontend/manifests /tmp/xonotic-frontend
+          sed -i "s/newTag: allocator-backend/newTag: sha-${IMAGE_SHA}/" /tmp/xonotic-backend/kustomization.yaml
+          sed -i "s/newTag: allocator-frontend/newTag: sha-${IMAGE_SHA}/" /tmp/xonotic-frontend/kustomization.yaml
+          kubectl kustomize /tmp/xonotic-backend | grep -F "ghcr.io/nfnv/xonotic-allocator-backend:sha-${IMAGE_SHA}" >/dev/null
+          kubectl kustomize /tmp/xonotic-frontend | grep -F "ghcr.io/nfnv/xonotic-allocator-frontend:sha-${IMAGE_SHA}" >/dev/null
+
+      - name: Apply control-plane resources
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          kubectl apply -k platform/postgres/manifests
+          kubectl apply -k /tmp/xonotic-backend
+          kubectl apply -k /tmp/xonotic-frontend
+          kubectl apply -k platform/observability
+
+      - name: Wait for control-plane rollouts
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          kubectl rollout status deployment/xonotic-postgres -n "${CONTROL_NAMESPACE}" --timeout=10m
+          kubectl rollout status deployment/xonotic-allocator-backend -n "${CONTROL_NAMESPACE}" --timeout=10m
+          kubectl rollout status deployment/xonotic-allocator-frontend -n "${CONTROL_NAMESPACE}" --timeout=10m
+          for deployment in xonotic-prometheus xonotic-grafana xonotic-loki xonotic-kube-state-metrics; do
+            kubectl rollout status "deployment/${deployment}" -n "${OBSERVABILITY_NAMESPACE}" --timeout=10m
+          done
+          for daemonset in xonotic-alloy xonotic-node-exporter; do
+            kubectl rollout status "daemonset/${daemonset}" -n "${OBSERVABILITY_NAMESPACE}" --timeout=10m
+          done
+
+      - name: Run in-cluster smoke tests
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          pod="xonotic-release-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            kubectl delete pod "${pod}" -n "${CONTROL_NAMESPACE}" --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          kubectl run "${pod}" -n "${CONTROL_NAMESPACE}" \
+            --image=curlimages/curl:8.12.1 \
+            --restart=Never \
+            --attach \
+            --command -- sh -ec '
+              curl -fsS http://xonotic-allocator-backend:8080/healthz >/dev/null
+              curl -fsS http://xonotic-allocator-backend:8080/server-pools >/dev/null
+              curl -fsS http://xonotic-allocator-backend:8080/server-pools/capacity >/dev/null
+              curl -fsS http://xonotic-allocator-frontend:8080/ >/dev/null
+              curl -fsS http://xonotic-prometheus.xonotic-observability.svc.cluster.local:9090/-/ready >/dev/null
+              curl -fsS http://xonotic-grafana.xonotic-observability.svc.cluster.local:3000/api/health >/dev/null
+              curl -fsS http://xonotic-loki.xonotic-observability.svc.cluster.local:3100/ready >/dev/null
+            '
+
+      - name: Summarize deployment
+        if: always() && steps.cluster.outputs.exists == 'true'
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## South America control-plane deployment"
+            echo
+            echo "- Result: \`${JOB_STATUS}\`"
+            echo "- Git SHA: \`${IMAGE_SHA}\`"
+            echo "- Cluster: \`${GCP_CLUSTER_NAME}\`"
+            echo "- Zone: \`${GCP_CLUSTER_ZONE}\`"
+            echo "- Backend: \`ghcr.io/nfnv/xonotic-allocator-backend:sha-${IMAGE_SHA}\`"
+            echo "- Frontend: \`ghcr.io/nfnv/xonotic-allocator-frontend:sha-${IMAGE_SHA}\`"
+            echo "- Observability: reconciled from the same release revision"
+          } >> "${GITHUB_STEP_SUMMARY}"

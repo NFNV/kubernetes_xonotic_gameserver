@@ -1,0 +1,130 @@
+name: Publish Images
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    branches:
+      - master
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: Full Git SHA to publish; defaults to the selected workflow ref
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-images-${{ github.event.workflow_run.head_sha || inputs.image_sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish ${{ matrix.name }}
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: allocator backend
+            context: allocator-backend
+            image: xonotic-allocator-backend
+            description: Xonotic allocator control-plane backend
+          - name: allocator frontend
+            context: allocator-frontend
+            image: xonotic-allocator-frontend
+            description: Xonotic allocator admin and player frontend
+          - name: Xonotic GameServer
+            context: server
+            image: xonotic-server
+            description: Agones-managed Xonotic dedicated GameServer
+    steps:
+      - name: Resolve release revision
+        id: revision
+        env:
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          REQUESTED_SHA: ${{ inputs.image_sha }}
+        run: |
+          set -euo pipefail
+          sha="${WORKFLOW_RUN_SHA:-${REQUESTED_SHA:-${GITHUB_SHA}}}"
+          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_sha must be a full 40-character Git SHA: ${sha}" >&2
+            exit 1
+          fi
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out release revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.revision.outputs.sha }}
+
+      - name: Derive image tags and labels
+        id: image
+        env:
+          IMAGE_NAME: ${{ matrix.image }}
+          IMAGE_DESCRIPTION: ${{ matrix.description }}
+          RELEASE_SHA: ${{ steps.revision.outputs.sha }}
+        run: |
+          set -euo pipefail
+          owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/${IMAGE_NAME}"
+          created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "image=${image}"
+            echo "created=${created}"
+            echo "tags<<EOF"
+            echo "${image}:sha-${RELEASE_SHA}"
+            if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+              echo "${image}:master"
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.revision.outputs.sha }}
+            org.opencontainers.image.created=${{ steps.image.outputs.created }}
+            org.opencontainers.image.description=${{ matrix.description }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Summarize release
+        env:
+          IMAGE_TAGS: ${{ steps.image.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          RELEASE_SHA: ${{ steps.revision.outputs.sha }}
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo
+            echo "- Git SHA: \`${RELEASE_SHA}\`"
+            echo "- Digest: \`${DIGEST}\`"
+            echo "- Tags:"
+            while IFS= read -r tag; do
+              [[ -n "${tag}" ]] && echo "  - \`${tag}\`"
+            done <<< "${IMAGE_TAGS}"
+          } >> "${GITHUB_STEP_SUMMARY}"

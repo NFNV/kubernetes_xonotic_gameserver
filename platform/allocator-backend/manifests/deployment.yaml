@@ -5,6 +5,7 @@ metadata:
   namespace: xonotic-allocator-backend
 spec:
   replicas: 1
+  revisionHistoryLimit: 5
   strategy:
     type: Recreate
   selector:
