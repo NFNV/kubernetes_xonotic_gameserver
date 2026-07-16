@@ -15,7 +15,7 @@ server_pools = {
 }
 
 environment       = "mvp"
-node_machine_type = "e2-medium"
+node_machine_type = "e2-standard-2"
 node_disk_size_gb = 100
 node_disk_type    = "pd-standard"
 node_count        = 1

@@ -239,7 +239,7 @@ kubectl logs deployment/xonotic-grafana -n xonotic-observability --since=10m | \
   grep -E 'SQLITE_BUSY|Datasource provisioning error' || true
 ```
 
-The primary `e2-medium` node is deliberately small. If idle memory remains above 80% after startup settles, use a reviewed Terraform plan to evaluate `e2-standard-2`; do not change `infra/regions/south-america.tfvars` or apply the resize without accepting the added cost and GKE node-roll downtime:
+The primary South America node uses `e2-standard-2` so the centralized control plane, observability stack, and warm GameServer have safe rollout headroom. The resize was approved after the earlier `e2-medium` node remained around 87-93% memory and 96% of allocatable CPU requests. To review the configured capacity without applying changes:
 
 ```bash
 source scripts/env.sh
@@ -250,11 +250,10 @@ terraform -chdir=infra plan \
   -var="project_id=${GCP_PROJECT_ID}" \
   -var="region=${GCP_REGION}" \
   -var="zone=${GCP_ZONE}" \
-  -var="cluster_name=${GKE_CLUSTER_NAME}" \
-  -var="node_machine_type=e2-standard-2"
+  -var="cluster_name=${GKE_CLUSTER_NAME}"
 ```
 
-This is a plan-only command. The observed plan updates only `google_container_node_pool.primary` from `e2-medium` to `e2-standard-2`; applying it requires separate approval.
+The resize changed only `google_container_node_pool.primary` from `e2-medium` to `e2-standard-2`. GKE rolled the single node, so machine-type changes should still be treated as disruptive even when Terraform reports an in-place node-pool update.
 
 GKE's managed metrics and logging agents also run in the primary cluster alongside this repository's Prometheus and Alloy stack. They provide Google Cloud integration but overlap with some project-level collection. Disabling managed GKE monitoring/logging could recover memory without a larger node, but it would remove that cloud-side visibility and requires a separate, reviewed infrastructure change; this observability hardening does not disable it automatically.
 
