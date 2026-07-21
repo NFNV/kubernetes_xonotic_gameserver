@@ -1,6 +1,11 @@
 # Xonotic Kubernetes Game Server Platform
 
 [![CI](https://github.com/NFNV/kubernetes_xonotic_gameserver/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/NFNV/kubernetes_xonotic_gameserver/actions/workflows/ci.yml)
+[![CD](https://img.shields.io/badge/CD-manual-2ea44f?logo=githubactions&logoColor=white)](docs/ci-cd.md#control-plane-deployment)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-GKE-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+[![Agones](https://img.shields.io/badge/Agones-GameServer%20Orchestration-4285F4)](https://agones.dev/)
+[![Terraform](https://img.shields.io/badge/Terraform-1.6%2B-844FBA?logo=terraform&logoColor=white)](https://developer.hashicorp.com/terraform)
+[![GHCR](https://img.shields.io/badge/Registry-GHCR-181717?logo=github&logoColor=white)](https://github.com/NFNV/kubernetes_xonotic_gameserver/pkgs/container/xonotic-server)
 
 A Kubernetes-native platform for deploying and operating dedicated Xonotic game servers with Agones on GKE. It includes an admin control plane for allocating match servers, configuring map/mode through RCON, verifying live state with `getstatus`, running tournament workflows, observing platform health, and cleaning up resources.
 
