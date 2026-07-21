@@ -1,5 +1,7 @@
 # Xonotic Kubernetes Game Server Platform
 
+[![CI](https://github.com/NFNV/kubernetes_xonotic_gameserver/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/NFNV/kubernetes_xonotic_gameserver/actions/workflows/ci.yml)
+
 A Kubernetes-native platform for deploying and operating dedicated Xonotic game servers with Agones on GKE. It includes an admin control plane for allocating match servers, configuring map/mode through RCON, verifying live state with `getstatus`, running tournament workflows, observing platform health, and cleaning up resources.
 
 The goal is not to build a generic tournament bracket app. The tournament workflow is the practical use case for demonstrating the infrastructure and operations behind dedicated multiplayer game servers on Kubernetes.
