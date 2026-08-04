@@ -54,6 +54,15 @@ button:disabled {
   padding: 30px 0 64px;
 }
 
+.admin-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 28px;
+  padding: 10px 2px 0;
+  color: #71889b;
+  font-size: 0.78rem;
+}
+
 .hero {
   display: flex;
   justify-content: space-between;

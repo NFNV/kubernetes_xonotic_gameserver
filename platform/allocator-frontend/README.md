@@ -69,21 +69,25 @@ Match Room state currently lives only in allocator backend memory. It is lost wh
 
 Tags:
 
-- stable tag: `allocator-frontend`
-- trace tag: `sha-<12-char-commit>`
+- release tag: `v<semantic-version>` from the root `VERSION` file
+- immutable deployment tag: `sha-<40-character-commit>`
+- convenience tag: `master`
+
+The admin footer reads `VITE_APP_VERSION` at build time. Container builds accept `APP_VERSION`; builds that omit it display `local-dev`.
 
 ## Build And Push
 
 Repository-native path:
 
-- push changes under `allocator-frontend/` to `master`, or run the `publish-allocator-frontend-image.yml` workflow manually in GitHub Actions
+- merge to `master` and let `publish-images.yml` publish the coordinated release, or dispatch that workflow manually with a full Git SHA
 
 Direct local path:
 
 ```bash
 export ALLOCATOR_FRONTEND_IMAGE="ghcr.io/nfnv/xonotic-allocator-frontend:allocator-frontend"
+export APP_VERSION="$(tr -d '[:space:]' < VERSION)"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-docker buildx build --platform linux/amd64 -t "$ALLOCATOR_FRONTEND_IMAGE" --push ./allocator-frontend
+docker buildx build --platform linux/amd64 --build-arg "APP_VERSION=${APP_VERSION}" -t "$ALLOCATOR_FRONTEND_IMAGE" --push ./allocator-frontend
 ```
 
 ## Deploy

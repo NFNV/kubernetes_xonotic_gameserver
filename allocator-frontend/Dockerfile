@@ -1,6 +1,9 @@
 FROM node:20-bookworm-slim AS build
 WORKDIR /app
 
+ARG APP_VERSION=local-dev
+ENV VITE_APP_VERSION=${APP_VERSION}
+
 COPY package.json vite.config.js index.html ./
 COPY src ./src
 

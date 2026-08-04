@@ -58,9 +58,15 @@ The repository does not currently contain pytest tests or a frontend `npm test` 
 ghcr.io/nfnv/xonotic-allocator-backend:sha-<40-character-sha>
 ghcr.io/nfnv/xonotic-allocator-frontend:sha-<40-character-sha>
 ghcr.io/nfnv/xonotic-server:sha-<40-character-sha>
+
+ghcr.io/nfnv/xonotic-allocator-backend:v<semantic-version>
+ghcr.io/nfnv/xonotic-allocator-frontend:v<semantic-version>
+ghcr.io/nfnv/xonotic-server:v<semantic-version>
 ```
 
-`master` is a convenience pointer. Kubernetes release workflows accept only a full Git SHA and deploy only `sha-...` tags. Each image includes OCI source, revision, creation-time, and description labels; the workflow summary records its digest.
+The root `VERSION` file owns the coordinated semantic version and is embedded into the frontend at build time. Existing semantic-version tags are never overwritten; subsequent builds of the same version continue publishing immutable SHA tags and preserve the existing release tag.
+
+`master` is a convenience pointer. Kubernetes release workflows accept only a full Git SHA and deploy only `sha-...` tags. Each image includes OCI source, version, revision, creation-time, and description labels; the workflow summary records its digest.
 
 ### Control-Plane Deployment
 
