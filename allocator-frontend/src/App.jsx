@@ -21,6 +21,10 @@ const VERIFIED_CONFIG_NOTE = "Only verified map/mode combinations are shown.";
 const SUPPORTED_BRACKET_SIZES = [2, 4, 8];
 const ADMIN_AUTH_EVENT = "xonotic-admin-auth-required";
 const ADMIN_AUTH_NOT_CONFIGURED_MESSAGE = "Admin auth is not configured. Generate ADMIN_PASSWORD_HASH and ADMIN_SESSION_SECRET, update scripts/env.sh, then rerun scripts/up.sh or recreate the Kubernetes Secret.";
+const APP_VERSION = String(import.meta.env.VITE_APP_VERSION || "").trim() || "local-dev";
+const PLATFORM_VERSION = APP_VERSION === "local-dev" || APP_VERSION.startsWith("v")
+  ? APP_VERSION
+  : `v${APP_VERSION}`;
 const FALLBACK_GAME_CONFIG_OPTIONS = {
   default: {
     requested_game_mode: "dm",
@@ -228,6 +232,14 @@ function connectCommand(endpoint) {
 
 function StatusPill({ ok, label }) {
   return <span className={`status-pill ${ok ? "ok" : "error"}`}>{label}</span>;
+}
+
+function AdminFooter() {
+  return (
+    <footer className="admin-footer">
+      <span>Platform version: {PLATFORM_VERSION}</span>
+    </footer>
+  );
 }
 
 function adminLoginErrorMessage(err) {
@@ -2516,6 +2528,7 @@ export default function App() {
             </button>
           </form>
         </section>
+        <AdminFooter />
       </main>
     );
   }
@@ -4033,6 +4046,7 @@ export default function App() {
       </section>
       </aside>
       </div>
+      <AdminFooter />
     </main>
   );
 }
