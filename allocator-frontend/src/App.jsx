@@ -22,9 +22,18 @@ const SUPPORTED_BRACKET_SIZES = [2, 4, 8];
 const ADMIN_AUTH_EVENT = "xonotic-admin-auth-required";
 const ADMIN_AUTH_NOT_CONFIGURED_MESSAGE = "Admin auth is not configured. Generate ADMIN_PASSWORD_HASH and ADMIN_SESSION_SECRET, update scripts/env.sh, then rerun scripts/up.sh or recreate the Kubernetes Secret.";
 const APP_VERSION = String(import.meta.env.VITE_APP_VERSION || "").trim() || "local-dev";
+const GIT_SHA = String(import.meta.env.VITE_GIT_SHA || "").trim() || "unknown";
+const BUILD_TIME = String(import.meta.env.VITE_BUILD_TIME || "").trim() || "unknown";
 const PLATFORM_VERSION = APP_VERSION === "local-dev" || APP_VERSION.startsWith("v")
   ? APP_VERSION
   : `v${APP_VERSION}`;
+const FRONTEND_RELEASE_METADATA = Object.freeze({
+  service: "xonotic-allocator-frontend",
+  version: APP_VERSION,
+  revision: GIT_SHA,
+  revision_short: /^[0-9a-f]{40}$/i.test(GIT_SHA) ? GIT_SHA.slice(0, 7) : "unknown",
+  built_at: BUILD_TIME,
+});
 const FALLBACK_GAME_CONFIG_OPTIONS = {
   default: {
     requested_game_mode: "dm",
@@ -234,10 +243,85 @@ function StatusPill({ ok, label }) {
   return <span className={`status-pill ${ok ? "ok" : "error"}`}>{label}</span>;
 }
 
-function AdminFooter() {
+function formatUtcTimestamp(value) {
+  if (!value || value === "unknown") {
+    return "unknown";
+  }
+
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return "unknown";
+  }
+
+  return `${new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
+  }).format(timestamp)} UTC`;
+}
+
+function releaseValue(value, fallback = "unknown") {
+  return String(value || "").trim() || fallback;
+}
+
+function AdminFooter({ backendRelease }) {
+  const displayedVersion = releaseValue(backendRelease?.version, FRONTEND_RELEASE_METADATA.version);
+  const displayedVersionLabel = displayedVersion === "local-dev" || displayedVersion.startsWith("v")
+    ? displayedVersion
+    : `v${displayedVersion}`;
+  const displayedRevision = releaseValue(
+    backendRelease?.revision_short,
+    FRONTEND_RELEASE_METADATA.revision_short
+  );
+  const deployedAt = formatUtcTimestamp(backendRelease?.deployed_at);
+  const releaseMismatch = Boolean(
+    backendRelease
+    && (
+      releaseValue(backendRelease.version) !== FRONTEND_RELEASE_METADATA.version
+      || releaseValue(backendRelease.revision) !== FRONTEND_RELEASE_METADATA.revision
+    )
+  );
+
   return (
     <footer className="admin-footer">
-      <span>Platform version: {PLATFORM_VERSION}</span>
+      <div className="admin-release-line">
+        <span>Platform {displayedVersionLabel}</span>
+        <span aria-hidden="true">·</span>
+        <span>revision {displayedRevision}</span>
+        <span aria-hidden="true">·</span>
+        <span>{deployedAt === "unknown" ? "deployment time unknown" : `deployed ${deployedAt}`}</span>
+      </div>
+      {releaseMismatch && (
+        <p className="release-mismatch">Release mismatch: frontend and backend were built from different revisions</p>
+      )}
+      <details className="release-details">
+        <summary>Release details</summary>
+        <div className="release-details-grid">
+          <section>
+            <h3>Backend</h3>
+            <dl>
+              <div><dt>Version</dt><dd>{releaseValue(backendRelease?.version)}</dd></div>
+              <div><dt>Revision</dt><dd>{releaseValue(backendRelease?.revision)}</dd></div>
+              <div><dt>Built</dt><dd>{formatUtcTimestamp(backendRelease?.built_at)}</dd></div>
+              <div><dt>Deployed</dt><dd>{deployedAt}</dd></div>
+              <div><dt>Environment</dt><dd>{releaseValue(backendRelease?.environment, "local")}</dd></div>
+              <div><dt>Cluster</dt><dd>{releaseValue(backendRelease?.cluster, "local")}</dd></div>
+            </dl>
+          </section>
+          <section>
+            <h3>Frontend</h3>
+            <dl>
+              <div><dt>Version</dt><dd>{PLATFORM_VERSION}</dd></div>
+              <div><dt>Revision</dt><dd>{FRONTEND_RELEASE_METADATA.revision}</dd></div>
+              <div><dt>Built</dt><dd>{formatUtcTimestamp(FRONTEND_RELEASE_METADATA.built_at)}</dd></div>
+            </dl>
+          </section>
+        </div>
+      </details>
     </footer>
   );
 }
@@ -965,6 +1049,7 @@ function PlayerTournamentView({
 
 export default function App() {
   const [backendHealthy, setBackendHealthy] = useState(false);
+  const [backendRelease, setBackendRelease] = useState(null);
   const [fleetStatus, setFleetStatus] = useState(EMPTY_FLEET);
   const [gameservers, setGameservers] = useState([]);
   const [matches, setMatches] = useState([]);
@@ -1114,6 +1199,15 @@ export default function App() {
     }
   }
 
+  async function loadReleaseMetadata() {
+    try {
+      const response = await fetchJson("/api/version");
+      setBackendRelease(response);
+    } catch {
+      setBackendRelease(null);
+    }
+  }
+
   async function loginAdmin(event) {
     event.preventDefault();
     setLoggingIn(true);
@@ -1212,6 +1306,7 @@ export default function App() {
   }
 
   async function loadDashboard({ silent = false, source = "Refresh", suppressError = false } = {}) {
+    void loadReleaseMetadata();
     if (silent) {
       setRefreshing(true);
     } else {
@@ -2528,7 +2623,7 @@ export default function App() {
             </button>
           </form>
         </section>
-        <AdminFooter />
+        <AdminFooter backendRelease={backendRelease} />
       </main>
     );
   }
@@ -4046,7 +4141,7 @@ export default function App() {
       </section>
       </aside>
       </div>
-      <AdminFooter />
+      <AdminFooter backendRelease={backendRelease} />
     </main>
   );
 }

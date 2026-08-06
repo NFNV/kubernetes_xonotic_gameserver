@@ -31,6 +31,7 @@ jobs:
     outputs:
       sha: ${{ steps.revision.outputs.sha }}
       version: ${{ steps.version.outputs.version }}
+      created: ${{ steps.version.outputs.created }}
     steps:
       - name: Resolve release revision
         id: revision
@@ -61,6 +62,7 @@ jobs:
             exit 1
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "${GITHUB_OUTPUT}"
 
   release:
     name: Publish ${{ matrix.name }}
@@ -74,14 +76,17 @@ jobs:
             context: allocator-backend
             image: xonotic-allocator-backend
             description: Xonotic allocator control-plane backend
+            include_build_metadata: true
           - name: allocator frontend
             context: allocator-frontend
             image: xonotic-allocator-frontend
             description: Xonotic allocator admin and player frontend
+            include_build_metadata: true
           - name: Xonotic GameServer
             context: server
             image: xonotic-server
             description: Agones-managed Xonotic dedicated GameServer
+            include_build_metadata: false
     steps:
       - name: Check out release revision
         uses: actions/checkout@v4
@@ -93,14 +98,11 @@ jobs:
         env:
           IMAGE_NAME: ${{ matrix.image }}
           IMAGE_DESCRIPTION: ${{ matrix.description }}
-          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
         run: |
           set -euo pipefail
           owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/${IMAGE_NAME}"
-          created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           echo "image=${image}" >> "${GITHUB_OUTPUT}"
-          echo "created=${created}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -144,6 +146,25 @@ jobs:
             echo "semantic_published=${semantic_published}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Prepare coordinated build arguments
+        id: build_metadata
+        env:
+          INCLUDE_BUILD_METADATA: ${{ matrix.include_build_metadata }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_TIME: ${{ needs.prepare.outputs.created }}
+        run: |
+          set -euo pipefail
+          {
+            echo "build_args<<EOF"
+            if [[ "${INCLUDE_BUILD_METADATA}" == "true" ]]; then
+              echo "APP_VERSION=${VERSION}"
+              echo "GIT_SHA=${RELEASE_SHA}"
+              echo "BUILD_TIME=${BUILD_TIME}"
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Build and push image
         id: build
         uses: docker/build-push-action@v6
@@ -152,12 +173,12 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
-          build-args: ${{ matrix.context == 'allocator-frontend' && format('APP_VERSION={0}', needs.prepare.outputs.version) || '' }}
+          build-args: ${{ steps.build_metadata.outputs.build_args }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.prepare.outputs.sha }}
             org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
-            org.opencontainers.image.created=${{ steps.image.outputs.created }}
+            org.opencontainers.image.created=${{ needs.prepare.outputs.created }}
             org.opencontainers.image.description=${{ matrix.description }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}

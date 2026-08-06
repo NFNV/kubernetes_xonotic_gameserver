@@ -16,12 +16,40 @@ from flask import Flask, Response, g, jsonify, request, session
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from kubernetes.config.config_exception import ConfigException
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, Info, generate_latest
 from werkzeug.exceptions import BadRequest, HTTPException, UnsupportedMediaType
 from werkzeug.security import check_password_hash
 
 
 APP = Flask(__name__)
+
+RELEASE_METADATA_DEFAULTS = {
+    "APP_VERSION": "local-dev",
+    "GIT_SHA": "unknown",
+    "BUILD_TIME": "unknown",
+    "DEPLOYED_AT": "unknown",
+    "DEPLOYMENT_ENVIRONMENT": "local",
+    "CLUSTER_NAME": "local",
+}
+
+
+def release_environment_value(name: str) -> str:
+    return os.environ.get(name, "").strip() or RELEASE_METADATA_DEFAULTS[name]
+
+
+def release_metadata() -> dict[str, str]:
+    revision = release_environment_value("GIT_SHA")
+    revision_short = revision[:7] if re.fullmatch(r"[0-9a-fA-F]{40}", revision) else "unknown"
+    return {
+        "service": "xonotic-allocator-backend",
+        "version": release_environment_value("APP_VERSION"),
+        "revision": revision,
+        "revision_short": revision_short,
+        "built_at": release_environment_value("BUILD_TIME"),
+        "deployed_at": release_environment_value("DEPLOYED_AT"),
+        "environment": release_environment_value("DEPLOYMENT_ENVIRONMENT"),
+        "cluster": release_environment_value("CLUSTER_NAME"),
+    }
 
 HTTP_REQUEST_COUNT = Counter(
     "allocator_backend_http_requests_total",
@@ -52,6 +80,16 @@ MAP_MODE_VERIFICATION_FAILURES = Counter(
     "allocator_map_mode_verification_failures_total",
     "Failed requested map/mode verifications after server configuration.",
     ("requested_game_mode", "requested_map", "reason"),
+)
+BACKEND_BUILD_INFO = Info(
+    "allocator_backend_build",
+    "Allocator backend build metadata.",
+)
+BACKEND_BUILD_INFO.info(
+    {
+        "version": release_environment_value("APP_VERSION"),
+        "revision": release_environment_value("GIT_SHA"),
+    }
 )
 
 AGONES_NAMESPACE = os.environ.get("AGONES_NAMESPACE", "xonotic-agones")
@@ -5174,6 +5212,11 @@ def healthz():
     if DB_MIGRATION_ERROR:
         response["database"]["last_error"] = DB_MIGRATION_ERROR
     return jsonify(response)
+
+
+@APP.get("/version")
+def version():
+    return jsonify(release_metadata())
 
 
 @APP.get("/metrics")

@@ -41,6 +41,7 @@ The application workflows deliberately do not create or destroy clusters. A miss
 `.github/workflows/ci.yml` runs on pull requests and pushes to `master`:
 
 - installs backend dependencies and compiles the Python source
+- runs the lightweight backend unit tests, including the public release-metadata contract
 - runs `npm ci` and the frontend production build
 - checks Terraform formatting, initializes without a backend, and validates the configuration
 - checks shell syntax, ShellCheck findings, and workflow YAML with `actionlint`
@@ -48,7 +49,7 @@ The application workflows deliberately do not create or destroy clusters. A miss
 - validates the provisioned Grafana dashboard JSON and Prometheus, Loki, and Alloy configuration
 - builds all three `linux/amd64` images without pushing on pull requests
 
-The repository does not currently contain pytest tests or a frontend `npm test` script. CI reports compilation and production-build health honestly rather than presenting nonexistent test suites as coverage.
+The repository does not currently contain a frontend `npm test` script. CI runs the backend standard-library unit tests and reports frontend production-build health without presenting a nonexistent browser test suite as coverage.
 
 ### Image Publication
 
@@ -64,7 +65,7 @@ ghcr.io/nfnv/xonotic-allocator-frontend:v<semantic-version>
 ghcr.io/nfnv/xonotic-server:v<semantic-version>
 ```
 
-The root `VERSION` file owns the coordinated semantic version and is embedded into the frontend at build time. Existing semantic-version tags are never overwritten; subsequent builds of the same version continue publishing immutable SHA tags and preserve the existing release tag.
+The root `VERSION` file owns the coordinated semantic version. One publication timestamp, full release SHA, and semantic version are passed to both control-plane image builds as `BUILD_TIME`, `GIT_SHA`, and `APP_VERSION`. Existing semantic-version tags are never overwritten; subsequent builds of the same version continue publishing immutable SHA tags and preserve the existing release tag.
 
 `master` is a convenience pointer. Kubernetes release workflows accept only a full Git SHA and deploy only `sha-...` tags. Each image includes OCI source, version, revision, creation-time, and description labels; the workflow summary records its digest.
 
@@ -72,7 +73,22 @@ The root `VERSION` file owns the coordinated semantic version and is embedded in
 
 `.github/workflows/deploy-control-plane.yml` targets only `xonotic-mvp` in `southamerica-west1-a`. It requires a full `image_sha` and the protected `control-plane-dev` environment.
 
-The workflow checks the cluster and required runtime Secrets, applies PostgreSQL, immutable backend/frontend releases, and observability, waits for workloads, then performs in-cluster HTTP smoke tests. It never prints or replaces PostgreSQL, admin-auth, RCON, or multicluster kubeconfig Secret values. Use `./scripts/up.sh` to bootstrap or recreate those runtime Secrets before the first GitHub deployment.
+The workflow checks the cluster and required runtime Secrets, reads `VERSION`, creates one UTC deployment timestamp, and prepares temporary backend/frontend Kustomize patches. Those patches add version/revision/deployment labels and annotations and inject `DEPLOYED_AT`, `DEPLOYMENT_ENVIRONMENT`, and `CLUSTER_NAME` into the backend before a single apply and rollout.
+
+After rollout, the workflow verifies the exact SHA-tagged Deployment images and calls `/version` from inside the cluster. A version, revision, environment, cluster, or deployment-time mismatch fails the deployment. It never prints or replaces PostgreSQL, admin-auth, RCON, or multicluster kubeconfig Secret values. Use `./scripts/up.sh` to bootstrap or recreate those runtime Secrets before the first GitHub deployment.
+
+### Release Metadata Flow
+
+```text
+VERSION + release Git SHA + publication timestamp
+  -> backend/frontend image build arguments and OCI labels
+  -> immutable sha-<full-sha> images in GHCR
+  -> manual control-plane deployment timestamp/environment/cluster
+  -> temporary Kustomize pod-template metadata
+  -> backend /version + Admin View release footer + Prometheus build info
+```
+
+Build time identifies when an image was created. Deployment time identifies when that already-built image was rolled out to a specific environment and cluster. Redeploying the same SHA therefore preserves build identity but receives a new deployment timestamp.
 
 ### Regional GameServer Deployment
 
@@ -218,6 +234,21 @@ gh workflow run deploy-game-plane.yml -f region=all -f image_sha="${RELEASE_SHA}
 gh workflow run terraform-regions.yml -f region=europe
 ```
 
+After the control-plane workflow succeeds, verify the running identity through the frontend proxy and Kubernetes metadata:
+
+```bash
+kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-frontend 18080:8080
+curl -fsS http://127.0.0.1:18080/version
+
+kubectl get deployment xonotic-allocator-backend \
+  -n xonotic-allocator-backend \
+  -o jsonpath='{.spec.template.metadata.annotations}'
+
+kubectl get deployment xonotic-allocator-backend \
+  -n xonotic-allocator-backend \
+  -o jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
 ## Rollback
 
 Preferred control-plane rollback:
@@ -241,6 +272,7 @@ Local checks do not contact or mutate GCP:
 
 ```bash
 python -m compileall -q allocator-backend
+python -m unittest discover -s allocator-backend -p 'test_*.py'
 npm --prefix allocator-frontend ci
 npm --prefix allocator-frontend run build
 terraform -chdir=infra fmt -check -recursive

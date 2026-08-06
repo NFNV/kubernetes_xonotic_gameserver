@@ -15,6 +15,12 @@ spec:
     metadata:
       labels:
         app: xonotic-allocator-backend
+        app.kubernetes.io/version: local-dev
+      annotations:
+        platform.xonotic/revision: unknown
+        platform.xonotic/deployed-at: unknown
+        platform.xonotic/environment: local
+        platform.xonotic/cluster: local
     spec:
       serviceAccountName: xonotic-allocator-backend
       containers:
@@ -28,6 +34,12 @@ spec:
               value: xonotic-fleet
             - name: GAME_LABEL
               value: xonotic
+            - name: DEPLOYED_AT
+              value: unknown
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: local
+            - name: CLUSTER_NAME
+              value: local
             - name: XONOTIC_MULTICLUSTER_KUBECONFIG
               value: /var/run/xonotic/kubeconfig/config
             - name: XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT
