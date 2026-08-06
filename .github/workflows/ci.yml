@@ -34,6 +34,9 @@ jobs:
       - name: Compile backend source
         run: python -m compileall -q allocator-backend
 
+      - name: Run backend tests
+        run: python -m unittest discover -s allocator-backend -p 'test_*.py'
+
   frontend:
     name: Frontend production build
     runs-on: ubuntu-latest
