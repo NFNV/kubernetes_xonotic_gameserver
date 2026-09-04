@@ -58,6 +58,14 @@ After Terraform creates the cluster, `up-region.sh` fetches kubeconfig credentia
 
 It intentionally does not deploy the allocator backend, frontend, PostgreSQL, or observability stack into secondary regions.
 
+Both bring-up scripts use client-side apply for Agones when Helm 4 is detected
+(`--server-side=false`); Helm 3 keeps its existing behavior. This avoids the
+`x-kubernetes-patch-merge-key` / `x-kubernetes-patch-strategy` typed-patch schema
+errors during CRD installation. Helm 4.1.1 supports this flag for both install
+and upgrade. After this failure, rerun the same bring-up command with the fix;
+do not delete Agones CRDs or destroy the cluster to recover. The retry runs the
+normal bring-up flow, not just the Helm step.
+
 It also applies the least-privilege `xonotic-regional-allocator` ServiceAccount and namespaced RBAC used by the central backend. That identity can create/read `GameServerAllocation` resources, read Fleet/GameServer state, and delete allocated GameServers in `xonotic-agones`; it has no cluster-wide permissions.
 
 Useful inspection commands:
