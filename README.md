@@ -118,6 +118,28 @@ Control-plane and regional GameServer deployments are manual GitHub Actions work
 
 See [`docs/ci-cd.md`](docs/ci-cd.md) for workflow architecture, WIF/IAM setup, GitHub Variables and Environments, rollback, and first-run commands.
 
+## Release Identity
+
+The root [`VERSION`](VERSION) file is the semantic application-version source. Published images receive both `v<version>` release tags and immutable `sha-<full-git-sha>` tags; Kubernetes deployments always select the SHA tag.
+
+Build metadata (`version`, Git revision, and image build time) is embedded in the backend and frontend images. Deployment metadata (`deployed_at`, environment, and cluster) is injected by the manual control-plane deployment workflow, so rebuilding an image and deploying it are represented as separate events. The Admin View footer shows the running version, short revision, and deployment time and warns if frontend and backend artifacts do not match.
+
+The public read-only `GET /version` endpoint reports the running backend release without exposing runtime secrets. Prometheus also exports `allocator_backend_build_info` with only stable version and revision labels.
+
+With the frontend port-forward active:
+
+```bash
+curl -fsS http://127.0.0.1:18080/version
+
+kubectl get deployment xonotic-allocator-backend \
+  -n xonotic-allocator-backend \
+  -o jsonpath='{.spec.template.metadata.annotations}'
+
+kubectl get deployment xonotic-allocator-backend \
+  -n xonotic-allocator-backend \
+  -o jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
 ## Screenshots
 
 ![Admin Dashboard](docs/screenshots/admin-dashboard.png)

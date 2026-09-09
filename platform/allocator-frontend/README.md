@@ -73,7 +73,7 @@ Tags:
 - immutable deployment tag: `sha-<40-character-commit>`
 - convenience tag: `master`
 
-The admin footer reads `VITE_APP_VERSION` at build time. Container builds accept `APP_VERSION`; builds that omit it display `local-dev`.
+The admin footer combines backend `/api/version` deployment metadata with frontend build metadata. Container builds accept `APP_VERSION`, `GIT_SHA`, and `BUILD_TIME`, which become `VITE_APP_VERSION`, `VITE_GIT_SHA`, and `VITE_BUILD_TIME`; builds that omit them display safe local values. A frontend/backend version or revision mismatch is visible but does not block the UI.
 
 ## Build And Push
 
@@ -86,8 +86,15 @@ Direct local path:
 ```bash
 export ALLOCATOR_FRONTEND_IMAGE="ghcr.io/nfnv/xonotic-allocator-frontend:allocator-frontend"
 export APP_VERSION="$(tr -d '[:space:]' < VERSION)"
+export GIT_SHA="$(git rev-parse HEAD)"
+export BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-docker buildx build --platform linux/amd64 --build-arg "APP_VERSION=${APP_VERSION}" -t "$ALLOCATOR_FRONTEND_IMAGE" --push ./allocator-frontend
+docker buildx build --platform linux/amd64 \
+  --build-arg "APP_VERSION=${APP_VERSION}" \
+  --build-arg "GIT_SHA=${GIT_SHA}" \
+  --build-arg "BUILD_TIME=${BUILD_TIME}" \
+  -t "$ALLOCATOR_FRONTEND_IMAGE" \
+  --push ./allocator-frontend
 ```
 
 ## Deploy

@@ -15,6 +15,12 @@ spec:
     metadata:
       labels:
         app: xonotic-allocator-frontend
+        app.kubernetes.io/version: local-dev
+      annotations:
+        platform.xonotic/revision: unknown
+        platform.xonotic/deployed-at: unknown
+        platform.xonotic/environment: local
+        platform.xonotic/cluster: local
     spec:
       containers:
         - name: frontend

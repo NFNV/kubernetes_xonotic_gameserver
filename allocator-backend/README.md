@@ -73,6 +73,8 @@ Use `docs/tournament-map-mode-verification.md` and `scripts/verify-tournament-ma
 ## API
 
 - `GET /healthz`
+- `GET /version`
+- `GET /metrics`
 - `GET /admin/session`
 - `POST /admin/login`
 - `POST /admin/logout`
@@ -105,6 +107,10 @@ Use `docs/tournament-map-mode-verification.md` and `scripts/verify-tournament-ma
 - `POST /matches/<match_id>/admin/change-map`
 - `POST /allocated-servers/<gameserver_name>/terminate`
 - `POST /allocate`
+
+`GET /version` is public and read-only. It reports the semantic application version, full and short Git revision, image build time, deployment time, deployment environment, and cluster without returning credentials or other runtime configuration. Local images and manifests use stable `local-dev`/`unknown`/`local` fallbacks.
+
+Prometheus exposes the same stable build identity as `allocator_backend_build_info{version="...",revision="..."} 1`. Deployment timestamps are intentionally excluded from metric labels.
 
 `POST /allocate` remains available as a direct/manual allocation test endpoint. The operator UI should prefer Match Rooms; direct allocation is an advanced/debug path.
 
@@ -302,6 +308,12 @@ Example successful allocation response:
 
 ## Runtime Configuration
 
+- `APP_VERSION`: image build version; defaults to `local-dev`
+- `GIT_SHA`: image build revision; defaults to `unknown`
+- `BUILD_TIME`: UTC image build time; defaults to `unknown`
+- `DEPLOYED_AT`: UTC control-plane deployment time; defaults to `unknown`
+- `DEPLOYMENT_ENVIRONMENT`: deployment environment; defaults to `local`
+- `CLUSTER_NAME`: target control-plane cluster; defaults to `local`
 - `AGONES_NAMESPACE`: defaults to `xonotic-agones`
 - `FLEET_NAME`: defaults to `xonotic-fleet`
 - `GAME_LABEL`: defaults to `xonotic`
