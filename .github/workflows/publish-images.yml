@@ -152,7 +152,10 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
-          build-args: ${{ matrix.context == 'allocator-frontend' && format('APP_VERSION={0}', needs.prepare.outputs.version) || '' }}
+          build-args: |
+            APP_VERSION=${{ needs.prepare.outputs.version }}
+            GIT_SHA=${{ needs.prepare.outputs.sha }}
+            BUILD_TIME=${{ steps.image.outputs.created }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.prepare.outputs.sha }}

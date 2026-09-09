@@ -8,6 +8,11 @@ readonly template_cfg="/opt/xonotic-config/server.cfg"
 readonly server_cfg="${data_dir}/server.cfg"
 readonly autoexec_cfg="${data_dir}/server.autoexec.cfg"
 
+printf 'Xonotic GameServer release: version=%s revision=%s built_at=%s\n' \
+  "${APP_VERSION:-local-dev}" \
+  "${GIT_SHA:-unknown}" \
+  "${BUILD_TIME:-unknown}"
+
 select_start_map() {
   local fixed_start_map="${XONOTIC_START_MAP:-}"
   local random_start_map_enable="${XONOTIC_RANDOM_START_MAP_ENABLE:-0}"

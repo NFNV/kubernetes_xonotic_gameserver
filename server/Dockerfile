@@ -23,6 +23,10 @@ RUN curl -fsSL -o "/tmp/xonotic-${XONOTIC_VERSION}.zip" "https://dl.xonotic.org/
 
 FROM debian:bookworm-slim
 
+ARG APP_VERSION=local-dev
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -52,6 +56,9 @@ WORKDIR /opt/xonotic
 ENV HOME=/home/xonotic
 ENV XONOTIC_HOME=/opt/xonotic
 ENV XONOTIC_USERDIR=/home/xonotic/.xonotic
+ENV APP_VERSION=${APP_VERSION}
+ENV GIT_SHA=${GIT_SHA}
+ENV BUILD_TIME=${BUILD_TIME}
 ENV XONOTIC_PORT=26000
 ENV XONOTIC_HOSTNAME="Xonotic Dedicated Server"
 ENV XONOTIC_MAXPLAYERS=12
