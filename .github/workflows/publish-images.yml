@@ -86,7 +86,7 @@ jobs:
             context: server
             image: xonotic-server
             description: Agones-managed Xonotic dedicated GameServer
-            include_build_metadata: false
+            include_build_metadata: true
     steps:
       - name: Check out release revision
         uses: actions/checkout@v4

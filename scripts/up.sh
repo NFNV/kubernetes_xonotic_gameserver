@@ -246,7 +246,13 @@ EOF
 
 helm repo add agones https://agones.dev/chart/stable --force-update
 helm repo update
-helm upgrade --install agones agones/agones \
+agones_helm_command=(helm upgrade --install agones agones/agones)
+# Agones CRD schema extensions fail Helm 4 server-side apply; keep Helm 3's client-side behavior.
+helm_version="$(helm version --short)"
+if [[ "${helm_version}" == v4.* ]]; then
+  agones_helm_command+=(--server-side=false)
+fi
+"${agones_helm_command[@]}" \
   --namespace "${agones_system_namespace}" \
   --create-namespace \
   --set agones.ping.install=false \
