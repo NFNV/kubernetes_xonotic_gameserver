@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: xonotic-kube-state-metrics-custom-resources
+  namespace: xonotic-observability
+data:
+  custom-resource-state.yaml: |
+    kind: CustomResourceStateMetrics
+    spec:
+      resources:
+        - groupVersionKind:
+            group: agones.dev
+            version: v1
+            kind: Fleet
+          metricNamePrefix: agones_fleet
+          labelsFromPath:
+            namespace: [metadata, namespace]
+            fleet: [metadata, name]
+          metrics:
+            - name: ready_replicas
+              help: Number of Ready GameServer replicas in the Agones Fleet.
+              each:
+                type: Gauge
+                gauge:
+                  path: [status, readyReplicas]

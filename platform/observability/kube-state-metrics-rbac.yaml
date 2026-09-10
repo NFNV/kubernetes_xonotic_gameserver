@@ -49,6 +49,10 @@ rules:
       - storageclasses
       - volumeattachments
     verbs: ["list", "watch"]
+  - apiGroups: ["agones.dev"]
+    resources:
+      - fleets
+    verbs: ["list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

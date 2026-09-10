@@ -19,6 +19,8 @@ spec:
       containers:
         - name: kube-state-metrics
           image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0
+          args:
+            - --custom-resource-state-config-file=/etc/kube-state-metrics/custom-resource-state.yaml
           ports:
             - name: http
               containerPort: 8080
@@ -40,3 +42,11 @@ spec:
             runAsUser: 65534
             seccompProfile:
               type: RuntimeDefault
+          volumeMounts:
+            - name: custom-resource-state
+              mountPath: /etc/kube-state-metrics
+              readOnly: true
+      volumes:
+        - name: custom-resource-state
+          configMap:
+            name: xonotic-kube-state-metrics-custom-resources

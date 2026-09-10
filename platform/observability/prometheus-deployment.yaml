@@ -39,12 +39,18 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
+            - name: alert-rules
+              mountPath: /etc/prometheus/rules
+              readOnly: true
             - name: data
               mountPath: /prometheus
       volumes:
         - name: config
           configMap:
             name: xonotic-prometheus-config
+        - name: alert-rules
+          configMap:
+            name: xonotic-prometheus-alert-rules
         - name: data
           emptyDir:
             sizeLimit: 512Mi
