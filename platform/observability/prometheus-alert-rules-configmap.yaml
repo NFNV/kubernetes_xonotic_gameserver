@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: xonotic-prometheus-alert-rules
+  namespace: xonotic-observability
+data:
+  alerts.yml: |
+    groups:
+      - name: xonotic-platform
+        rules:
+          - alert: AllocatorBackendDown
+            expr: up{job="allocator-backend"} == 0
+            for: 2m
+            labels:
+              severity: critical
+              component: allocator-backend
+            annotations:
+              summary: Allocator backend is unavailable
+              description: Prometheus has been unable to scrape the allocator backend for more than two minutes.
+
+          - alert: AllocationFailures
+            expr: sum(increase(allocator_allocation_failures_total[10m])) > 0
+            for: 1m
+            labels:
+              severity: warning
+              component: allocator-backend
+            annotations:
+              summary: GameServer allocations are failing
+              description: At least one allocator GameServer allocation failed during the last ten minutes.
+
+          - alert: RconFailures
+            expr: sum(increase(allocator_rcon_command_failures_total[10m])) > 0
+            for: 1m
+            labels:
+              severity: warning
+              component: allocator-backend
+            annotations:
+              summary: Xonotic RCON commands are failing
+              description: At least one RCON command failed during the last ten minutes.
+
+          - alert: MapModeVerificationFailures
+            expr: sum(increase(allocator_map_mode_verification_failures_total[10m])) > 0
+            for: 1m
+            labels:
+              severity: warning
+              component: allocator-backend
+            annotations:
+              summary: Live map or mode verification is failing
+              description: At least one configured match failed getstatus map/mode verification during the last ten minutes.
+
+          - alert: PodRestartingTooMuch
+            expr: sum by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total{namespace=~"xonotic-allocator-backend|xonotic-agones|xonotic-observability"}[15m])) >= 3
+            for: 2m
+            labels:
+              severity: warning
+              component: kubernetes
+            annotations:
+              summary: Xonotic platform pod is restarting repeatedly
+              description: Container {{ $labels.namespace }}/{{ $labels.pod }}/{{ $labels.container }} restarted at least three times in the last fifteen minutes.
+
+          - alert: NodeMemoryHigh
+            expr: 100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 85
+            for: 10m
+            labels:
+              severity: warning
+              component: kubernetes
+            annotations:
+              summary: Kubernetes node memory utilization is high
+              description: Node exporter target {{ $labels.instance }} has reported more than 85 percent memory utilization for ten minutes.
+
+          - alert: NoReadyGameServers
+            expr: (agones_fleet_ready_replicas{namespace="xonotic-agones"} == 0) and on() (up{job="kube-state-metrics"} == 1)
+            for: 2m
+            labels:
+              severity: warning
+              component: agones
+            annotations:
+              summary: Agones Fleet has no Ready GameServers
+              description: Fleet {{ $labels.fleet }} in namespace {{ $labels.namespace }} has had zero Ready GameServers for more than two minutes.

@@ -172,6 +172,11 @@ jobs:
 
           required = {
               "xonotic-prometheus-config": ("prometheus.yml", "/tmp/prometheus.yml"),
+              "xonotic-prometheus-alert-rules": ("alerts.yml", "/tmp/alerts.yml"),
+              "xonotic-kube-state-metrics-custom-resources": (
+                  "custom-resource-state.yaml",
+                  "/tmp/custom-resource-state.yaml",
+              ),
               "xonotic-loki-config": ("loki.yaml", "/tmp/loki.yaml"),
               "xonotic-alloy-config": ("config.alloy", "/tmp/config.alloy"),
           }
@@ -180,6 +185,10 @@ jobs:
               if not value:
                   raise SystemExit(f"missing {config_map}/{key}")
               Path(destination).write_text(value)
+
+          custom_resource_state = yaml.safe_load(Path("/tmp/custom-resource-state.yaml").read_text())
+          if custom_resource_state.get("kind") != "CustomResourceStateMetrics":
+              raise SystemExit("invalid kube-state-metrics custom-resource-state configuration")
 
           print(f"validated {dashboard_count} Grafana dashboard JSON documents")
           PY
@@ -195,10 +204,16 @@ jobs:
             -out /tmp/prometheus-serviceaccount/ca.crt >/dev/null 2>&1
           docker run --rm \
             -v /tmp/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
+            -v /tmp/alerts.yml:/etc/prometheus/rules/alerts.yml:ro \
             -v /tmp/prometheus-serviceaccount:/var/run/secrets/kubernetes.io/serviceaccount:ro \
             --entrypoint promtool \
             prom/prometheus:v3.10.0 \
             check config /etc/prometheus/prometheus.yml
+          docker run --rm \
+            -v /tmp/alerts.yml:/etc/prometheus/rules/alerts.yml:ro \
+            --entrypoint promtool \
+            prom/prometheus:v3.10.0 \
+            check rules /etc/prometheus/rules/alerts.yml
 
       - name: Validate Loki configuration
         run: |

@@ -909,7 +909,22 @@ data:
             "uid": "prometheus"
           },
           "fieldConfig": {
-            "defaults": {},
+            "defaults": {
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            },
             "overrides": []
           },
           "gridPos": {
@@ -920,16 +935,28 @@ data:
           },
           "id": 11,
           "options": {
-            "code": {
-              "language": "plaintext",
-              "showLineNumbers": false,
-              "showMiniMap": false
+            "colorMode": "background",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
             },
-            "content": "Agones Fleet and GameServer Ready/Allocated capacity is not shown yet because this lightweight stack does not currently scrape Agones controller metrics or configure kube-state-metrics custom-resource-state for Agones CRDs. TODO: expose Agones Fleet/GameServer capacity through Agones controller metrics or kube-state-metrics CRD metrics, then add panels by fleet, namespace, pool, and region.",
-            "mode": "markdown"
+            "textMode": "auto"
           },
-          "title": "Agones Capacity Metrics TODO",
-          "type": "text"
+          "targets": [
+            {
+              "expr": "agones_fleet_ready_replicas{namespace=\"xonotic-agones\"}",
+              "legendFormat": "{{fleet}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Ready GameServers by Fleet",
+          "type": "stat"
         }
       ],
       "refresh": "15s",
