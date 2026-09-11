@@ -10,7 +10,7 @@ It is intentionally not a production monitoring suite. It does not install Prome
 - Loki (`xonotic-loki`) stores compressed Kubernetes pod logs for up to 24 hours on a bounded `emptyDir` volume.
 - Grafana Alloy (`xonotic-alloy`) runs as a DaemonSet, discovers pods on its local node through the Kubernetes API, and forwards their logs to Loki without privileged host filesystem mounts.
 - Grafana (`xonotic-grafana`) reads Prometheus and Loki and serves provisioned metrics and logs dashboards through local port-forwarding. It runs as one `Recreate` replica and keeps `/var/lib/grafana` on a 2Gi PVC so migrations and provisioning state survive Pod replacement.
-- kube-state-metrics (`xonotic-kube-state-metrics`) exposes Kubernetes object and state metrics such as pod phases, restarts, node conditions, Deployment state, and resource requests. Its custom-resource-state configuration also exports the primary Agones Fleet's `status.readyReplicas` as `agones_fleet_ready_replicas`.
+- kube-state-metrics (`xonotic-kube-state-metrics`) exposes Kubernetes object and state metrics such as pod phases, restarts, node conditions, Deployment state, and resource requests. Its custom-resource-state configuration also exports the primary Agones Fleet's `status.readyReplicas` as `agones_fleet_ready_replicas`. The ServiceAccount can read Fleet objects and discover their CRD; both permissions are required for the dynamic custom-resource collector.
 - node-exporter (`xonotic-node-exporter`) runs once per node and exposes node CPU, memory, disk, filesystem, and network metrics.
 - Prometheus also scrapes kubelet and cAdvisor metrics through the Kubernetes API server proxy for pod/container CPU and memory usage.
 
@@ -401,6 +401,8 @@ curl -G -fsS http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=sum by (
 ## Agones Capacity Scope
 
 kube-state-metrics watches the existing `agones.dev/v1` Fleet resource in the primary cluster and exports its real `status.readyReplicas` value. The Allocator Operations dashboard and `NoReadyGameServers` alert use this series; neither infers capacity from pod readiness or invents values.
+
+Custom-resource-state collection requires both `list/watch` access to `agones.dev/fleets` and `list/watch` access to `apiextensions.k8s.io/customresourcedefinitions`. If the Fleet metric is absent, inspect kube-state-metrics logs for either permission before changing the Prometheus alert expression.
 
 This first metric intentionally covers Ready capacity only. Allocated assignment behavior is still visible through allocator metrics, while richer Fleet desired/allocated/reserved series and equivalent EU/NA capacity require a later regional metrics design.
 
