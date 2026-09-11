@@ -301,7 +301,7 @@ Safety model:
 Broadcast request:
 
 ```bash
-curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/admin/broadcast" \
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18082/matches/${MATCH_ID}/admin/broadcast" \
   -H "content-type: application/json" \
   -d '{"message":"Match starts in 2 minutes"}'
 ```
@@ -311,7 +311,7 @@ The backend sends a whitelisted `say "<message>"` RCON command.
 Change-map request:
 
 ```bash
-curl -fsS -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/admin/change-map" \
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18082/matches/${MATCH_ID}/admin/change-map" \
   -H "content-type: application/json" \
   -d '{"map":"stormkeep"}'
 ```
@@ -388,14 +388,14 @@ Edit `scripts/env.sh`, set the GCP values and replace `XONOTIC_RCON_PASSWORD`.
 Port-forward the backend:
 
 ```bash
-kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18080:8080
+kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18082:8080
 ```
 
 Create an admin session cookie:
 
 ```bash
 ADMIN_COOKIE="$(mktemp)"
-curl -fsS -c "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/admin/login \
+curl -fsS -c "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18082/admin/login \
   -H "content-type: application/json" \
   -d '{"username":"admin","password":"<admin-password>"}'
 ```
@@ -403,7 +403,7 @@ curl -fsS -c "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/admin/login \
 Create a Match Room:
 
 ```bash
-MATCH_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/matches \
+MATCH_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18082/matches \
   -H "content-type: application/json" \
   -d '{"name":"RCON smoke test"}' | jq -r .match_id)"
 ```
@@ -411,19 +411,19 @@ MATCH_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/matche
 Allocate a server:
 
 ```bash
-curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/allocate"
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18082/matches/${MATCH_ID}/allocate"
 ```
 
 Run the RCON status smoke test:
 
 ```bash
-curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/rcon-smoke-test"
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18082/matches/${MATCH_ID}/rcon-smoke-test"
 ```
 
 Optionally also send the hardcoded smoke message:
 
 ```bash
-curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/rcon-smoke-test" \
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18082/matches/${MATCH_ID}/rcon-smoke-test" \
   -H "content-type: application/json" \
   -d '{"include_say":true}'
 ```
@@ -431,7 +431,7 @@ curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/matches/${MATCH_I
 Release the server when done:
 
 ```bash
-curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/matches/${MATCH_ID}/release"
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18082/matches/${MATCH_ID}/release"
 ```
 
 ## Security Limitations In This Phase

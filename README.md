@@ -7,257 +7,179 @@
 [![Terraform](https://img.shields.io/badge/Terraform-1.6%2B-844FBA?logo=terraform&logoColor=white)](https://developer.hashicorp.com/terraform)
 [![GHCR](https://img.shields.io/badge/Registry-GHCR-181717?logo=github&logoColor=white)](https://github.com/NFNV/kubernetes_xonotic_gameserver/pkgs/container/xonotic-server)
 
-A Kubernetes-native platform for deploying and operating dedicated Xonotic game servers with Agones on GKE. It includes an admin control plane for allocating match servers, configuring map/mode through RCON, verifying live state with `getstatus`, running tournament workflows, observing platform health, and cleaning up resources.
+A Kubernetes-native platform for deploying and operating dedicated Xonotic game servers with Agones on GKE. A centralized control plane allocates regional match servers, configures map and mode through RCON, verifies live state with `getstatus`, tracks tournament operations, and exposes metrics and logs.
 
-The goal is not to build a generic tournament bracket app. The tournament workflow is the practical use case for demonstrating the infrastructure and operations behind dedicated multiplayer game servers on Kubernetes.
+The tournament workflow is the operational use case, not the product boundary. The project demonstrates the infrastructure and lifecycle automation behind running multiplayer game servers across regions.
 
 ## Architecture
 
-```text
-Terraform + GKE + firewall rules
-  -> Agones Fleet + FleetAutoscaler
-  -> Xonotic GameServers on dynamic UDP ports
-  -> Flask allocator backend + PostgreSQL
-  -> React Admin / Player UI
-  -> RCON configuration + getstatus verification
-  -> Prometheus metrics + Loki logs + Grafana dashboards
+```mermaid
+flowchart TB
+    Delivery[GitHub Actions] --> Registry[GHCR images]
+    Lifecycle[Terraform + local lifecycle scripts] --> SA
+    Lifecycle --> EU
+    Lifecycle --> NA
+
+    subgraph SA[South America: xonotic-mvp]
+        UI[React Admin / Player UI]
+        API[Flask allocator backend]
+        DB[(PostgreSQL)]
+        OBS[Prometheus + Grafana<br/>Loki + Alloy]
+        SAFleet[Agones SA Fleet]
+        UI --> API
+        API --> DB
+        OBS -. metrics and logs .-> API
+        OBS -. cluster telemetry .-> SAFleet
+    end
+
+    subgraph EU[Europe: xonotic-eu]
+        EUFleet[Agones EU Fleet]
+    end
+
+    subgraph NA[North America: xonotic-na]
+        NAFleet[Agones NA Fleet]
+    end
+
+    Registry --> SA
+    Registry --> EUFleet
+    Registry --> NAFleet
+    API -->|Kubernetes API| SAFleet
+    API -->|Kubernetes API| EUFleet
+    API -->|Kubernetes API| NAFleet
+    API <-->|RCON + getstatus| GameServers[Allocated Xonotic GameServers]
+    SAFleet --> GameServers
+    EUFleet --> GameServers
+    NAFleet --> GameServers
+    Players[Players] -->|direct UDP connection| GameServers
 ```
 
-### Infrastructure Plane
+- **Infrastructure plane:** Terraform provisions zonal GKE clusters and UDP firewall rules. Agones Fleet/FleetAutoscaler manage warm GameServer capacity.
+- **Control plane:** React, Flask, and PostgreSQL run only in South America. The backend uses scoped regional kubeconfig contexts to operate all three game-server planes.
+- **Observability plane:** Prometheus, Grafana, Loki, Alloy, kube-state-metrics, and node-exporter observe the primary cluster. Regional telemetry federation is not implemented yet.
 
-- Terraform provisions GKE and cloud networking.
-- Agones manages Xonotic GameServer lifecycle.
-- Fleet/FleetAutoscaler keep a small buffer of ready servers.
-- Dynamic UDP ports and firewall rules expose allocated GameServers.
-- GHCR stores server, backend, and frontend images.
+## Key Capabilities
 
-### Control Plane
+- Agones-backed Xonotic Fleets with dynamic UDP endpoints
+- Region-aware allocation across South America, Europe, and North America
+- Server-pool capacity status for Ready and Allocated GameServers
+- Password-protected Admin View and public read-only Player View
+- PostgreSQL-backed tournaments, teams, rounds, matches, and assignment history
+- Single-elimination bracket generation for 2, 4, and 8 teams
+- Verified map/mode configuration through allowlisted RCON and `getstatus`
+- Result recording, winner advancement, and automatic GameServer release
+- Prometheus alert evaluation, Grafana dashboards, and Loki log exploration
+- Offline-safe CI, immutable GHCR releases, and manual approval-gated CD
 
-- Flask allocator backend handles Agones allocation, server release, RCON configuration, `getstatus` verification, and API workflows.
-- PostgreSQL stores tournaments, teams, rounds, matches, results, and server assignment history.
-- React Admin View is password-protected and manages allocation, tournament workflow, result recording, finalization, and debug controls.
-- React Player View exposes read-only match status, results, endpoints, and copyable `connect IP:PORT` commands.
+## GameServer Allocation Lifecycle
 
-### Observability Plane
+1. FleetAutoscaler keeps a small buffer of Xonotic GameServers `Ready`.
+2. An operator selects a match and regional server pool.
+3. The backend submits an Agones `GameServerAllocation` to that cluster.
+4. Agones returns the allocated public address and dynamic UDP port.
+5. The backend stores the assignment and regional metadata in PostgreSQL.
+6. Allowlisted RCON commands apply map and mode; `getstatus` verifies the live result.
+7. The UI exposes the verified endpoint and `connect IP:PORT` command.
+8. Recording the result releases the server automatically; manual release and tournament finalization clean up leftovers.
 
-- Prometheus scrapes backend and Kubernetes infrastructure metrics.
-- Grafana Alloy collects primary-cluster pod logs and forwards them to Loki.
-- Grafana visualizes allocator metrics, cluster health, and operational logs.
+## Multi-Region Design
 
-## Features
+| Pool | Cluster | Zone | Role |
+| --- | --- | --- | --- |
+| `south-america-default` | `xonotic-mvp` | `southamerica-west1-a` | Control plane and GameServer plane |
+| `europe-default` | `xonotic-eu` | `europe-west1-b` | GameServer plane only |
+| `north-america-default` | `xonotic-na` | `us-central1-a` | GameServer plane only |
 
-- Kubernetes-native Xonotic dedicated server deployment on GKE
-- Agones Fleet and FleetAutoscaler for warm GameServer capacity
-- Dynamic UDP GameServer allocation through Agones
-- Flask admin control plane for server lifecycle operations
-- PostgreSQL-backed tournament, match, result, and assignment state
-- Verified map/mode selection with RCON configuration and `getstatus` validation
-- Password-protected React Admin View for operators and public read-only Player View for players/spectators
-- Admin server-pool capacity visibility for Ready/Allocated regional game server capacity
-- Single-elimination tournament workflow with result recording and winner advancement
-- Tournament finalization with automatic active GameServer cleanup
-- Prometheus metrics, Loki logs, Alloy collection, and Grafana dashboards for platform health
-- Terraform, GHCR publishing, and dev scripts for infrastructure automation and cost control
-- GitHub Actions CI, immutable GHCR releases, and approval-gated manual Kubernetes deployments that remain healthy while clusters are offline
+Each region has isolated Terraform state, Agones, a Fleet/FleetAutoscaler, regional RCON configuration, and UDP ports `7000-7010`. The clusters are intentionally temporary and can be brought online independently. See [Regional server pools](docs/region-server-pools.md).
 
-The target concept is worldwide tournament server management: operators allocate dedicated servers, configure and verify them, expose player connection commands, record results, and release capacity when matches are complete.
+## CI/CD And Release Flow
 
-The platform uses a central South America control plane with provisioned South America, Europe, and North America Agones server pools. The backend selects a regional Kubernetes context for allocation, capacity checks, and GameServer release while keeping PostgreSQL and operator services centralized.
-
-## Game Server Allocation Lifecycle
-
-1. The Agones Fleet keeps Xonotic GameServers warm in the `Ready` state.
-2. The control plane requests a `GameServerAllocation`.
-3. Agones assigns a ready server and exposes its dynamic UDP endpoint.
-4. The backend persists the assignment in PostgreSQL.
-5. The backend configures map/mode through whitelisted RCON commands.
-6. The backend verifies live server state with `getstatus`.
-7. The UI exposes the endpoint and `connect IP:PORT` only after verification.
-8. The server is released automatically when the match result is recorded, or manually/finalization cleanup handles leftovers.
-
-Allocation here means reserving, configuring, verifying, tracking, and eventually releasing a real dedicated game server, not merely starting a pod.
-
-## Tournament Operations
-
-Tournament operations are built on top of the game server platform:
-
-```text
-create tournament -> add teams -> generate bracket -> allocate match server
-  -> configure/verify map and mode -> play match -> record result
-  -> release match server -> advance winner -> finalize tournament
+```mermaid
+flowchart LR
+    Branch[Feature branch] --> PR[Pull request]
+    PR --> CI[CI validation]
+    CI --> Merge[Merge to master]
+    Merge --> Publish[Publish SHA images to GHCR]
+    Publish --> Manual[Manual control-plane or regional deployment]
+    Manual --> Identity[GitHub OIDC + Google WIF]
+    Identity --> Rollout[GKE rollout]
+    Rollout --> Verify[Smoke tests + release verification]
 ```
 
-Current tournament features include team management, manual seeding, single-elimination bracket generation, persisted rounds/matches, result recording with automatic match server cleanup, winner advancement, finalization, and player-facing read-only match views.
+- CI validates code, Terraform, scripts, manifests, dashboards, and container builds even when every cluster is offline.
+- Merges to `master` publish coordinated `sha-<full-git-sha>` images. The root [`VERSION`](VERSION) file supplies semantic release identity without replacing immutable deployment tags.
+- CD is manually triggered and deploys application releases only. It does not create or destroy infrastructure.
+- `up.sh`, `down.sh`, and the regional scripts remain the infrastructure lifecycle and cost-control interface.
 
-Finalization requires a recorded winner for the final match. Result recording closes the match server automatically; if active match server assignments still exist, finalization releases the corresponding Agones GameServers and marks those assignments released before completing the tournament, preventing completed events from consuming Fleet capacity.
+Full workflow, OIDC/WIF, IAM, rollback, and repository setup details are in [CI/CD](docs/ci-cd.md).
 
 ## Observability
 
-Prometheus collects metrics, Loki stores short-lived Kubernetes pod logs, and Grafana provides one place to explore both. Grafana Alloy runs on each primary-cluster node and forwards labeled backend, Agones, and Xonotic logs to Loki. Metrics cover request count/latency, allocation outcomes, active assignments, RCON failures, verification failures, and Kubernetes resource pressure; log panels focus on backend activity, allocation failures, RCON/`getstatus` errors, and GameServer output.
+Prometheus scrapes allocator, Kubernetes, node, container, and primary Agones Fleet metrics. Loki stores short-lived primary-cluster pod logs collected by Alloy, while Grafana provisions cluster, allocator, and log dashboards.
 
-The logging setup is intentionally dev-grade: Loki uses bounded ephemeral storage with 24-hour retention, remains reachable only inside the cluster or through port-forwarding, and currently observes the primary South America cluster only.
+Current alerts cover backend availability, allocation failures, RCON failures, map/mode verification failures, repeated pod restarts, high node memory, and zero Ready GameServers. Alerts are evaluated in Prometheus only; external Alertmanager routing is intentionally deferred.
 
-## Kubernetes / GKE Setup
+See the [observability guide](platform/observability/README.md) for queries, dashboards, resource impact, and alert test/recovery procedures.
 
-This project targets a small GKE Standard development cluster:
+## Quick Start And Lifecycle
 
-- Terraform provisions the cluster and firewall rules.
-- Agones runs the Xonotic Fleet with dynamic UDP ports.
-- Backend, frontend, PostgreSQL, Prometheus, Loki, Alloy, and Grafana run as Kubernetes workloads.
-- Images are built and published to GHCR.
-- `scripts/up.sh` and `scripts/down.sh` help control cloud costs.
-- Resource requests/limits and `Recreate` rollout strategy are used for a constrained single-node dev cluster.
-
-This is a portfolio-grade development platform, not a production-hardened service.
-
-## CI/CD
-
-Pull requests validate the backend, frontend production build, Terraform, shell scripts, Kubernetes manifests, observability configuration, and all three container builds without contacting GKE. Successful merges to `master` publish coordinated backend, frontend, and GameServer images to GHCR using immutable full-SHA tags.
-
-Control-plane and regional GameServer deployments are manual GitHub Actions workflows authenticated to GCP through OIDC and Workload Identity Federation. If a cost-controlled cluster is offline, deployment reports it as not provisioned without making normal CI or image publication unhealthy. Terraform apply/destroy remains in the local lifecycle scripts until regional state is explicitly migrated to a shared remote backend.
-
-See [`docs/ci-cd.md`](docs/ci-cd.md) for workflow architecture, WIF/IAM setup, GitHub Variables and Environments, rollback, and first-run commands.
-
-## Release Identity
-
-The root [`VERSION`](VERSION) file is the semantic application-version source. Published images receive both `v<version>` release tags and immutable `sha-<full-git-sha>` tags; Kubernetes deployments always select the SHA tag.
-
-Build metadata (`version`, Git revision, and image build time) is embedded in the backend and frontend images. Deployment metadata (`deployed_at`, environment, and cluster) is injected by the manual control-plane deployment workflow, so rebuilding an image and deploying it are represented as separate events. The Admin View footer shows the running version, short revision, and deployment time and warns if frontend and backend artifacts do not match.
-
-The public read-only `GET /version` endpoint reports the running backend release without exposing runtime secrets. Prometheus also exports `allocator_backend_build_info` with only stable version and revision labels.
-
-With the frontend port-forward active:
-
-```bash
-curl -fsS http://127.0.0.1:18080/version
-
-kubectl get deployment xonotic-allocator-backend \
-  -n xonotic-allocator-backend \
-  -o jsonpath='{.spec.template.metadata.annotations}'
-
-kubectl get deployment xonotic-allocator-backend \
-  -n xonotic-allocator-backend \
-  -o jsonpath='{.spec.template.spec.containers[0].image}'
-```
-
-## Screenshots
-
-![Admin Dashboard](docs/screenshots/admin-dashboard.png)
-
-![Player View](docs/screenshots/player-view.png)
-
-![Grafana Dashboard](docs/screenshots/grafana-dashboard.png)
-
-![Kubernetes / Agones Status](docs/screenshots/kubernetes-agones-status.png)
-
-## Local / Dev Usage
+Prerequisites include `gcloud`, Terraform, `kubectl`, Helm, Docker, and access to the configured GCP project. Local credentials belong in the ignored `scripts/env.sh` file.
 
 ```bash
 cp scripts/env.sh.example scripts/env.sh
+scripts/generate-admin-auth.sh --username admin --password '<dev-password>'
 ```
 
-Configure GCP project, region, zone, and local values in `scripts/env.sh`. This file is intentionally ignored because it contains local configuration and secrets.
-
-Generate admin auth values locally and place them in `scripts/env.sh`:
+Add the generated auth exports and required GCP/RCON values to `scripts/env.sh`, then bring up only the environments needed:
 
 ```bash
-scripts/generate-admin-auth.sh --username admin --password admin
+./scripts/up.sh                       # South America control plane + GameServer plane
+./scripts/up-region.sh europe         # Europe GameServer plane only
+./scripts/up-region.sh north-america  # North America GameServer plane only
 ```
 
-Paste the generated `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, and `ADMIN_SESSION_SECRET` export lines into `scripts/env.sh`. Keep the generated single quotes around `ADMIN_PASSWORD_HASH`; Werkzeug hashes contain `$` separators. `scripts/up.sh` validates these values before deployment and recreates the `xonotic-admin-auth` Kubernetes Secret in the allocator namespace on every deploy, so Admin View auth survives backend/frontend Pod restarts and is restored after down/up cycles. Player View remains public and read-only.
-
-Verify the Secret exists without printing secret values:
+Access remains local through port-forwarding:
 
 ```bash
-kubectl get secret xonotic-admin-auth -n xonotic-allocator-backend \
-  -o go-template='{{range $k, $_ := .data}}{{println $k}}{{end}}'
+kubectl --context gke_xonotic-gameserver_southamerica-west1-a_xonotic-mvp \
+  port-forward -n xonotic-allocator-backend \
+  service/xonotic-allocator-frontend 18080:8080
 ```
 
-```bash
-source scripts/env.sh
-./scripts/up.sh
-```
-
-`./scripts/up.sh` is the single primary-environment entrypoint. It selects the `south-america` Terraform workspace and brings up the South America GKE/Agones game-server plane plus PostgreSQL, allocator backend, allocator frontend, and lightweight Prometheus/Grafana/Loki observability. Observability deploys automatically and warns without blocking the primary environment if it cannot roll out. Europe and North America remain game-server-only regional deployments:
+Open `http://127.0.0.1:18080`. Teardown is explicit and region-scoped:
 
 ```bash
-./scripts/up-region.sh europe
-./scripts/up-region.sh north-america
-```
-
-The backend deployment requires the South America context in its generated kubeconfig and includes Europe/North America when they are reachable. From a fully stopped environment, bring up the game-server-only regions first if you want all regional pools available immediately, then the primary environment:
-
-```bash
-./scripts/up-region.sh europe &&
-./scripts/up-region.sh north-america &&
-./scripts/up.sh
-```
-
-If regional credentials or the mounted Secret become stale, refresh and reconcile them without manually constructing a Secret:
-
-```bash
-gcloud container clusters get-credentials xonotic-mvp --zone southamerica-west1-a --project "${GCP_PROJECT_ID}"
-gcloud container clusters get-credentials xonotic-eu --zone europe-west1-b --project "${GCP_PROJECT_ID}"
-gcloud container clusters get-credentials xonotic-na --zone us-central1-a --project "${GCP_PROJECT_ID}"
-./scripts/build-multicluster-kubeconfig.sh
-./scripts/apply-multicluster-kubeconfig-secret.sh
-kubectl rollout restart deployment/xonotic-allocator-backend -n xonotic-allocator-backend
-```
-
-For repositories upgraded from the earlier default-workspace flow, `up.sh` detects an existing South America cluster, node pool, and UDP firewall rules and imports missing bindings into the `south-america` workspace before applying. This avoids duplicate-resource `409 Already exists` failures.
-
-Port-forward common services:
-
-```bash
-kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-frontend 18080:8080
-kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18082:8080
-kubectl port-forward -n xonotic-observability service/xonotic-prometheus 9090:9090
-kubectl port-forward -n xonotic-observability service/xonotic-loki 3100:3100
-kubectl port-forward -n xonotic-observability service/xonotic-grafana 3000:3000
-```
-
-- Frontend: `http://127.0.0.1:18080`
-- Backend: `http://127.0.0.1:18082`
-- Prometheus: `http://127.0.0.1:9090`
-- Loki readiness/API: `http://127.0.0.1:3100/ready`
-- Grafana: `http://127.0.0.1:3000`
-
-Tear down cloud resources:
-
-```bash
+./scripts/down-region.sh north-america
+./scripts/down-region.sh europe
 ./scripts/down.sh
 ```
 
-## Limitations
+Run regional lifecycle commands sequentially because they share the local Terraform working directory. Detailed verification, port-forwarding, troubleshooting, and teardown behavior are in [Operations](docs/operations.md).
 
-- Single-node GKE dev cluster
-- Limited concurrent match capacity
-- Basic Admin View password protection only; no OAuth, roles, or production identity provider yet
-- No public domain or Ingress yet
-- In-cluster PostgreSQL is dev-grade
-- Multi-region capacity is operated from one central control plane and still uses dev-grade static regional service-account kubeconfig credentials
-- Minimal alerts/runbooks
-- Capacity depends on Fleet/FleetAutoscaler and Kubernetes node resources
+## Screenshots
 
-## Future Work
+Screenshots are intentionally not fabricated or linked before they exist. The expected portfolio captures and filenames are tracked in [docs/screenshots/README.md](docs/screenshots/README.md).
 
-- Stronger admin authentication and role separation
-- Public Ingress/domain
-- Managed PostgreSQL or backups
-- Additional tournament formats
-- Matchmaking or match request queue
-- Improved Fleet autoscaling and scheduling
-- Alerts for allocation, RCON, verification, and capacity issues
-- Multi-node regional pools and stronger cross-cluster identity
-- Remote Terraform state and approval-gated regional apply/destroy workflows
+## Known Limitations
 
-## Repository Map
+- GKE clusters are single-node and sized for a dev/portfolio environment, not commercial-scale workloads.
+- The control plane and central observability stack run only in South America.
+- PostgreSQL is an in-cluster, single-instance deployment without production HA or managed backups.
+- Prometheus and Loki use short, dev-oriented retention; Loki storage is ephemeral.
+- Alerts have no external Alertmanager notification routing.
+- Application deployments are manually triggered; regional infrastructure lifecycle remains local-script driven.
+- Regional access uses scoped service-account kubeconfig credentials rather than production-grade cross-cluster identity.
+- Admin authentication is basic password/session protection with no OAuth, roles, public Ingress, or external identity provider.
 
-- `infra/`: Terraform for GCP/GKE
-- `server/`: Xonotic server image and runtime config
-- `allocator-backend/`: Flask allocator and platform API
-- `allocator-frontend/`: React admin/player UI
-- `platform/agones/`: Agones Fleet/FleetAutoscaler manifests
-- `platform/postgres/`: PostgreSQL dev manifests
-- `platform/observability/`: Prometheus, Loki, Alloy, and Grafana manifests
-- `scripts/`: local bring-up, tear-down, and verification helpers
+## Documentation
+
+| Guide | Scope |
+| --- | --- |
+| [Operations](docs/operations.md) | Day-to-day checks, access, troubleshooting, and teardown |
+| [CI/CD](docs/ci-cd.md) | GitHub Actions, releases, OIDC/WIF, IAM, and rollback |
+| [Regional server pools](docs/region-server-pools.md) | Pool mapping, multicluster access, capacity states, and regional lifecycle |
+| [RCON/admin controls](docs/rcon-admin-controls.md) | RCON protocol, allowlisted controls, and smoke tests |
+| [Observability](platform/observability/README.md) | Metrics, logs, dashboards, alerts, and resource footprint |
+| [Infrastructure](infra/README.md) | Terraform resources, regional workspaces, and networking |
+| [Persistence design](docs/postgres-persistence-design.md) | PostgreSQL domain model and ownership boundaries |
+| [Tournament design](docs/tournament-admin-design.md) | Tournament workflow and bracket model |
+| [Map/mode verification](docs/tournament-map-mode-verification.md) | Verified compatibility matrix and probe flow |

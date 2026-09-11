@@ -33,9 +33,9 @@ At minimum, set:
 
 - `project_id`: the existing GCP project ID
 
-The current deployment is represented by `default_server_pool_id` and `server_pools`. The default pool is `south-america-default`, which maps to the South America GKE/Agones setup documented in [`docs/region-server-pools.md`](/Users/n/Documents/Cloud/xonotic/docs/region-server-pools.md).
+The current deployment is represented by `default_server_pool_id` and `server_pools`. The default pool is `south-america-default`, which maps to the South America GKE/Agones setup documented in [Regional server pools](../docs/region-server-pools.md).
 
-Region-specific tfvars files live under [`regions/`](/Users/n/Documents/Cloud/xonotic/infra/regions):
+Region-specific tfvars files live under [`regions/`](regions):
 
 | Region script argument | Terraform tfvars | Terraform workspace | Pool ID | Cluster |
 | --- | --- | --- | --- | --- |
@@ -50,14 +50,14 @@ The other variables have practical defaults for a low-cost MVP and can be overri
 - `environment`: defaults to `mvp`
 - `network_name`: defaults to `default`
 - `subnetwork_name`: defaults to `default`
-- `node_machine_type`: defaults to `e2-medium`
+- `node_machine_type`: defaults to `e2-medium`; the South America tfvars override it to `e2-standard-2` for the centralized control plane and observability workload
 - `node_disk_size_gb`: defaults to `100`
 - `node_disk_type`: defaults to `pd-standard`
 - `node_count`: defaults to `1`
 
 Compatibility variables `region`, `zone`, and `cluster_name` still exist for older South America local `terraform.tfvars` files, but new configuration should prefer `server_pools`. They are intentionally ignored for non-South America region tfvars so stale local overrides cannot point Europe or North America back at the primary cluster.
 
-Use [`terraform.tfvars.example`](/Users/n/Documents/Cloud/xonotic/infra/terraform.tfvars.example) as the starting point for local values.
+Use [`terraform.tfvars.example`](terraform.tfvars.example) as the starting point for local values.
 
 ## How To Run
 
@@ -145,13 +145,8 @@ Bring up the primary control-plane environment and South America game-server pla
 - applies the allocator backend namespace, RBAC, Deployment, and Service
 - applies the allocator frontend Deployment and Service
 - waits for PostgreSQL, backend, and frontend Pods to become Ready
-- prints backend/frontend port-forward commands when complete
-
-Prometheus and Grafana remain a separate, optional deployment:
-
-```bash
-kubectl apply -k platform/observability
-```
+- deploys the lightweight Prometheus, Grafana, Loki, Alloy, kube-state-metrics, and node-exporter stack; observability rollout failure warns but does not make the control plane unusable
+- prints frontend, backend, Prometheus, Loki, and Grafana port-forward commands when complete
 
 Terraform also exposes server-pool metadata for the active deployment:
 
@@ -168,7 +163,7 @@ Tear the current test path and infra down:
 
 The script distinction is deliberate:
 
-- `./scripts/up.sh`: primary South America game-server plane plus PostgreSQL, backend, and frontend
+- `./scripts/up.sh`: primary South America game-server plane plus PostgreSQL, backend, frontend, and lightweight observability
 - `./scripts/up-region.sh europe`: Europe game-server plane only
 - `./scripts/up-region.sh north-america`: North America game-server plane only
 - `./scripts/down.sh`: destroys the primary South America workspace
@@ -191,7 +186,7 @@ You cannot apply workload manifests until all of the following are true:
 - you have run the generated `gcloud container clusters get-credentials ...` command
 - `kubectl get nodes` succeeds against the new cluster
 
-The connectivity checkpoint under [`platform/connectivity-checkpoint/README.md`](/Users/n/Documents/Cloud/xonotic/platform/connectivity-checkpoint/README.md) starts only after those prerequisites are satisfied.
+The pre-Agones connectivity reference under [`platform/connectivity-checkpoint/README.md`](../platform/connectivity-checkpoint/README.md) starts only after those prerequisites are satisfied.
 
 ## How To Destroy
 
@@ -217,10 +212,10 @@ Notes:
 ## Cost-Conscious Notes
 
 - the cluster is zonal, not regional, to avoid multiplying control-plane and node costs
-- the node pool defaults to a single `e2-medium` node
+- Europe and North America use one `e2-medium` node; South America uses one `e2-standard-2` node for control-plane and observability headroom
 - node disk defaults to `100 GB` on `pd-standard`; this is still a low-cost choice, but it leaves enough allocatable ephemeral storage for the first Agones controller footprint on a single-node dev cluster
 - this is a deliberate MVP baseline, not a capacity target for real gameplay load
-- once Agones and the actual game workload are added, the machine type may need to increase
+- node size and Fleet capacity remain development defaults, not a production capacity target
 
 ## Agones Disk Sizing Note
 
@@ -251,10 +246,9 @@ Because there is no Kubernetes `Service` of type `LoadBalancer` in either path, 
 
 - dedicated VPC and subnet design
 - remote Terraform state
-- GitHub to GCP federation setup
-- cluster access IAM design
 - dedicated node service accounts
-- Agones installation
 - production-grade cross-cluster identity instead of dev kubeconfig service-account tokens
-- observability stack and alerting
 - multi-environment layout
+- regional metrics and log federation
+- external Alertmanager notification routing
+- GitHub-hosted Terraform apply/destroy, pending remote state migration

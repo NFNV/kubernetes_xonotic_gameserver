@@ -1,4 +1,4 @@
-# Agones Phases
+# Agones GameServer Plane
 
 This directory now contains the Agones migration path for the project.
 
@@ -35,15 +35,15 @@ That phase stays in the repo as the direct reference for:
 3. inspecting the returned address and port
 4. connecting the client directly to that allocated server
 
-## Phase Now: FleetAutoscaler Buffer
+## Current Runtime: FleetAutoscaler Buffer
 
-The current Agones phase adds one `FleetAutoscaler` on top of the working Fleet and allocation flow.
+The current runtime uses one `FleetAutoscaler` on top of the Fleet and allocation flow in each region.
 
 The goal is simple:
 
-- keep `3` `Ready` servers on standby
+- keep `1` `Ready` server on standby
 - let Agones grow total Fleet capacity automatically when allocations consume the ready pool
-- stop before adding allocator service exposure, frontend work, or more advanced scaling logic
+- cap the small dev Fleet so the regional single-node clusters remain cost-conscious
 
 ## What A Fleet Is
 
@@ -51,7 +51,7 @@ A `Fleet` is a managed set of warm `GameServer` instances. Instead of creating o
 
 For this phase, the Fleet stays deliberately small and acts as the template the autoscaler controls:
 
-- `replicas: 3`
+- `replicas: 1`
 
 The important shift is that `replicas` is no longer how you reason about steady-state capacity by hand. The `FleetAutoscaler` now owns that behavior.
 
@@ -71,24 +71,24 @@ A `FleetAutoscaler` sits above the `Fleet` and adjusts its replica count automat
 
 For this phase, it uses Agones buffer autoscaling:
 
-- `bufferSize: 3`
-- `minReplicas: 3`
-- `maxReplicas: 6`
+- `bufferSize: 1`
+- `minReplicas: 1`
+- `maxReplicas: 4`
 
 That means:
 
-- Agones tries to keep `3` `Ready` servers available
-- if one allocation consumes a `Ready` server, Agones scales the Fleet up so the standby pool returns to `3`
-- total Fleet size can grow above `3` while servers are `Allocated`
-- Fleet growth is capped at `6` for this small dev cluster
+- Agones tries to keep `1` `Ready` server available
+- if an allocation consumes the Ready server, Agones scales the Fleet up so the standby pool returns to `1`
+- total Fleet size can grow while servers are `Allocated`
+- Fleet growth is capped at `4` for each small dev cluster
 
 Example:
 
-1. start with `3` `Ready`, `0` `Allocated`
+1. start with `1` `Ready`, `0` `Allocated`
 2. allocate one server
-3. Fleet briefly has `2` `Ready`, `1` `Allocated`
+3. Fleet briefly has `0` `Ready`, `1` `Allocated`
 4. autoscaler increases desired Fleet size
-5. once the replacement server becomes `Ready`, the Fleet settles at `3` `Ready`, `1` `Allocated`
+5. once the replacement server becomes `Ready`, the Fleet settles at `1` `Ready`, `1` `Allocated`
 
 ## Why Static hostPort 26000 Is Not Right For A Fleet
 
@@ -127,7 +127,7 @@ For reliability, `./scripts/up.sh` also forces the Fleet `GameServer` instances 
 - `manifests/namespace.yaml`: namespace for Xonotic Agones resources
 - `manifests/xonotic-gameserver.yaml`: single-GameServer reference from phase 1
 - `manifests/xonotic-fleet.yaml`: current Fleet template manifest with the autoscaled Xonotic server spec
-- `manifests/xonotic-fleetautoscaler.yaml`: buffer autoscaler that keeps `3` `Ready` servers on standby
+- `manifests/xonotic-fleetautoscaler.yaml`: buffer autoscaler that keeps `1` `Ready` server on standby
 - `manifests/xonotic-gameserverallocation.yaml`: test allocation manifest using `generateName`
 
 ## Startup Map Selection

@@ -211,9 +211,9 @@ Prometheus loads `alerts.yml` from the `xonotic-prometheus-alert-rules` ConfigMa
 
 - **Severity:** `warning`
 - **Expression:** `sum(increase(allocator_allocation_failures_total[10m])) > 0` for 1 minute.
-- **Meaning:** At least one Agones allocation attempt failed recently, commonly because no Ready capacity exists or a regional API is unavailable.
-- **Dev test:** With no Ready GameServer capacity, request one allocation from the Admin View and wait one minute.
-- **Recovery:** Release stale assignments, restore regional Kubernetes access, or wait for FleetAutoscaler to restore Ready capacity; then retry allocation.
+- **Meaning:** At least one request reached the Agones allocation operation and failed, for example because the regional API was unavailable or a direct allocation timed out.
+- **Dev test:** In a disposable environment, remove the FleetAutoscaler, scale the Fleet to zero, and call the authenticated lower-level `POST /allocate` endpoint. That endpoint reaches Agones and times out without capacity, incrementing the counter. The tournament UI's `409 no_ready_servers` preflight is intentionally not counted as an allocation attempt or failure.
+- **Recovery:** Reapply `platform/agones/manifests`, wait for Ready capacity, and retry. If capacity was not the injected fault, restore regional Kubernetes access and inspect the allocator error reason.
 
 ### RconFailures
 
