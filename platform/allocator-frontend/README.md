@@ -114,11 +114,11 @@ kubectl rollout status deployment/xonotic-allocator-frontend -n xonotic-allocato
 Use port-forward for this MVP admin path:
 
 ```bash
-kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-frontend 18081:8080
+kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-frontend 18080:8080
 ```
 
 Then open:
 
 ```text
-http://127.0.0.1:18081
+http://127.0.0.1:18080
 ```

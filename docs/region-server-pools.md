@@ -24,7 +24,7 @@ All three use dynamic UDP ports `7000-7010`. Only the South America cluster runs
 
 ## Regional Terraform Definitions
 
-The shared Terraform code under [`infra/`](/Users/n/Documents/Cloud/xonotic/infra) can be pointed at one region at a time with region-specific tfvars files:
+The shared Terraform code under [`infra/`](../infra) can be pointed at one region at a time with region-specific tfvars files:
 
 | Region | Terraform tfvars | Workspace | Provisioned pool ID | GCP target |
 | --- | --- | --- | --- | --- |
@@ -80,7 +80,7 @@ Important: `./scripts/up.sh` and `./scripts/down.sh` remain the current full Sou
 
 In short:
 
-- `./scripts/up.sh` = primary control plane + South America game-server plane + Prometheus/Grafana
+- `./scripts/up.sh` = primary control plane + South America game-server plane + Prometheus/Grafana/Loki observability
 - `./scripts/up-region.sh europe` = Europe game-server plane only
 - `./scripts/up-region.sh north-america` = North America game-server plane only
 

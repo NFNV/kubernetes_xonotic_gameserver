@@ -47,14 +47,14 @@ The order matters:
 
 ## Step 1: Publish The Image To GHCR
 
-Run the repository workflow at `.github/workflows/publish-server-image.yml` from the GitHub Actions UI.
+Run `.github/workflows/publish-images.yml` from the GitHub Actions UI with the full release commit SHA.
 
 Expected published image tags:
 
-- `ghcr.io/nfnv/xonotic-server:connectivity-checkpoint`
-- `ghcr.io/nfnv/xonotic-server:sha-<12-char-commit>`
+- `ghcr.io/nfnv/xonotic-server:sha-<40-character-commit>`
+- `ghcr.io/nfnv/xonotic-server:v<semantic-version>`
 
-The workflow uses the repository `GITHUB_TOKEN` for GHCR login and publishes only the `linux/amd64` image needed for GKE.
+The workflow uses the repository `GITHUB_TOKEN` for GHCR login and publishes the coordinated backend, frontend, and `linux/amd64` GameServer release. This directory is a historical pre-Agones reference; update its manifest to an existing immutable SHA tag before replaying the checkpoint.
 
 ## Step 2: Verify Package Visibility
 

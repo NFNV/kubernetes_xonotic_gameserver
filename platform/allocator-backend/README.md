@@ -1,12 +1,12 @@
-# Allocator Backend Phase
+# Allocator Backend
 
-This phase adds the first backend service that allocates Xonotic game servers programmatically from inside the cluster.
+The Flask allocator is the centralized control-plane API for regional Xonotic GameServer allocation and tournament operations.
 
-It now also includes the first in-memory Match Room layer for the admin workflow. Match Rooms are the operator-facing objects; allocated Agones `GameServer` instances are the infrastructure assigned to those rooms.
+Persisted tournament matches are the normal operator workflow. The older in-memory Match Room layer remains available under Advanced / Debug for lower-level allocation and RCON testing; allocated Agones `GameServer` instances are the infrastructure backing both flows.
 
 Match Rooms now store the requested map and game mode before allocation. Because the Fleet uses already-running standby servers, allocation does not create a fresh preconfigured server. Instead, the backend allocates a warm server, applies the requested map/mode through whitelisted RCON, verifies the result with `getstatus`, and only then marks the room joinable. Max-player control remains deferred.
 
-This phase also adds PostgreSQL-backed tournament CRUD as a foundation for the future tournament admin tool. Tournament records, teams, rounds, and tournament matches are persisted; Match Rooms and live server telemetry remain in-memory/runtime-owned for now.
+PostgreSQL persists tournaments, teams, rounds, matches, results, bracket advancement, finalization, and server assignment history. Lower-level Match Rooms and live server telemetry remain in-memory/runtime-owned.
 
 ## Why This Backend Uses Regional Kubernetes API Clients
 
@@ -22,6 +22,11 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 ## API
 
 - `GET /healthz`: simple health check
+- `GET /version`: deployed release identity
+- `GET /metrics`: Prometheus application metrics
+- `GET /game-config/options`: verified map/mode combinations
+- `GET /server-pools`: configured regional pools
+- `GET /server-pools/capacity`: live Fleet capacity by regional pool
 - `GET /admin/session`: check Admin View session state
 - `POST /admin/login`: create an admin session from the configured password hash
 - `POST /admin/logout`: clear the admin session
@@ -39,6 +44,10 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `POST /tournaments/<tournament_id>/bracket/generate`: generate a 2-, 4-, or 8-team single-elimination bracket from seeded teams
 - `POST /tournaments/<tournament_id>/matches`: create a tournament match record
 - `GET /tournaments/<tournament_id>/matches`: list tournament match records
+- `POST /tournaments/<tournament_id>/matches/<match_id>/allocate-server`: allocate and verify a regional server for a persisted match
+- `POST /tournaments/<tournament_id>/matches/<match_id>/result`: record a result, advance the bracket winner, and release the match server
+- `POST /tournaments/<tournament_id>/matches/<match_id>/release-server`: manually release one persisted match server
+- `POST /tournaments/<tournament_id>/server-assignments/release-all`: release all active assignments for a tournament
 - `POST /matches`: create an in-memory Match Room
 - `GET /matches`: list in-memory Match Rooms
 - `GET /matches/<match_id>`: inspect one Match Room
@@ -51,7 +60,7 @@ For this phase, using the Kubernetes API directly is the simplest and most pract
 - `POST /allocated-servers/<gameserver_name>/terminate`: terminate an allocated GameServer directly after validating it is `Allocated`
 - `POST /allocate`: creates a `GameServerAllocation`, waits for the result, and returns the allocated address and port
 
-`POST /allocate` remains available for direct/manual debugging. Normal admin flow should use Match Rooms.
+`POST /allocate` and Match Rooms remain available for direct/manual debugging. Normal admin flow should use persisted tournament matches.
 
 Match Room state is intentionally process-local memory. It is lost when the backend Pod restarts. That keeps this phase small while still moving the project toward a tournament admin tool.
 
@@ -121,16 +130,13 @@ The backend image is separate from the game server image:
 
 - `ghcr.io/nfnv/xonotic-allocator-backend`
 
-Tags:
-
-- stable tag: `allocator-backend`
-- trace tag: `sha-<12-char-commit>`
+Published releases use coordinated `sha-<40-character-commit>` tags. A `master` convenience tag may exist, but Kubernetes CD deploys only immutable SHA tags.
 
 ## Build And Push The Image
 
 Repository-native path:
 
-- push changes under `allocator-backend/` to `master`, or run the `publish-allocator-backend-image.yml` workflow manually in GitHub Actions
+- merge through `master` CI and let `.github/workflows/publish-images.yml` publish the coordinated release, or dispatch that workflow manually with a full Git SHA
 
 Direct local path:
 
@@ -227,83 +233,42 @@ kubectl logs deployment/xonotic-allocator-backend -n xonotic-allocator-backend -
 Port forward the service:
 
 ```bash
-kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18080:8080
+kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18082:8080
 ```
 
-Then call the API:
+Check the public health, release, and capacity endpoints:
 
 ```bash
-curl -fsS http://127.0.0.1:18080/healthz
+curl -fsS http://127.0.0.1:18082/healthz | jq
+curl -fsS http://127.0.0.1:18082/version | jq
+curl -fsS http://127.0.0.1:18082/server-pools/capacity | jq
+```
+
+Mutating endpoints require an authenticated admin session:
+
+```bash
 ADMIN_COOKIE="$(mktemp)"
-curl -fsS -c "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/admin/login \
+curl -fsS -c "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18082/admin/login \
   -H "content-type: application/json" \
-  -d '{"username":"admin","password":"admin"}'
-curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/allocate
-```
-
-Create persisted tournament records:
-
-```bash
-TOURNAMENT_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18080/tournaments \
-  -H "content-type: application/json" \
-  -d '{"name":"Spring Arena Cup"}' | jq -r .id)"
-
-TEAM_A_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
-  -H "content-type: application/json" \
-  -d '{"name":"Blue Rockets","tag":"BLUE","seed":1}' | jq -r .id)"
-
-TEAM_B_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/teams" \
-  -H "content-type: application/json" \
-  -d '{"name":"Orange Railers","tag":"ORNG","seed":2}' | jq -r .id)"
-
-ROUND_ID="$(curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/rounds" \
-  -H "content-type: application/json" \
-  -d '{"name":"Round 1","round_order":1}' | jq -r .id)"
-
-curl -fsS -X POST "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" \
-  -H "content-type: application/json" \
-  -d "{\"round_id\":\"${ROUND_ID}\",\"team_a_id\":\"${TEAM_A_ID}\",\"team_b_id\":\"${TEAM_B_ID}\",\"requested_map\":\"stormkeep\",\"requested_game_mode\":\"dm\"}" | jq
-
-curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/matches" | jq
-curl -fsS "http://127.0.0.1:18080/tournaments/${TOURNAMENT_ID}/summary" | jq
+  -d '{"username":"admin","password":"<admin-password>"}' | jq
 ```
 
 Create and allocate a Match Room:
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:18080/matches \
+MATCH_ID="$(curl -fsS -b "${ADMIN_COOKIE}" -X POST http://127.0.0.1:18082/matches \
   -H "content-type: application/json" \
-  -d '{"name":"Quarterfinal 1","requested_map":"stormkeep","requested_game_mode":"dm"}'
-
-curl -fsS http://127.0.0.1:18080/matches
-
-curl -fsS http://127.0.0.1:18080/matches/<match_id>
-
-curl -fsS -X PATCH http://127.0.0.1:18080/matches/<match_id> \
+  -d '{"name":"Allocator smoke test","requested_map":"xoylent","requested_game_mode":"dm"}' | jq -r .match_id)"
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18082/matches/${MATCH_ID}/allocate" \
   -H "content-type: application/json" \
-  -d '{"requested_map":"xoylent","requested_game_mode":"dm"}'
-
-curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/allocate \
-  -H "content-type: application/json" \
-  -d '{"requested_map":"stormkeep","requested_game_mode":"dm"}'
-
-curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/rcon-smoke-test
-
-curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/admin/broadcast \
-  -H "content-type: application/json" \
-  -d '{"message":"Match starts in 2 minutes"}'
-
-curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/admin/change-map \
-  -H "content-type: application/json" \
-  -d '{"map":"stormkeep"}'
-
-curl -fsS -X POST http://127.0.0.1:18080/allocated-servers/<gameserver_name>/terminate
-
-curl -fsS -X POST http://127.0.0.1:18080/matches/<match_id>/release
+  -d '{}' | jq
 ```
 
-Inspect the allocated server endpoint:
+Release the disposable server when finished:
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:18080/allocate
+curl -fsS -b "${ADMIN_COOKIE}" -X POST "http://127.0.0.1:18082/matches/${MATCH_ID}/release" \
+  -H "content-type: application/json" -d '{}' | jq
 ```
+
+Use the [operations runbook](../../docs/operations.md) for broader health checks and the [RCON guide](../../docs/rcon-admin-controls.md) for privileged command tests.
