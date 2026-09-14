@@ -720,6 +720,40 @@ function serverPoolCapacityById(serverPoolCapacity) {
   );
 }
 
+function aggregateServerPoolCapacity(serverPoolCapacity, fallback = EMPTY_FLEET) {
+  const pools = (serverPoolCapacity.items || []).filter(
+    (pool) => pool.provisioned !== false && pool.enabled !== false
+  );
+  if (pools.length === 0) {
+    return fallback;
+  }
+
+  const fields = [
+    "desired_replicas",
+    "current_replicas",
+    "ready_replicas",
+    "allocated_replicas",
+    "reserved_replicas",
+  ];
+  if (pools.some((pool) => fields.some((field) => !Number.isFinite(pool[field])))) {
+    return {
+      ...Object.fromEntries(fields.map((field) => [field, "n/a"])),
+      replicas: "n/a",
+    };
+  }
+
+  const totals = Object.fromEntries(
+    fields.map((field) => [
+      field,
+      pools.reduce((total, pool) => total + pool[field], 0),
+    ])
+  );
+  return {
+    ...totals,
+    replicas: totals.current_replicas,
+  };
+}
+
 function capacityForServerPool(pool, serverPoolCapacity, fleetStatus = EMPTY_FLEET) {
   const capacity = serverPoolCapacityById(serverPoolCapacity)[pool?.id];
   if (capacity) {
@@ -2461,6 +2495,7 @@ export default function App() {
   const serverPoolCapacityRows = (serverPoolCapacity.items || []).length > 0
     ? serverPoolCapacity.items
     : serverPools.map((pool) => capacityForServerPool(pool, serverPoolCapacity, fleetStatus));
+  const regionalFleetTotals = aggregateServerPoolCapacity(serverPoolCapacity, fleetStatus);
   const bracketColumns = bracketRoundColumns(tournamentRounds, tournamentMatches);
   const hasBracketMatches = tournamentMatches.some((match) => match.bracket_position !== null && match.bracket_position !== undefined);
   const playableBracketMatches = tournamentMatches.filter(tournamentMatchCanBulkAllocate);
@@ -3765,11 +3800,11 @@ export default function App() {
       </details>
 
       <section className="grid metrics rail-metrics">
-        <MetricCard label="Fleet Desired" value={fleetStatus.desired_replicas} />
-        <MetricCard label="Fleet Total" value={fleetStatus.replicas} />
-        <MetricCard label="Ready" value={fleetStatus.ready_replicas} />
-        <MetricCard label="Allocated" value={fleetStatus.allocated_replicas} />
-        <MetricCard label="Reserved" value={fleetStatus.reserved_replicas} />
+        <MetricCard label="All Pools Desired" value={regionalFleetTotals.desired_replicas} />
+        <MetricCard label="All Pools Total" value={regionalFleetTotals.replicas} />
+        <MetricCard label="All Pools Ready" value={regionalFleetTotals.ready_replicas} />
+        <MetricCard label="All Pools Allocated" value={regionalFleetTotals.allocated_replicas} />
+        <MetricCard label="All Pools Reserved" value={regionalFleetTotals.reserved_replicas} />
       </section>
 
       <section className="grid panels rail-panels">
@@ -3859,7 +3894,7 @@ export default function App() {
 
         <article className="panel">
           <div className="panel-header">
-            <h2>Fleet Summary</h2>
+            <h2>Primary Fleet Summary</h2>
             <span className="panel-meta">{lastUpdated ? `Updated ${lastUpdated}` : "Waiting for first refresh"}</span>
           </div>
           <dl className="summary-list">
