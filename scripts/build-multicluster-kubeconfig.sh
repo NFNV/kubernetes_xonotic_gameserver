@@ -17,12 +17,44 @@ if [[ $# -gt 0 ]]; then
   exit 1
 fi
 
-expected_south_america_context="gke_${GCP_PROJECT_ID}_southamerica-west1-a_xonotic-mvp"
-expected_europe_context="gke_${GCP_PROJECT_ID}_europe-west1-b_xonotic-eu"
-expected_north_america_context="gke_${GCP_PROJECT_ID}_us-central1-a_xonotic-na"
-south_america_context="${XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT:-${expected_south_america_context}}"
-europe_context="${XONOTIC_EUROPE_KUBE_CONTEXT:-${expected_europe_context}}"
-north_america_context="${XONOTIC_NORTH_AMERICA_KUBE_CONTEXT:-${expected_north_america_context}}"
+default_south_america_source_context="gke_${GCP_PROJECT_ID}_southamerica-west1-a_xonotic-mvp"
+default_europe_source_context="gke_${GCP_PROJECT_ID}_europe-west1-b_xonotic-eu"
+default_north_america_source_context="gke_${GCP_PROJECT_ID}_us-central1-a_xonotic-na"
+south_america_context="south-america-default"
+europe_context="europe-default"
+north_america_context="north-america-default"
+
+resolve_source_context() {
+  local explicit_source="$1"
+  local legacy_context="$2"
+  local default_source="$3"
+  local generated_context="$4"
+
+  if [[ -n "${explicit_source}" ]]; then
+    printf '%s\n' "${explicit_source}"
+  elif [[ -n "${legacy_context}" && "${legacy_context}" != "${generated_context}" ]]; then
+    # Before canonical aliases, XONOTIC_*_KUBE_CONTEXT named the source gcloud context.
+    printf '%s\n' "${legacy_context}"
+  else
+    printf '%s\n' "${default_source}"
+  fi
+}
+
+south_america_source_context="$(resolve_source_context \
+  "${XONOTIC_SOUTH_AMERICA_SOURCE_KUBE_CONTEXT:-}" \
+  "${XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT:-}" \
+  "${default_south_america_source_context}" \
+  "${south_america_context}")"
+europe_source_context="$(resolve_source_context \
+  "${XONOTIC_EUROPE_SOURCE_KUBE_CONTEXT:-}" \
+  "${XONOTIC_EUROPE_KUBE_CONTEXT:-}" \
+  "${default_europe_source_context}" \
+  "${europe_context}")"
+north_america_source_context="$(resolve_source_context \
+  "${XONOTIC_NORTH_AMERICA_SOURCE_KUBE_CONTEXT:-}" \
+  "${XONOTIC_NORTH_AMERICA_KUBE_CONTEXT:-}" \
+  "${default_north_america_source_context}" \
+  "${north_america_context}")"
 canonical_output_path="${script_dir}/.generated/xonotic-multicluster.kubeconfig"
 if [[ "${XONOTIC_MULTICLUSTER_KUBECONFIG+x}" == "x" && -z "${XONOTIC_MULTICLUSTER_KUBECONFIG}" ]]; then
   echo "XONOTIC_MULTICLUSTER_KUBECONFIG is set but empty." >&2
@@ -38,24 +70,9 @@ fi
 rbac_manifest="${repo_root}/platform/agones/manifests/regional-allocator-rbac.yaml"
 namespace="${XONOTIC_AGONES_NAMESPACE:-xonotic-agones}"
 token_secret="xonotic-regional-allocator-token"
-required_contexts=(
-  "${south_america_context}"
-)
-optional_contexts=(
-  "${europe_context}"
-  "${north_america_context}"
-)
 included_contexts=()
+included_source_contexts=()
 skipped_contexts=()
-
-if [[ "${south_america_context}" != "${expected_south_america_context}" \
-  || "${europe_context}" != "${expected_europe_context}" \
-  || "${north_america_context}" != "${expected_north_america_context}" ]]; then
-  echo "Configured regional context names do not match the expected GKE contexts for project ${GCP_PROJECT_ID}." >&2
-  echo "Expected:" >&2
-  printf '  %s\n' "${expected_south_america_context}" "${expected_europe_context}" "${expected_north_america_context}" >&2
-  exit 1
-fi
 
 mkdir -p "$(dirname "${output_path}")"
 build_path="${output_path}.tmp.$$"
@@ -68,15 +85,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+context_exists() {
+  local kubeconfig_path="$1"
+  local context_name="$2"
+  local resolved_context
+
+  if [[ -n "${kubeconfig_path}" ]]; then
+    resolved_context="$(kubectl config --kubeconfig="${kubeconfig_path}" get-contexts "${context_name}" -o name 2>/dev/null)" || return 1
+  else
+    resolved_context="$(kubectl config get-contexts "${context_name}" -o name 2>/dev/null)" || return 1
+  fi
+
+  [[ "${resolved_context}" == "${context_name}" ]]
+}
+
 add_context() {
   local source_context="$1"
-  local required="$2"
+  local generated_context="$2"
+  local required="$3"
   local ca_data
   local server
   local token
-  local ca_file="${tmp_dir}/${source_context//[^a-zA-Z0-9_.-]/_}.crt"
+  local ca_file="${tmp_dir}/${generated_context//[^a-zA-Z0-9_.-]/_}.crt"
 
-  if ! kubectl config get-contexts "${source_context}" -o name | grep -Fxq "${source_context}"; then
+  if ! context_exists "" "${source_context}"; then
     if [[ "${required}" == "true" ]]; then
       echo "Missing required kubeconfig context: ${source_context}" >&2
       echo "Run the documented gcloud container clusters get-credentials command for this region first." >&2
@@ -139,25 +171,22 @@ add_context() {
   fi
 
   printf '%s' "${ca_data}" | base64 -d > "${ca_file}"
-  kubectl config --kubeconfig="${build_path}" set-cluster "${source_context}" \
+  kubectl config --kubeconfig="${build_path}" set-cluster "${generated_context}" \
     --server="${server}" \
     --certificate-authority="${ca_file}" \
     --embed-certs=true >/dev/null
-  kubectl config --kubeconfig="${build_path}" set-credentials "${source_context}" --token="${token}" >/dev/null
-  kubectl config --kubeconfig="${build_path}" set-context "${source_context}" \
-    --cluster="${source_context}" \
-    --user="${source_context}" \
+  kubectl config --kubeconfig="${build_path}" set-credentials "${generated_context}" --token="${token}" >/dev/null
+  kubectl config --kubeconfig="${build_path}" set-context "${generated_context}" \
+    --cluster="${generated_context}" \
+    --user="${generated_context}" \
     --namespace="${namespace}" >/dev/null
-  included_contexts+=("${source_context}")
+  included_contexts+=("${generated_context}")
+  included_source_contexts+=("${source_context}")
 }
 
-for context_name in "${required_contexts[@]}"; do
-  add_context "${context_name}" "true"
-done
-
-for context_name in "${optional_contexts[@]}"; do
-  add_context "${context_name}" "false"
-done
+add_context "${south_america_source_context}" "${south_america_context}" "true"
+add_context "${europe_source_context}" "${europe_context}" "false"
+add_context "${north_america_source_context}" "${north_america_context}" "false"
 
 kubectl config --kubeconfig="${build_path}" use-context "${south_america_context}" >/dev/null
 chmod 600 "${build_path}"
@@ -167,12 +196,18 @@ if [[ ! -s "${build_path}" ]]; then
   exit 1
 fi
 
-for context_name in "${required_contexts[@]}"; do
-  if ! kubectl config --kubeconfig="${build_path}" get-contexts "${context_name}" -o name | grep -Fxq "${context_name}"; then
-    echo "Generated kubeconfig is missing required South America context: ${context_name}" >&2
+for context_name in "${included_contexts[@]}"; do
+  if ! context_exists "${build_path}" "${context_name}"; then
+    echo "Generated kubeconfig is missing expected regional context: ${context_name}" >&2
     exit 1
   fi
 done
+
+generated_context_count="$(kubectl config --kubeconfig="${build_path}" get-contexts -o name | wc -l | tr -d '[:space:]')"
+if [[ "${generated_context_count}" -ne "${#included_contexts[@]}" ]]; then
+  echo "Generated kubeconfig contains unexpected contexts." >&2
+  exit 1
+fi
 
 mv "${build_path}" "${output_path}"
 chmod 600 "${output_path}"
@@ -182,7 +217,7 @@ Created least-privilege regional allocator kubeconfig:
   ${output_path}
 
 Included contexts:
-$(printf '  %s\n' "${included_contexts[@]}")
+$(for index in "${!included_contexts[@]}"; do printf '  %s (source: %s)\n' "${included_contexts[$index]}" "${included_source_contexts[$index]}"; done)
 
 Skipped optional contexts:
 $(if [[ ${#skipped_contexts[@]} -eq 0 ]]; then printf '  none\n'; else printf '  %s\n' "${skipped_contexts[@]}"; fi)
