@@ -90,11 +90,11 @@ Prometheus/Grafana are deployed automatically by `./scripts/up.sh` and are inten
 
 The allocator backend remains in South America. It selects a Kubernetes client from the match's `requested_server_pool_id`:
 
-- `south-america-default` uses `XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT`
-- `europe-default` uses `XONOTIC_EUROPE_KUBE_CONTEXT`
-- `north-america-default` uses `XONOTIC_NORTH_AMERICA_KUBE_CONTEXT`
+- `south-america-default` uses generated context `south-america-default`
+- `europe-default` uses generated context `europe-default`
+- `north-america-default` uses generated context `north-america-default`
 
-`scripts/build-multicluster-kubeconfig.sh` reads the operator's three GKE contexts, ensures regional allocator RBAC exists, and writes a gitignored kubeconfig containing only the regional API endpoints, CA certificates, and namespaced allocator service-account tokens. The canonical path is `scripts/.generated/xonotic-multicluster.kubeconfig`. `scripts/apply-multicluster-kubeconfig-secret.sh` validates that file and applies it as `xonotic-allocator-backend/xonotic-multicluster-kubeconfig`. `scripts/up.sh` calls both helpers automatically before restarting the backend.
+`scripts/build-multicluster-kubeconfig.sh` reads the operator's three source GKE contexts, ensures regional allocator RBAC exists, and writes a gitignored kubeconfig containing only the regional API endpoints, CA certificates, and namespaced allocator service-account tokens. Source names default to gcloud's generated names and can be overridden with `XONOTIC_*_SOURCE_KUBE_CONTEXT`. The generated file uses stable server-pool IDs as context aliases, so backend routing does not depend on gcloud naming. The canonical path is `scripts/.generated/xonotic-multicluster.kubeconfig`. `scripts/apply-multicluster-kubeconfig-secret.sh` validates that file and applies it as `xonotic-allocator-backend/xonotic-multicluster-kubeconfig`. `scripts/up.sh` calls both helpers automatically before restarting the backend.
 
 Get or refresh the source contexts:
 
@@ -108,23 +108,38 @@ gcloud container clusters get-credentials xonotic-na \
 
 ./scripts/build-multicluster-kubeconfig.sh
 ./scripts/apply-multicluster-kubeconfig-secret.sh
-kubectl rollout restart deployment/xonotic-allocator-backend -n xonotic-allocator-backend
-kubectl rollout status deployment/xonotic-allocator-backend -n xonotic-allocator-backend
+kubectl --context gke_xonotic-gameserver_southamerica-west1-a_xonotic-mvp \
+  rollout restart deployment/xonotic-allocator-backend -n xonotic-allocator-backend
+kubectl --context gke_xonotic-gameserver_southamerica-west1-a_xonotic-mvp \
+  rollout status deployment/xonotic-allocator-backend -n xonotic-allocator-backend
 ```
 
 The generated kubeconfig is a dev-cluster credential artifact and must not be committed. Rebuild it after recreating a regional cluster because that cluster receives a new API endpoint, CA, and service-account token.
 
+Verify the stable aliases and least-privilege access without printing tokens:
+
+```bash
+KUBECONFIG_FILE="scripts/.generated/xonotic-multicluster.kubeconfig"
+kubectl --kubeconfig="${KUBECONFIG_FILE}" config get-contexts -o name
+for pool in south-america-default europe-default north-america-default; do
+  kubectl --kubeconfig="${KUBECONFIG_FILE}" --context="${pool}" \
+    auth can-i get fleets.agones.dev -n xonotic-agones
+done
+```
+
 Verify the mounted kubeconfig without printing credentials:
 
 ```bash
-kubectl exec -n xonotic-allocator-backend deployment/xonotic-allocator-backend -- \
+kubectl --context gke_xonotic-gameserver_southamerica-west1-a_xonotic-mvp \
+  exec -n xonotic-allocator-backend deployment/xonotic-allocator-backend -- \
   python -c 'from kubernetes import config; contexts, _ = config.list_kube_config_contexts(config_file="/var/run/xonotic/kubeconfig/config"); print("\n".join(item["name"] for item in contexts))'
 ```
 
 Verify regional capacity:
 
 ```bash
-kubectl port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18082:8080
+kubectl --context gke_xonotic-gameserver_southamerica-west1-a_xonotic-mvp \
+  port-forward -n xonotic-allocator-backend service/xonotic-allocator-backend 18082:8080
 curl -fsS http://127.0.0.1:18082/server-pools/capacity | jq '.items[] | {server_pool_id, capacity_state, ready_replicas, allocated_replicas}'
 ```
 

@@ -14,12 +14,18 @@ fi
 
 namespace="xonotic-allocator-backend"
 secret_name="xonotic-multicluster-kubeconfig"
-expected_south_america_context="gke_${GCP_PROJECT_ID}_southamerica-west1-a_xonotic-mvp"
-expected_europe_context="gke_${GCP_PROJECT_ID}_europe-west1-b_xonotic-eu"
-expected_north_america_context="gke_${GCP_PROJECT_ID}_us-central1-a_xonotic-na"
-south_america_context="${XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT:-${expected_south_america_context}}"
-europe_context="${XONOTIC_EUROPE_KUBE_CONTEXT:-${expected_europe_context}}"
-north_america_context="${XONOTIC_NORTH_AMERICA_KUBE_CONTEXT:-${expected_north_america_context}}"
+default_primary_source_context="gke_${GCP_PROJECT_ID}_southamerica-west1-a_xonotic-mvp"
+south_america_context="south-america-default"
+europe_context="europe-default"
+north_america_context="north-america-default"
+legacy_primary_context="${XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT:-}"
+if [[ -n "${XONOTIC_SOUTH_AMERICA_SOURCE_KUBE_CONTEXT:-}" ]]; then
+  primary_source_context="${XONOTIC_SOUTH_AMERICA_SOURCE_KUBE_CONTEXT}"
+elif [[ -n "${legacy_primary_context}" && "${legacy_primary_context}" != "${south_america_context}" ]]; then
+  primary_source_context="${legacy_primary_context}"
+else
+  primary_source_context="${default_primary_source_context}"
+fi
 canonical_path="${script_dir}/.generated/xonotic-multicluster.kubeconfig"
 if [[ "${XONOTIC_MULTICLUSTER_KUBECONFIG+x}" == "x" && -z "${XONOTIC_MULTICLUSTER_KUBECONFIG}" ]]; then
   echo "XONOTIC_MULTICLUSTER_KUBECONFIG is set but empty." >&2
@@ -27,7 +33,6 @@ if [[ "${XONOTIC_MULTICLUSTER_KUBECONFIG+x}" == "x" && -z "${XONOTIC_MULTICLUSTE
   exit 1
 fi
 configured_path="${XONOTIC_MULTICLUSTER_KUBECONFIG:-${canonical_path}}"
-primary_context="${south_america_context}"
 required_contexts=(
   "${south_america_context}"
 )
@@ -35,13 +40,6 @@ optional_contexts=(
   "${europe_context}"
   "${north_america_context}"
 )
-
-if [[ "${south_america_context}" != "${expected_south_america_context}" \
-  || "${europe_context}" != "${expected_europe_context}" \
-  || "${north_america_context}" != "${expected_north_america_context}" ]]; then
-  echo "Configured regional context names do not match the expected GKE contexts for project ${GCP_PROJECT_ID}." >&2
-  exit 1
-fi
 
 if [[ -z "${configured_path}" ]]; then
   echo "XONOTIC_MULTICLUSTER_KUBECONFIG resolved to an empty path." >&2
@@ -67,8 +65,17 @@ if [[ ! -s "${kubeconfig_path}" ]]; then
   exit 1
 fi
 
+context_exists() {
+  local kubeconfig_path="$1"
+  local context_name="$2"
+  local resolved_context
+
+  resolved_context="$(kubectl config --kubeconfig="${kubeconfig_path}" get-contexts "${context_name}" -o name 2>/dev/null)" || return 1
+  [[ "${resolved_context}" == "${context_name}" ]]
+}
+
 for context_name in "${required_contexts[@]}"; do
-  if ! kubectl config --kubeconfig="${kubeconfig_path}" get-contexts "${context_name}" -o name | grep -Fxq "${context_name}"; then
+  if ! context_exists "${kubeconfig_path}" "${context_name}"; then
     echo "Multicluster kubeconfig is missing required South America context: ${context_name}" >&2
     echo "Refresh South America credentials and rebuild the kubeconfig." >&2
     exit 1
@@ -76,18 +83,18 @@ for context_name in "${required_contexts[@]}"; do
 done
 
 for context_name in "${optional_contexts[@]}"; do
-  if ! kubectl config --kubeconfig="${kubeconfig_path}" get-contexts "${context_name}" -o name | grep -Fxq "${context_name}"; then
+  if ! context_exists "${kubeconfig_path}" "${context_name}"; then
     echo "Warning: multicluster kubeconfig is missing optional context ${context_name}; that server pool will report unavailable until refreshed." >&2
   fi
 done
 
-if ! kubectl --context "${primary_context}" get namespace "${namespace}" --request-timeout=10s >/dev/null 2>&1; then
-  echo "Primary namespace ${namespace} is unavailable in context ${primary_context}." >&2
+if ! kubectl --context "${primary_source_context}" get namespace "${namespace}" --request-timeout=10s >/dev/null 2>&1; then
+  echo "Primary namespace ${namespace} is unavailable in source context ${primary_source_context}." >&2
   echo "Bring up the South America control plane before applying this Secret." >&2
   exit 1
 fi
 
-kubectl --context "${primary_context}" create secret generic "${secret_name}" \
+kubectl --context "${primary_source_context}" create secret generic "${secret_name}" \
   -n "${namespace}" \
   --from-file=config="${kubeconfig_path}" \
   --from-literal=XONOTIC_SOUTH_AMERICA_KUBE_CONTEXT="${south_america_context}" \
@@ -95,6 +102,6 @@ kubectl --context "${primary_context}" create secret generic "${secret_name}" \
   --from-literal=XONOTIC_NORTH_AMERICA_KUBE_CONTEXT="${north_america_context}" \
   --dry-run=client \
   -o yaml \
-  | kubectl --context "${primary_context}" apply -f -
+  | kubectl --context "${primary_source_context}" apply -f -
 
 echo "Applied ${namespace}/${secret_name} from ${kubeconfig_path}."
