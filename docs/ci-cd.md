@@ -125,7 +125,7 @@ Local scripts remain the primary cost-control interface:
 ./scripts/down-region.sh north-america
 ```
 
-`up.sh/down.sh` exclusively own the primary South America control-plane environment. The regional scripts intentionally accept only Europe and North America and never deploy duplicate backend, frontend, PostgreSQL, or observability workloads.
+`up.sh/down.sh` exclusively own the primary South America control-plane environment. On each primary bring-up, `up.sh` resolves the newest successful automatic `master` publication, verifies its three SHA-tagged images, and bootstraps the SA Fleet plus backend/frontend on that coordinated release. `XONOTIC_RELEASE_SHA` pins a published rollback. Normal application updates remain manual GitHub deployment actions; bring-up no longer silently reinstalls old fixed image tags. The regional scripts intentionally accept only Europe and North America and never deploy duplicate backend, frontend, PostgreSQL, or observability workloads.
 
 ## GitHub OIDC and WIF
 

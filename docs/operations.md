@@ -59,6 +59,16 @@ If a local port is occupied, change only the left side, for example `29090:9090`
 
 ## Release Verification
 
+`./scripts/up.sh` now selects the newest successfully published automatic `master` release before provisioning, verifies all three GHCR SHA images, and deploys that same SHA to the South America Fleet, backend, and frontend. It prints the version and full SHA. A newer merge still publishing is not selected prematurely.
+
+To pin a previously published release for rollback:
+
+```bash
+XONOTIC_RELEASE_SHA="<full-40-character-published-sha>" ./scripts/up.sh
+```
+
+If GitHub or GHCR cannot be queried, `up.sh` stops before Terraform changes. It never falls back to the fixed development tags. The local manifests must remain compatible with the chosen image release; use a matching checkout when rolling back across manifest changes.
+
 Verify the backend release identity:
 
 ```bash
@@ -76,7 +86,7 @@ kubectl --context "$SA_CONTEXT" get fleet xonotic-fleet \
   -n xonotic-agones -o jsonpath='{.spec.template.spec.template.spec.containers[0].image}{"\n"}'
 ```
 
-Manual GitHub deployments should show `sha-<40-character-git-sha>`, not a mutable convenience tag.
+Both `up.sh` bootstrap and manual GitHub deployments should show `sha-<40-character-git-sha>`, not a mutable convenience tag. An already Allocated GameServer can still show an older image until that match is released; `up.sh` does not delete it.
 
 ## Logs And Alerts
 
@@ -109,10 +119,9 @@ kubectl --context "$SA_CONTEXT" get fleet,fleetautoscaler,gameserver -n xonotic-
 kubectl --context "$SA_CONTEXT" describe fleet xonotic-fleet -n xonotic-agones
 ```
 
-Release stale Allocated servers or restore the declared primary Fleet:
+Release stale Allocated servers or redeploy the selected primary Fleet release through **Deploy Regional Game Plane**. Do not apply the static `platform/agones/manifests` Kustomization directly: its checkpoint tag is not the release selected by `up.sh`.
 
 ```bash
-kubectl --context "$SA_CONTEXT" apply -k platform/agones/manifests
 kubectl --context "$SA_CONTEXT" wait -n xonotic-agones \
   --for=jsonpath='{.status.readyReplicas}'=1 fleet/xonotic-fleet --timeout=300s
 ```
