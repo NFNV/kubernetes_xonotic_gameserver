@@ -4,10 +4,14 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 env_file="${script_dir}/env.sh"
+requested_release_sha="${XONOTIC_RELEASE_SHA:-}"
 
 if [[ -f "${env_file}" ]]; then
   # shellcheck disable=SC1090
   source "${env_file}"
+fi
+if [[ -n "${requested_release_sha}" ]]; then
+  XONOTIC_RELEASE_SHA="${requested_release_sha}"
 fi
 
 : "${GCP_PROJECT_ID:?GCP_PROJECT_ID must be set}"
@@ -54,14 +58,7 @@ primary_region="south-america"
 primary_tfvars_file="regions/${primary_region}.tfvars"
 agones_namespace_manifest="${repo_root}/platform/agones/manifests/namespace.yaml"
 regional_allocator_rbac_manifest="${repo_root}/platform/agones/manifests/regional-allocator-rbac.yaml"
-fleet_manifest="${repo_root}/platform/agones/manifests/xonotic-fleet.yaml"
-fleet_autoscaler_manifest="${repo_root}/platform/agones/manifests/xonotic-fleetautoscaler.yaml"
 allocator_backend_namespace_manifest="${repo_root}/platform/allocator-backend/manifests/namespace.yaml"
-allocator_backend_rbac_manifest="${repo_root}/platform/allocator-backend/manifests/rbac.yaml"
-allocator_backend_deployment_manifest="${repo_root}/platform/allocator-backend/manifests/deployment.yaml"
-allocator_backend_service_manifest="${repo_root}/platform/allocator-backend/manifests/service.yaml"
-allocator_frontend_deployment_manifest="${repo_root}/platform/allocator-frontend/manifests/deployment.yaml"
-allocator_frontend_service_manifest="${repo_root}/platform/allocator-frontend/manifests/service.yaml"
 postgres_pvc_manifest="${repo_root}/platform/postgres/manifests/pvc.yaml"
 postgres_deployment_manifest="${repo_root}/platform/postgres/manifests/deployment.yaml"
 postgres_service_manifest="${repo_root}/platform/postgres/manifests/service.yaml"
@@ -89,6 +86,16 @@ rcon_secret_name="xonotic-rcon"
 postgres_secret_name="xonotic-postgres"
 admin_auth_secret_name="xonotic-admin-auth"
 admin_username="${ADMIN_USERNAME:-admin}"
+release_info="$(bash "${script_dir}/resolve-published-release.sh" "${XONOTIC_RELEASE_SHA:-}")"
+release_sha="$(jq -er '.sha' <<<"${release_info}")"
+release_version="$(jq -er '.version' <<<"${release_info}")"
+release_manifests_dir="$(mktemp -d)"
+trap 'rm -rf -- "${release_manifests_dir}"' EXIT
+bash "${script_dir}/prepare-primary-release.sh" \
+  "${release_sha}" "${release_version}" "${release_manifests_dir}" "${GKE_CLUSTER_NAME}"
+gameserver_image="ghcr.io/nfnv/xonotic-server:sha-${release_sha}"
+backend_image="ghcr.io/nfnv/xonotic-allocator-backend:sha-${release_sha}"
+frontend_image="ghcr.io/nfnv/xonotic-allocator-frontend:sha-${release_sha}"
 rcon_password_b64="$(printf '%s' "${XONOTIC_RCON_PASSWORD}" | base64 | tr -d '\n')"
 postgres_db_b64="$(printf '%s' "${XONOTIC_POSTGRES_DB}" | base64 | tr -d '\n')"
 postgres_user_b64="$(printf '%s' "${XONOTIC_POSTGRES_USER}" | base64 | tr -d '\n')"
@@ -104,6 +111,7 @@ Bringing up the primary Xonotic environment:
   allocator backend
   allocator frontend
   lightweight Prometheus/Grafana/Loki observability
+  published release v${release_version} (${release_sha})
 
 Terraform workspace: ${primary_region}
 Terraform variables: ${primary_tfvars_file}
@@ -263,21 +271,29 @@ fi
 kubectl rollout status deployment/agones-controller -n "${agones_system_namespace}"
 kubectl rollout status deployment/agones-extensions -n "${agones_system_namespace}"
 
-kubectl apply -f "${fleet_manifest}"
-kubectl delete gameserver -n "${gameserver_namespace}" -l "agones.dev/fleet=${fleet_name}" --ignore-not-found=true || true
-kubectl apply -f "${fleet_autoscaler_manifest}"
+kubectl apply -k "${release_manifests_dir}/agones"
 
 for _ in $(seq 1 60); do
   ready_replicas="$(kubectl get fleet "${fleet_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
-  if [[ -n "${ready_replicas}" ]] && (( ready_replicas >= required_ready_replicas )); then
+  gameservers_json="$(kubectl get gameservers -n "${gameserver_namespace}" -o json 2>/dev/null || true)"
+  ready_on_release=0
+  if [[ -n "${gameservers_json}" ]]; then
+    ready_on_release="$(jq --arg image "${gameserver_image}" --arg fleet "${fleet_name}" \
+      '[.items[] | select(.status.state == "Ready" and .metadata.labels["agones.dev/fleet"] == $fleet) | .spec.template.spec.containers[]? | select(.image == $image)] | length' \
+      <<<"${gameservers_json}")"
+  fi
+  if [[ -n "${ready_replicas}" ]] \
+    && (( ready_replicas >= required_ready_replicas )) \
+    && (( ready_on_release >= required_ready_replicas )); then
     break
   fi
   sleep 5
 done
 
-ready_replicas="$(kubectl get fleet "${fleet_name}" -n "${gameserver_namespace}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
-if [[ -z "${ready_replicas}" ]] || (( ready_replicas < required_ready_replicas )); then
-  echo "Fleet ${gameserver_namespace}/${fleet_name} did not reach ${required_ready_replicas} Ready replicas" >&2
+if [[ -z "${ready_replicas}" ]] \
+  || (( ready_replicas < required_ready_replicas )) \
+  || (( ready_on_release < required_ready_replicas )); then
+  echo "Fleet ${gameserver_namespace}/${fleet_name} did not reach ${required_ready_replicas} Ready replicas on ${gameserver_image}" >&2
   exit 1
 fi
 
@@ -332,22 +348,25 @@ type: Opaque
 data:
   XONOTIC_RCON_PASSWORD: ${rcon_password_b64}
 EOF
-kubectl apply -f "${allocator_backend_rbac_manifest}"
-kubectl apply -f "${allocator_backend_deployment_manifest}"
-kubectl apply -f "${allocator_backend_service_manifest}"
-kubectl rollout restart "deployment/${allocator_backend_deployment_name}" -n "${allocator_backend_namespace}"
+kubectl apply -k "${release_manifests_dir}/backend"
 kubectl rollout status "deployment/${allocator_backend_deployment_name}" -n "${allocator_backend_namespace}"
 kubectl wait --for=condition=Ready pod \
   -l app="${allocator_backend_deployment_name}" \
   -n "${allocator_backend_namespace}" \
   --timeout=300s
-kubectl apply -f "${allocator_frontend_deployment_manifest}"
-kubectl apply -f "${allocator_frontend_service_manifest}"
+kubectl apply -k "${release_manifests_dir}/frontend"
 kubectl rollout status "deployment/${allocator_frontend_deployment_name}" -n "${allocator_backend_namespace}"
 kubectl wait --for=condition=Ready pod \
   -l app="${allocator_frontend_deployment_name}" \
   -n "${allocator_backend_namespace}" \
   --timeout=300s
+
+actual_backend_image="$(kubectl get deployment "${allocator_backend_deployment_name}" -n "${allocator_backend_namespace}" -o jsonpath='{.spec.template.spec.containers[0].image}')"
+actual_frontend_image="$(kubectl get deployment "${allocator_frontend_deployment_name}" -n "${allocator_backend_namespace}" -o jsonpath='{.spec.template.spec.containers[0].image}')"
+if [[ "${actual_backend_image}" != "${backend_image}" || "${actual_frontend_image}" != "${frontend_image}" ]]; then
+  echo "Primary deployment images differ from the selected release ${release_sha}." >&2
+  exit 1
+fi
 
 deploy_observability
 
@@ -368,6 +387,10 @@ fi
 cat <<EOF
 
 Primary South America environment is ready.
+Release: v${release_version} (${release_sha})
+Backend image: ${backend_image}
+Frontend image: ${frontend_image}
+South America GameServer image: ${gameserver_image}
 
 Frontend:
   kubectl --context gke_${GCP_PROJECT_ID}_${GCP_ZONE}_${GKE_CLUSTER_NAME} port-forward -n ${allocator_backend_namespace} service/xonotic-allocator-frontend 18080:8080

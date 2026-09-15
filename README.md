@@ -137,6 +137,8 @@ Add the generated auth exports and required GCP/RCON values to `scripts/env.sh`,
 ./scripts/up-region.sh north-america  # North America GameServer plane only
 ```
 
+The primary `up.sh` selects the newest successfully published `master` release and brings up the SA Fleet, backend, and frontend with one coordinated immutable SHA. Set `XONOTIC_RELEASE_SHA` to pin a previously published release; routine deployments to already-running clusters remain manual GitHub Actions workflows.
+
 Access remains local through port-forwarding:
 
 ```bash
@@ -166,7 +168,7 @@ Screenshots are intentionally not fabricated or linked before they exist. The ex
 - PostgreSQL is an in-cluster, single-instance deployment without production HA or managed backups.
 - Prometheus and Loki use short, dev-oriented retention; Loki storage is ephemeral.
 - Alerts have no external Alertmanager notification routing.
-- Application deployments are manually triggered; regional infrastructure lifecycle remains local-script driven.
+- Routine application deployments are manually triggered; primary bring-up bootstraps the latest published release, while regional infrastructure lifecycle remains local-script driven.
 - Regional access uses scoped service-account kubeconfig credentials rather than production-grade cross-cluster identity.
 - Admin authentication is basic password/session protection with no OAuth, roles, public Ingress, or external identity provider.
 
